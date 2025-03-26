@@ -30,7 +30,6 @@ public:
 	~DDOCWriter();
 
 	void addFile(const std::string &name, const std::string &mime, const std::vector<unsigned char> &data);
-	void close() override;
 
 private:
 	DDOCWriter(const DDOCWriter &) = delete;

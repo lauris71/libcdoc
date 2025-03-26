@@ -53,13 +53,8 @@ DDOCWriter::DDOCWriter(std::vector<uint8_t>& vec)
 
 DDOCWriter::~DDOCWriter()
 {
-	delete d;
-}
-
-void DDOCWriter::close()
-{
 	writeEndElement(Private::DDOC); // SignedDoc
-	XMLWriter::close();
+	delete d;
 }
 
 /**

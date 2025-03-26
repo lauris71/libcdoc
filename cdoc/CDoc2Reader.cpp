@@ -331,7 +331,6 @@ CDoc2Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer
 {
 	int64_t result = beginDecryption(fmk);
     if (result != libcdoc::OK) return result;
-	bool warning = false;
 	std::string name;
 	int64_t size;
 	result = nextFile(name, size);

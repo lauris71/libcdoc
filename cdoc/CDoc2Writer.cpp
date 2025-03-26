@@ -254,8 +254,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
 	std::vector<uint8_t> xor_key(libcdoc::CDoc2::KEY_LEN);
     for (unsigned int rcpt_idx = 0; rcpt_idx < recipients.size(); rcpt_idx++) {
         const libcdoc::Recipient& rcpt = recipients.at(rcpt_idx);
-        std::vector<uint8_t> key_material, kek;
         if (rcpt.isPKI()) {
+            std::vector<uint8_t> key_material, kek;
             if(rcpt.pk_type == libcdoc::Recipient::PKType::RSA) {
 				crypto->random(kek, libcdoc::CDoc2::KEY_LEN);
 				if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {

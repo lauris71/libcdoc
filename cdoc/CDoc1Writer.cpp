@@ -232,7 +232,6 @@ CDoc1Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::R
                 ddoc.addFile(name, "application/octet-stream", contents);
                 result = src.next(name, size);
 			}
-			ddoc.close();
 		} else {
 			std::string name;
 			int64_t size;
@@ -257,7 +256,6 @@ CDoc1Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::R
 		}
 	});
 	d->_xml->writeEndElement(Private::DENC); // EncryptedData
-	d->_xml->close();
 	d->_xml.reset();
     result = libcdoc::OK;
     if (owned) result = dst->close();
@@ -324,12 +322,10 @@ CDoc1Writer::finishEncryption()
 		if(use_ddoc) {
             std::vector<uint8_t> data;
             data.reserve(4096);
-			DDOCWriter ddoc(data);
-			for (const FileEntry& file : d->files) {
-				std::vector<uint8_t> contents;
-				ddoc.addFile(file.name, "application/octet-stream", file.data);
-			}
-			ddoc.close();
+            for (DDOCWriter ddoc(data); const FileEntry& file : d->files) {
+                std::vector<uint8_t> contents;
+                ddoc.addFile(file.name, "application/octet-stream", file.data);
+            }
             d->_xml->writeBase64Element(Private::DENC, "CipherValue", libcdoc::Crypto::encrypt(d->method, transportKey, data));
 		} else {
             d->_xml->writeBase64Element(Private::DENC, "CipherValue", libcdoc::Crypto::encrypt(d->method, transportKey, d->files.back().data));
@@ -346,7 +342,6 @@ CDoc1Writer::finishEncryption()
 		}
 	});
 	d->_xml->writeEndElement(Private::DENC); // EncryptedData
-	d->_xml->close();
 	d->_xml.reset();
 	if (owned) dst->close();
     return libcdoc::OK;

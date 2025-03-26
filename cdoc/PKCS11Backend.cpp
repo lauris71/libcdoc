@@ -479,12 +479,10 @@ libcdoc::PKCS11Backend::extractHKDF(std::vector<uint8_t>& kek, const std::vector
 	CK_BBOOL _false = CK_FALSE;
 	CK_OBJECT_CLASS newkey_class = CKO_SECRET_KEY;
 	CK_KEY_TYPE newkey_type = CKK_GENERIC_SECRET;
-	CK_ULONG newkey_value_len = 32;
 	std::vector<CK_ATTRIBUTE> newkey_template{
 		{CKA_TOKEN, &_false, sizeof(_false)},
 		{CKA_CLASS, &newkey_class, sizeof(newkey_class)},
 		{CKA_KEY_TYPE, &newkey_type, sizeof(newkey_type)},
-		//{CKA_VALUE_LEN, &newkey_value_len, sizeof(newkey_value_len)}
 	};
 	CK_OBJECT_HANDLE newkey = CK_INVALID_HANDLE;
 	unsigned long p11result = d->f->C_DeriveKey(d->session, &mech, d->key, newkey_template.data(), CK_ULONG(newkey_template.size()), &newkey);
