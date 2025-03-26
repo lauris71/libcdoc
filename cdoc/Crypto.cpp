@@ -518,10 +518,8 @@ Crypto::genECKey(EVP_PKEY *params)
 {
 	EVP_PKEY *key = nullptr;
     auto ctx = make_unique_ptr<EVP_PKEY_CTX_free>(EVP_PKEY_CTX_new(params, nullptr));
-	if(ctx &&
-        !SSL_FAILED(EVP_PKEY_keygen_init(ctx.get()), "EVP_PKEY_keygen_init") &&
-        !SSL_FAILED(EVP_PKEY_keygen(ctx.get(), &key), "EVP_PKEY_keygen"))
-    {}
+    if(ctx && !SSL_FAILED(EVP_PKEY_keygen_init(ctx.get()), "EVP_PKEY_keygen_init"))
+        SSL_FAILED(EVP_PKEY_keygen(ctx.get(), &key), "EVP_PKEY_keygen");
     return EVP_PKEY_ptr(key, EVP_PKEY_free);
 }
 

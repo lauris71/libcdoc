@@ -121,7 +121,7 @@ int parseURL(const std::string& url, std::string& host, int& port, std::string& 
 std::string buildURL(const std::string& host, int port);
 
 std::string urlEncode(std::string_view src);
-std::string urlDecode(std::string &src);
+std::string urlDecode(const std::string &src);
 
 #ifdef _WIN32
 

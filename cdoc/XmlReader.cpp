@@ -76,10 +76,7 @@ XMLReader::XMLReader(libcdoc::DataSource *src, bool delete_on_close)
 {
 	d->_src = src;
 	d->_delete_src = delete_on_close;
-	d->ibuf = xmlAllocParserInputBuffer(XML_CHAR_ENCODING_UTF8);
-	d->ibuf->context = this;
-	d->ibuf->readcallback = Private::xmlInputReadCallback;
-	d->ibuf->closecallback = Private::xmlInputCloseCallback;
+	d->ibuf = xmlParserInputBufferCreateIO(Private::xmlInputReadCallback, Private::xmlInputCloseCallback, this, XML_CHAR_ENCODING_UTF8);
 	d->reader = xmlNewTextReader(d->ibuf, "");
 }
 
@@ -102,7 +99,8 @@ XMLReader::XMLReader(const std::vector<uint8_t> &data)
 
 XMLReader::~XMLReader()
 {
-	if(d->reader) xmlFreeTextReader(d->reader);
+	xmlFreeTextReader(d->reader);
+	xmlFreeParserInputBuffer(d->ibuf);
 	if(d->_src && d->_delete_src) delete d->_src;
 	delete d;
 }

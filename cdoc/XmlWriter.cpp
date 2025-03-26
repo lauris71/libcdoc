@@ -18,7 +18,6 @@
 
 #include "XmlWriter.h"
 
-#include "Crypto.h"
 #include "Utils.h"
 
 #include <openssl/evp.h>
@@ -60,10 +59,7 @@ XMLWriter::XMLWriter(libcdoc::DataConsumer* dst)
 	: d(new Private)
 {
 	d->dst = dst;
-	d->obuf = xmlAllocOutputBuffer(nullptr);
-	d->obuf->context = this;
-	d->obuf->writecallback = Private::xmlOutputWriteCallback;
-	d->obuf->closecallback = Private::xmlOutputCloseCallback;
+	d->obuf = xmlOutputBufferCreateIO(Private::xmlOutputWriteCallback,  Private::xmlOutputCloseCallback, this, nullptr);
 	d->w = xmlNewTextWriter(d->obuf);
 	xmlTextWriterStartDocument(d->w, nullptr, "UTF-8", nullptr);
 }
@@ -74,10 +70,7 @@ XMLWriter::XMLWriter(std::ostream *ofs)
 {
 	d->dst = new libcdoc::OStreamConsumer(ofs);
 	d->dst_owned = true;
-	d->obuf = xmlAllocOutputBuffer(nullptr);
-	d->obuf->context = this;
-	d->obuf->writecallback = Private::xmlOutputWriteCallback;
-	d->obuf->closecallback = Private::xmlOutputCloseCallback;
+	d->obuf = xmlOutputBufferCreateIO(Private::xmlOutputWriteCallback,  Private::xmlOutputCloseCallback, this, nullptr);
 	d->w = xmlNewTextWriter(d->obuf);
 	xmlTextWriterStartDocument(d->w, nullptr, "UTF-8", nullptr);
 }
@@ -87,10 +80,7 @@ XMLWriter::XMLWriter(const std::string& path)
 {
 	d->dst = new libcdoc::OStreamConsumer(path);
 	d->dst_owned = true;
-	d->obuf = xmlAllocOutputBuffer(nullptr);
-	d->obuf->context = this;
-	d->obuf->writecallback = Private::xmlOutputWriteCallback;
-	d->obuf->closecallback = Private::xmlOutputCloseCallback;
+	d->obuf = xmlOutputBufferCreateIO(Private::xmlOutputWriteCallback,  Private::xmlOutputCloseCallback, this, nullptr);
 	d->w = xmlNewTextWriter(d->obuf);
 	xmlTextWriterStartDocument(d->w, nullptr, "UTF-8", nullptr);
 }
@@ -100,28 +90,18 @@ XMLWriter::XMLWriter(std::vector<uint8_t>& vec)
 {
 	d->dst = new libcdoc::VectorConsumer(vec);
 	d->dst_owned = true;
-	d->obuf = xmlAllocOutputBuffer(nullptr);
-	d->obuf->context = this;
-	d->obuf->writecallback = Private::xmlOutputWriteCallback;
-	d->obuf->closecallback = Private::xmlOutputCloseCallback;
+	d->obuf = xmlOutputBufferCreateIO(Private::xmlOutputWriteCallback,  Private::xmlOutputCloseCallback, this, nullptr);
 	d->w = xmlNewTextWriter(d->obuf);
 	xmlTextWriterStartDocument(d->w, nullptr, "UTF-8", nullptr);
 }
 
 XMLWriter::~XMLWriter()
 {
-	close();
-	if(d->dst && d->dst_owned) delete d->dst;
-	delete d;
-}
-
-void XMLWriter::close()
-{
-	if(!d->w)
-		return;
 	xmlTextWriterEndDocument(d->w);
 	xmlFreeTextWriter(d->w);
-	d->w = nullptr;
+	xmlOutputBufferClose(d->obuf);
+	if(d->dst && d->dst_owned) delete d->dst;
+	delete d;
 }
 
 void XMLWriter::writeStartElement(const NS &ns, const std::string &name, const std::map<std::string, std::string> &attr)

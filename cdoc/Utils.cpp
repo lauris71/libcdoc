@@ -27,6 +27,7 @@
 #include <openssl/evp.h>
 #include <openssl/http.h>
 
+#include <charconv>
 #include <chrono>
 
 namespace libcdoc {
@@ -109,21 +110,25 @@ urlEncode(std::string_view src)
 }
 
 std::string
-urlDecode(std::string &src)
+urlDecode(const std::string &src)
 {
     std::string ret;
-    ret.reserve(64);
-    for (int i = 0; i < src.length(); i++) {
-        if (src[i] == '%') {
-            int val;
-            sscanf(src.substr(i + 1, 2).c_str(), "%x", &val);
-            char ch = static_cast<char>(val);
-            ret += ch;
-            i += 2;
-        } else {
-            ret += src[i];
+    ret.reserve(src.size());
+    uint8_t value = 0;
+
+    for (auto it = src.begin(), end = src.end(); it != end; ++it) {
+        if (*it == '%' && std::distance(it, end) >= 3 &&
+            std::isxdigit(*(it + 1)) && std::isxdigit(*(it + 2))) {
+            auto result = std::from_chars(&*(it + 1), &*(it + 3), value, 16);
+            if (result.ec == std::errc()) {
+                ret += char(value);
+                std::advance(it, 2);
+                continue;
+            }
         }
+        ret += *it;
     }
+
     return ret;
 }
 
