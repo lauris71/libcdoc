@@ -683,7 +683,7 @@ waitForResultMID(SIDResponse& dst, httplib::SSLClient& cli, const std::string& p
             return UNSPECIFIED_ERROR;
         }
         // State is complete, check for end result
-        picojson::value w = v.get("result");
+        picojson::value w = rsp.get("result");
         if (!w.is<std::string>()) {
             LOG_WARN("result is not a string");
             return UNSPECIFIED_ERROR;
@@ -712,7 +712,7 @@ waitForResultMID(SIDResponse& dst, httplib::SSLClient& cli, const std::string& p
             dst.algorithm = w.get<std::string>();
         }
         // Certificate
-        w = v.get("cert");
+        w = rsp.get("cert");
         if (!w.is<std::string>()) {
             LOG_WARN("cert is not a string");
             return UNSPECIFIED_ERROR;

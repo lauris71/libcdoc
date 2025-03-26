@@ -67,6 +67,7 @@ struct JWTSigner {
     Signer *parent;
     JWTSigner(Signer *_parent) : parent(_parent) {}
     std::string sign(const std::string& data, std::error_code& ec) const {
+        LOG_DBG("Sign JWT: {}", data);
         std::vector<uint8_t> digest(32);
         SHA256((uint8_t *) data.c_str(), data.size(), digest.data());
         std::vector<uint8_t> dst;
@@ -114,7 +115,7 @@ Disclosure::Disclosure(const std::string name, const std::string& val)
 
 Disclosure::Disclosure(const std::string name, std::vector<Disclosure>& val)
 {
-    salt64 = toBase64URL(libcdoc::Crypto::random(18));
+    salt64 = toBase64URL(libcdoc::Crypto::random(16));
     //
     // [SALT, [{..., HASH}, {..., HASH}...]
     // [SALT, NAME, [{..., HASH}, {..., HASH}...]
@@ -125,7 +126,6 @@ Disclosure::Disclosure(const std::string name, std::vector<Disclosure>& val)
             {"...", picojson::value(d.getSHA256())}
         });
         l.push_back(picojson::value(o));
-        std::cerr << picojson::value(o).serialize() << std::endl;
     }
     std::vector<picojson::value> v;
     if (name.empty()) {
@@ -214,9 +214,9 @@ libcdoc::MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint
 
     network->signMID(dst, cert, url, rp_uuid, rp_name, phone, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
 
-    LOG_DBG("SID dignature:{}", toHex(dst));
-    LOG_DBG("SID signatureB64:{}", toBase64URL(dst));
-    LOG_DBG("SID certificateB64:{}", toBase64(cert));
+    LOG_DBG("MID signature:{}", toHex(dst));
+    LOG_DBG("MID signatureB64:{}", toBase64URL(dst));
+    LOG_DBG("MID certificateB64:{}", toBase64(cert));
     
     return OK;
 }

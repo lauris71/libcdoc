@@ -246,7 +246,9 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
 		std::vector<std::string> tickets;
 		std::vector<uint8_t> cert;
 		result_t result = NOT_IMPLEMENTED;
-		if (conf->getValue(Configuration::SHARE_SIGNER) == "SMART_ID") {
+		std::string signer = conf->getValue(Configuration::SHARE_SIGNER);
+		LOG_DBG("Signer: {}", signer);
+		if (signer == "SMART_ID") {
 			// "https://sid.demo.sk.ee/smart-id-rp/v2"
 			std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
 			// "00000000-0000-0000-0000-000000000000"
@@ -256,7 +258,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
 			SIDSigner signer(url, relyingPartyUUID, relyingPartyName, rcpt_id, network);
 			result = signer.generateTickets(tickets, shares);
 			if (result == OK) cert = std::move(signer.cert);
-		} else if (conf->getValue(Configuration::SHARE_SIGNER) == "MOBILE_ID") {
+		} else if (signer == "MOBILE_ID") {
 			// "https://sid.demo.sk.ee/smart-id-rp/v2"
 			std::string url = conf->getValue(Configuration::MID_DOMAIN, Configuration::BASE_URL);
 			// "00000000-0000-0000-0000-000000000000"
