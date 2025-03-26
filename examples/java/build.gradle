@@ -2,7 +2,7 @@ plugins {
     id 'java'
 }
 group 'ee.ria'
-sourceSets.main.java.srcDirs += ['../../build/cdoc/java', '../../../../build/client/libcdoc/cdoc/java']
+sourceSets.main.java.srcDirs += ['../../build/macos/cdoc/java', '../../../../build/client/libcdoc/cdoc/java']
 java {
     targetCompatibility JavaVersion.VERSION_17
     sourceCompatibility JavaVersion.VERSION_17

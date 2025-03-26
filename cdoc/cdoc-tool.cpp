@@ -101,6 +101,9 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
     } else if ((arg == "--accept") && ((arg_idx + 1) < argc)) {
         conf.accept_certs.push_back(readAllBytes(argv[arg_idx + 1]));
         return 2;
+    } else if ((arg == "--conf") && ((arg_idx + 1) < argc)) {
+        conf.parse(argv[arg_idx + 1]);
+        return 2;
     }
     return 0;
 }
@@ -336,11 +339,10 @@ struct LockData {
     vector<uint8_t> secret;
 
     int validate(ToolConf& conf) {
-        if (lock_label.empty() && lock_idx == -1) {
+        if (lock_label.empty() && (lock_idx == -1) && (slot < 0)) {
             LOG_ERROR("No label nor index was provided");
             return RESULT_USAGE;
         }
-
         if ((slot >= 0) && conf.library.empty()) {
             LOG_ERROR("Cryptographic library is required");
             return RESULT_USAGE;

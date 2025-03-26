@@ -21,16 +21,24 @@
 
 #include "Configuration.h"
 
+#include "Utils.h"
+
+#include <sstream>
+
 namespace libcdoc {
 
 /**
  * @brief The class implements libcdoc::Configuration and holds configuration for cdoc_tool.
  */
-struct ToolConf : public Configuration {
+struct ToolConf : public JSONConfiguration {
     struct ServerData {
         std::string ID;
+        // Either capsule server url or comma-separated list of share servers
         std::string url;
     };
+
+    ToolConf() : JSONConfiguration() {};
+    ToolConf(std::istream& ifs) : JSONConfiguration(ifs) {}
 
     /**
      * @brief Version of CDOC container to be created, either 1 or 2.
@@ -77,11 +85,22 @@ struct ToolConf : public Configuration {
                 } else if (param == Configuration::KEYSERVER_FETCH_URL) {
                     return sdata.url;
                 } else if (param == Configuration::SHARE_SERVER_URLS) {
-                    return sdata.url;
+                    // Return JSON
+                    std::stringstream ss;
+                    auto list = libcdoc::split(sdata.url, ',');
+                    ss << "[";
+                    for (unsigned int i = 0; i < list.size(); i++) {
+                        if (i > 0) ss << ",";
+                        ss << '"';
+                        ss << list[i];
+                        ss << '"';
+                    }
+                    ss << "]";
+                    return ss.str();
                 }
             }
         }
-        return {};
+        return JSONConfiguration::getValue(domain, param);
     }
 };
 

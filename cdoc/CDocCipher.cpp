@@ -219,6 +219,7 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
                     LOG_ERROR("Certificate reading from SC card failed. Key label: {}", rcpt.key_label);
                     return 1;
                 }
+                LOG_DBG("Got certificate from P11 module");
                 label = Recipient::BuildLabelEID(cert_bytes);
                 break;
             }
@@ -394,11 +395,30 @@ int CDocCipher::Decrypt(ToolConf& conf, const std::string& label, const RcptInfo
     // Acquire the locks and get the labels according to the index
     int lock_idx = -1;
     const vector<Lock> locks(rdr->getLocks());
-    for (unsigned int i = 0; i < locks.size(); i++) {
-        if (locks[i].label == label) {
-            lock_idx = i;
-            break;
+    if (!label.empty()) {
+        LOG_DBG("Looking for lock by label");
+        for (unsigned int i = 0; i < locks.size(); i++) {
+            if (locks[i].label == label) {
+                lock_idx = i;
+                break;
+            }
         }
+    } else if (crypto.p11) {
+        bool isRsa;
+        vector<uint8_t> cert_bytes;
+        ToolPKCS11* p11 = dynamic_cast<ToolPKCS11*>(crypto.p11.get());
+        int64_t result = p11->getCertificate(cert_bytes, isRsa, (int) recipient.slot, recipient.secret, recipient.key_id, recipient.key_label);
+        if (result != libcdoc::OK) {
+            LOG_ERROR("Certificate reading from SC card failed. Key label: {}", recipient.key_label);
+            return 1;
+        }
+        LOG_DBG("Got certificate from P11 module");
+        result = rdr->getLockForCert(cert_bytes);
+        if (result < 0) {
+            LOG_ERROR("No lock for certificate {}", recipient.key_label);
+            return 1;
+        }
+        lock_idx = (int) result;
     }
     if (lock_idx < 0) {
         LOG_ERROR("Lock not found: {}", label);

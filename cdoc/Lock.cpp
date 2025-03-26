@@ -19,6 +19,8 @@
 #include "Lock.h"
 
 #include "Certificate.h"
+#include "Utils.h"
+#include "ILogger.h"
 
 namespace libcdoc {
 
@@ -72,6 +74,7 @@ Lock::hasTheSameKey(const std::vector<uint8_t>& public_key) const
 	if (!params.contains(Params::RCPT_KEY)) return false;
 	if (public_key.empty()) return false;
 	std::vector<uint8_t> pki = getBytes(Params::RCPT_KEY);
+	LOG_DBG("Lock key: {}", toHex(pki));
 	if (pki.empty()) return false;
 	return pki == public_key;
 }

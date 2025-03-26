@@ -65,6 +65,13 @@
 %ignore libcdoc::Configuration::KEYSERVER_SEND_URL;
 %ignore libcdoc::Configuration::KEYSERVER_FETCH_URL;
 %ignore libcdoc::Configuration::SHARE_SERVER_URLS;
+%ignore libcdoc::Configuration::SHARE_SIGNER;
+%ignore libcdoc::Configuration::SID_DOMAIN;
+%ignore libcdoc::Configuration::MID_DOMAIN;
+%ignore libcdoc::Configuration::BASE_URL;
+%ignore libcdoc::Configuration::RP_UUID;
+%ignore libcdoc::Configuration::RP_NAME;
+%ignore libcdoc::Configuration::PHONE_NUMBER;
 
 %ignore libcdoc::PKCS11Backend::Handle;
 %ignore libcdoc::PKCS11Backend::findCertificates(const std::string& label);
@@ -492,10 +499,20 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 // Configuration
 //
 
+%ignore libcdoc::JSONConfiguration::JSONConfiguration(std::istream& ifs);
+%ignore libcdoc::JSONConfiguration::parse(std::istream& ifs);
+
 %typemap(javacode) libcdoc::Configuration %{
     public static final String KEYSERVER_SEND_URL = "KEYSERVER_SEND_URL";
     public static final String KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
     public static final String SHARE_SERVER_URLS = "SHARE_SERVER_URLS";
+    public static final String SHARE_SIGNER = "SHARE_SIGNER";
+    public static final String SID_DOMAIN = "SMART_ID";
+    public static final String MID_DOMAIN = "MOBILE_ID";
+    public static final String BASE_URL = "BASE_URL";
+    public static final String RP_UUID = "RP_UUID";
+    public static final String RP_NAME = "RP_NAME";
+    public static final String PHONE_NUMBER = "PHONE_NUMBER";
 %}
 
 //
@@ -505,6 +522,16 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 //
 // NetworkBackend
 //
+
+%ignore libcdoc::NetworkBackend::ShareInfo::share;
+%extend libcdoc::NetworkBackend::ShareInfo {
+    std::vector<uint8_t> getShare() {
+        return $self->share;
+    }
+    void setShare(const std::vector<uint8_t>& share) {
+        $self->share = share;
+    }
+};
 
 %typemap(javaimports) ArrayList<byte[]> %{
     import java.util.ArrayList;

@@ -64,9 +64,13 @@ struct CDOC_EXPORT Lock
          */
         CDOC1,
         /**
-         * @brief public key stored on keyserver
+         * @brief Public key stored on keyserver
          */
-        SERVER
+        SERVER,
+        /**
+         * @brief Symmetric key distributed on several servers
+         */
+        SHARE_SERVER
 	};
 
     /**
@@ -88,7 +92,7 @@ struct CDOC_EXPORT Lock
      */
 	enum Params : unsigned int {
         /**
-         * @brief HKDF salt (SYMMETRIC and PASSWORD)
+         * @brief HKDF salt (SYMMETRIC_KEY, PASSWORD and SHARE_SERVER)
          */
         SALT,
         /**
@@ -119,6 +123,14 @@ struct CDOC_EXPORT Lock
          * @brief Keyserver transaction Id
          */
         TRANSACTION_ID,
+        /**
+         * @brief Keyshare recipient ID
+         */
+        RECIPIENT_ID,
+        /**
+         * @brief Keyshare server urls (separated by ';')
+         */
+        SHARE_URLS,
         /**
          * @brief CDoc1 specific
          */

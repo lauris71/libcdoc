@@ -35,17 +35,45 @@ namespace libcdoc {
  */
 struct CDOC_EXPORT Configuration {
     /**
-     * @brief Send URL of keyserver
+     * @brief Send URL of keyserver (Domain is server id)
      */
     static constexpr char const *KEYSERVER_SEND_URL = "KEYSERVER_SEND_URL";
     /**
-     * @brief Fetch URL of keyserver
+     * @brief Fetch URL of keyserver (Domain is server id)
      */
     static constexpr char const *KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
     /**
-     * @brief Comma-separated list of share server base urls
+     * @brief JSON array of share server base urls (Domain is server id)
      */
     static constexpr char const *SHARE_SERVER_URLS = "SHARE_SERVER_URLS";
+    /**
+     * @brief Method for signing keyshare tickets (SMART_ID or MOBILE_ID)
+     */
+    static constexpr char const *SHARE_SIGNER = "SHARE_SIGNER";
+    /**
+     * @brief Domain of SmartID settings
+     */
+    static constexpr char const *SID_DOMAIN = "SMART_ID";
+    /**
+     * @brief Domain of Mobile ID settings
+     */
+    static constexpr char const *MID_DOMAIN = "MOBILE_ID";
+    /**
+     * @brief MID/SID base url (domain is SMART_ID or MOBILE_ID)
+     */
+    static constexpr char const *BASE_URL = "BASE_URL";
+    /**
+     * @brief MID/SID relying party UUID (domain is SMART_ID or MOBILE_ID)
+     */
+    static constexpr char const *RP_UUID = "RP_UUID";
+    /**
+     * @brief MID/SID relying party name (domain is SMART_ID or MOBILE_ID)
+     */
+    static constexpr char const *RP_NAME = "RP_NAME";
+    /**
+     * @brief Mobile ID phone number (domain is MOBILE_ID)
+     */
+    static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
 
 	Configuration() = default;
 	virtual ~Configuration() noexcept = default;
@@ -85,8 +113,77 @@ struct CDOC_EXPORT Configuration {
     int getInt(std::string_view param, int def_val = 0) const;
 
 #if LIBCDOC_TESTING
-    virtual int64_t test(std::vector<uint8_t>& dst);
+    virtual int64_t test(std::vector<uint8_t>& dst) { return OK; }
 #endif
+};
+
+/**
+ * @brief A Configuration object implementation that reads values from JSON file
+ * 
+ * The file should represent a single object with key/value pairs
+ * Domain should contain sub-objects with corresponding key/value pairs
+ * Strings are returned unquoted, everything else is returned as JSON
+ * 
+ */
+struct CDOC_EXPORT JSONConfiguration : public Configuration {
+    struct Private;
+
+    /**
+     * @brief Construct a new empty JSONConfiguration object
+     * 
+     */
+    JSONConfiguration();
+    /**
+     * @brief Construct a new JSONConfiguration object from input stream
+     * 
+     * @param ifs input stream
+     */
+    JSONConfiguration(std::istream& ifs);
+    /**
+     * @brief Construct a new JSONConfiguration object from file
+     * 
+     * @param file file name
+     */
+    JSONConfiguration(const std::string& file);
+    /**
+     * @brief Construct a new JSONConfiguration object from bytes
+     * 
+     * @param data input data
+     */
+    JSONConfiguration(const std::vector<uint8_t>& data);
+    ~JSONConfiguration();
+
+    /**
+     * @brief Read configuration data from input stream
+     * 
+     * Existing values are replaced
+     * 
+     * @param ifs input stream
+     * @return true if successful
+     */
+    bool parse(std::istream& ifs);
+    /**
+     * @brief Read configuration data from file
+     * 
+     * Existing values are replaced
+     * 
+     * @param file file name
+     * @return true if successful
+     */
+    bool parse(const std::string& file);
+    /**
+     * @brief Read configuration data from byte vector
+     * 
+     * Existing values are replaced
+     * 
+     * @param data input data
+     * @return true if successful
+     */
+    bool parse(const std::vector<uint8_t>& data);
+
+    std::string getValue(std::string_view domain, std::string_view param) const override;
+private:
+    Private *d;
 };
 
 } // namespace libcdoc

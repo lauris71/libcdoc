@@ -23,6 +23,7 @@
 #include "CryptoBackend.h"
 #include "CDoc2.h"
 #include "ILogger.h"
+#include "KeyShares.h"
 #include "Lock.h"
 #include "NetworkBackend.h"
 #include "Tar.h"
@@ -111,8 +112,10 @@ libcdoc::result_t
 CDoc2Reader::getLockForCert(const std::vector<uint8_t>& cert){
 	libcdoc::Certificate cc(cert);
 	std::vector<uint8_t> other_key = cc.getPublicKey();
+	LOG_DBG("Cert public key: {}", toHex(other_key));
     for (int lock_idx = 0; lock_idx < priv->locks.size(); lock_idx++) {
         const libcdoc::Lock *ll = priv->locks.at(lock_idx);
+		LOG_DBG("Lock {} type {}", lock_idx, (int) ll->type);
 		if (ll->hasTheSameKey(other_key)) {
             return lock_idx;
 		}
@@ -152,7 +155,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_TRACE_KEY("kek: {}", kek);
 
         if (kek.empty()) return libcdoc::CRYPTO_ERROR;
-	} else {
+	} else if ((lock.type == libcdoc::Lock::Type::PUBLIC_KEY) || (lock.type == libcdoc::Lock::Type::SERVER)) {
 		// Public/private key
 		std::vector<uint8_t> key_material;
 		if(lock.type == libcdoc::Lock::Type::SERVER) {
@@ -210,6 +213,88 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
 
 			kek = libcdoc::Crypto::expand(kek_pm, std::vector<uint8_t>(info_str.cbegin(), info_str.cend()), libcdoc::CDoc2::KEY_LEN);
 		}
+	} else  if (lock.type == libcdoc::Lock::Type::SHARE_SERVER) {
+		/* SALT */
+		std::vector<uint8_t> salt = lock.getBytes(Lock::SALT);
+		/* RECIPIENT_ID */
+		std::string rcpt_id = lock.getString(Lock::RECIPIENT_ID);
+		/* SHARE_URLS */
+		/* url,share_id;url,share_id... */
+		std::string all = lock.getString(Lock::SHARE_URLS);
+		std::vector<std::string> strs = split(all, ';');
+		if (strs.empty()) return libcdoc::DATA_FORMAT_ERROR;
+		std::vector<ShareData> shares;
+		for (auto& str : strs) {
+			std::vector<std::string> parts = split(str, ',');
+			if (parts.size() != 2) return libcdoc::DATA_FORMAT_ERROR;
+			std::string url = parts[0];
+			std::string id = parts[1];
+			LOG_DBG("Share {} url {}", id, url);
+
+			std::vector<uint8_t> nonce;
+			int64_t result = network->fetchNonce(nonce, url, id);
+			if (result != libcdoc::OK) {
+				setLastError(t_("Cannot fetch nonce from server"));
+				LOG_ERROR("Cannot fetch nonce from server {}", url);
+				return result;
+			}
+			LOG_DBG("Nonce: {}", std::string(nonce.cbegin(), nonce.cend()));
+			ShareData acc(url, id, std::string(nonce.cbegin(), nonce.cend()));
+			shares.push_back(std::move(acc));
+		}
+		/* Create tickets from shares */
+		std::vector<std::string> tickets;
+		std::vector<uint8_t> cert;
+		result_t result = NOT_IMPLEMENTED;
+		if (conf->getValue(Configuration::SHARE_SIGNER) == "SMART_ID") {
+			// "https://sid.demo.sk.ee/smart-id-rp/v2"
+			std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
+			// "00000000-0000-0000-0000-000000000000"
+			std::string relyingPartyUUID = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_UUID);
+			// "DEMO"
+			std::string relyingPartyName = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_NAME);
+			SIDSigner signer(url, relyingPartyUUID, relyingPartyName, rcpt_id, network);
+			result = signer.generateTickets(tickets, shares);
+			if (result == OK) cert = std::move(signer.cert);
+		} else if (conf->getValue(Configuration::SHARE_SIGNER) == "MOBILE_ID") {
+			// "https://sid.demo.sk.ee/smart-id-rp/v2"
+			std::string url = conf->getValue(Configuration::MID_DOMAIN, Configuration::BASE_URL);
+			// "00000000-0000-0000-0000-000000000000"
+			std::string relyingPartyUUID = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_UUID);
+			// "DEMO"
+			std::string relyingPartyName = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_NAME);
+			// "37200000566"
+			std::string phone = conf->getValue(Configuration::MID_DOMAIN, Configuration::PHONE_NUMBER);
+			MIDSigner signer(url, relyingPartyUUID, relyingPartyName, phone, rcpt_id, network);
+			result = signer.generateTickets(tickets, shares);
+			if (result == OK) cert = std::move(signer.cert);
+		} else {
+			setLastError(t_("Unknown or missing signer type"));
+			LOG_ERROR("Unknown or missing signer type");
+			return result;
+		}
+		if (result != libcdoc::OK) {
+			setLastError(t_("Cannot generate share tickets"));
+			LOG_ERROR("Cannot generate share tickets");
+			return result;
+		}
+		kek.resize(32);
+		std::fill(kek.begin(), kek.end(), 0);
+		for (unsigned int i = 0; i < tickets.size(); i++) {
+			NetworkBackend::ShareInfo share;
+			result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, tickets[i], cert);
+			if (result != libcdoc::OK) {
+				setLastError(t_("Cannot fetch share"));
+				LOG_ERROR("Cannot fetch share {}", i);
+				return result;
+			}
+			Crypto::xor_data(kek, kek, share.share);
+		}
+		LOG_INFO("Fetched all shares");
+	} else {
+		setLastError(t_("Unknown lock type"));
+		LOG_ERROR("Unknown lock type: %d", (int) lock.type);
+		return libcdoc::UNSPECIFIED_ERROR;
 	}
 
     LOG_TRACE_KEY("KEK: {}", kek);
@@ -522,6 +607,40 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
 				key->setBytes(libcdoc::Lock::PW_SALT, std::vector<uint8_t>(capsule->password_salt()->cbegin(), capsule->password_salt()->cend()));
 				key->setInt(libcdoc::Lock::KDF_ITER, capsule->kdf_iterations());
 				priv->locks.push_back(key);
+			}
+			break;
+		case Capsule::recipients_KeySharesCapsule:
+			if (const auto *capsule = recipient->capsule_as_recipients_KeySharesCapsule()) {
+				if (capsule->recipient_type() != cdoc20::recipients::KeyShareRecipientType::SID_MID) {
+					LOG_ERROR("Invalid keyshare recipient type: {}", (int) capsule->recipient_type());
+					continue;
+				}
+				if (capsule->shares_scheme() != cdoc20::recipients::SharesScheme::N_OF_N) {
+					LOG_ERROR("Invalid keyshare scheme type: {}", (int) capsule->shares_scheme());
+					continue;
+				}
+				/* url,share_id;url,share_id... */
+				std::vector<std::string> strs;
+				for (auto cshare = capsule->shares()->cbegin(); cshare != capsule->shares()->cend(); ++cshare) {
+					std::string id = cshare->share_id()->str();
+					std::string url = cshare->server_base_url()->str();
+					std::string str = url + "," + id;
+					LOG_DBG("Keyshare: {}", str);
+					strs.push_back(str);
+				}
+				std::string urls = join(strs, ";");
+				LOG_DBG("Keyshare urls: {}", urls);
+				std::vector<uint8_t> salt(capsule->salt()->cbegin(), capsule->salt()->cend());
+				LOG_DBG("Keyshare salt: {}", toHex(salt));
+				std::string recipient_id = capsule->recipient_id()->str();
+				LOG_DBG("Keyshare recipient id: {}", recipient_id);
+				libcdoc::Lock *lock = new libcdoc::Lock(libcdoc::Lock::SHARE_SERVER);
+				lock->label = recipient->key_label()->str();
+				lock->encrypted_fmk.assign(recipient->encrypted_fmk()->cbegin(), recipient->encrypted_fmk()->cend());
+				lock->setString(libcdoc::Lock::SHARE_URLS, urls);
+				lock->setBytes(libcdoc::Lock::SALT, salt);
+				lock->setString(libcdoc::Lock::RECIPIENT_ID, recipient_id);
+				priv->locks.push_back(std::move(lock));
 			}
 			break;
 		default:

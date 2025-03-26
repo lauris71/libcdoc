@@ -71,32 +71,6 @@ getVersion()
     return VERSION_STR;
 }
 
-bool
-libcdoc::Configuration::getBoolean(std::string_view param, bool def_val) const
-{
-	std::string val = getValue(param);
-    if (val.empty()) return def_val;
-	return val == "true";
-}
-
-int
-libcdoc::Configuration::getInt(std::string_view param, int def_val) const
-{
-    std::string val = getValue(param);
-    if (val.empty()) return def_val;
-    return std::stoi(val);
-}
-
-#if LIBCDOC_TESTING
-int64_t
-libcdoc::Configuration::test(std::vector<uint8_t>& dst)
-{
-    LOG_TRACE("Configuration::test::Native superclass");
-    return OK;
-}
-#endif
-
-
 int
 libcdoc::CDocReader::getCDocFileVersion(DataSource *src)
 {
@@ -179,7 +153,6 @@ libcdoc::CDocReader::testConfig(std::vector<uint8_t>& dst)
     LOG_TRACE("CDocReader::testConfig::Native superclass");
     if (conf) {
         LOG_DBG("CDocReader::testConfig this={} conf={}", reinterpret_cast<void*>(this), reinterpret_cast<void*>(conf));
-        return conf->test(dst);
     }
     LOG_ERROR("CDocReader::testConfig::conf is null");
     return WORKFLOW_ERROR;

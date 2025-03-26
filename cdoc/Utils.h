@@ -32,6 +32,7 @@
 namespace libcdoc {
 
 std::string toBase64(const uint8_t *data, size_t len);
+
 static std::string toBase64(const std::vector<uint8_t> &data) {
     return toBase64(data.data(), data.size());
 }
@@ -60,7 +61,7 @@ fromHex(std::string_view hex) {
 }
 
 static std::vector<std::string>
-split (const std::string &s, char delim = ':') {
+split(const std::string &s, char delim = ':') {
     std::vector<std::string> result;
     std::stringstream ss(s);
     std::string item;
@@ -68,6 +69,36 @@ split (const std::string &s, char delim = ':') {
         result.push_back (item);
     }
     return result;
+}
+
+static std::string
+join(const std::vector<std::string> parts, const std::string_view sep)
+{
+	std::string result;
+	for (auto& part : parts) {
+		if (part != parts.front()) result += sep;
+		result += part;
+	}
+	return std::move(result);
+}
+
+std::vector<std::string> JsonToStringArray(std::string_view json);
+
+// Get time in seconds since the Epoch
+
+double getTime();
+
+static std::vector<uint8_t>
+readAllBytes(std::istream& ifs)
+{
+	std::vector<uint8_t> dst;
+	uint8_t b[4096];
+	while (!ifs.eof()) {
+		ifs.read((char *) b, 4096);
+		if (ifs.bad()) return {};
+		dst.insert(dst.end(), b, b + ifs.gcount());
+	}
+    return dst;
 }
 
 static std::vector<uint8_t>
@@ -83,14 +114,11 @@ readAllBytes(std::string_view filename)
         std::cerr << "readAllBytes(): Opening '" << filename << "' failed." << std::endl;
         return {};
     }
-
-    // Read the file
-    std::vector<uint8_t> dst(std::filesystem::file_size(keyFilePath));
-    keyStream.read(reinterpret_cast<std::ifstream::char_type *>(dst.data()), dst.size());
-    return dst;
+    return readAllBytes(keyStream);
 }
 
 int parseURL(const std::string& url, std::string& host, int& port, std::string& path);
+std::string buildURL(const std::string& host, int port);
 
 std::string urlEncode(std::string_view src);
 std::string urlDecode(std::string &src);

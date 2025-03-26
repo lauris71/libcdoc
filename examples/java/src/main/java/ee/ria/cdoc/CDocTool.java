@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
+import java.util.concurrent.locks.Lock;
 
 public class CDocTool {
     private enum Action {
@@ -21,6 +22,15 @@ public class CDocTool {
 
     private static HexFormat hex = HexFormat.of();
 
+    public static String getArg(int arg_idx, String[] args) {
+        arg_idx += 1;
+        if (arg_idx >= args.length) {
+            System.err.println("Invalid arguments");
+            System.exit(1);
+        }
+        return args[arg_idx];
+    }
+
     public static void main(String[] args) {
         System.out.println("Starting app...");
 
@@ -30,6 +40,13 @@ public class CDocTool {
         String label = null;
         String password = null;
         String out = "test.cdoc2";
+        String certfile = null;
+        // PKSC11 parameters
+        String p11library = null;
+        int p11slot = -1;
+        byte[] p11pin = null;
+        byte[] p11id = null;
+        String p11label = null;
     
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("test")) {
@@ -41,19 +58,29 @@ public class CDocTool {
             } else if (args[i].equals("locks")) {
                 action = Action.LOCKS;
             } else if (args[i].equals("--label")) {
+                label = getArg(i, args);
                 i += 1;
-                if (i >= args.length) {
-                    System.err.println("Invalid arguments");
-                    System.exit(1);
-                }
-                label = args[i];
+            } else if (args[i].equals("--certfile")) {
+                certfile = getArg(i, args);
+                i += 1;
             } else if (args[i].equals("--library")) {
+                library = getArg(i, args);
                 i += 1;
-                if (i >= args.length) {
-                    System.err.println("Invalid arguments");
-                    System.exit(1);
-                }
-                library = args[i];
+            } else if (args[i].equals("--p11library")) {
+                p11library = getArg(i, args);
+                i += 1;
+            } else if (args[i].equals("--p11slot")) {
+                p11slot = Integer.parseInt(getArg(i, args));
+                i += 1;
+            } else if (args[i].equals("--p11pin")) {
+                p11pin = getArg(i, args).getBytes();
+                i += 1;
+            } else if (args[i].equals("--p11pin")) {
+                p11id = getArg(i, args).getBytes();
+                i += 1;
+            } else if (args[i].equals("--p11label")) {
+                p11label = getArg(i, args);
+                i += 1;
             } else if (args[i].equals("--password")) {
                 i += 1;
                 if (i >= args.length) {
@@ -72,10 +99,18 @@ public class CDocTool {
 
         switch (action) {
             case ENCRYPT:
+            if (certfile != null) {
+                encryptCertFile(out, label, certfile, files);
+            } else {
                 encrypt(out, label, password, files);
+            }
                 break;
             case DECRYPT:
-                decrypt(files.get(0), label, password);
+                if (p11library != null) {
+                    decrypt(files.get(0), label, password);
+                } else {
+                    decrypt(files.get(0), label, password);
+                }
                 break;
             case LOCKS:
                 locks(files.get(0));
@@ -84,6 +119,10 @@ public class CDocTool {
                 test();
                 break;
         }
+    }
+
+    static void decrypt(String file, String p11library, int p11slot, byte[] p11pin, byte[] p11id, String p11label) {
+        System.out.println("Decrypting file (P11) " + file);
     }
 
     static void decrypt(String file, String label, String password) {
@@ -104,7 +143,7 @@ public class CDocTool {
 
             LockVector locks = rdr.getLocks();
             for (int idx = 0; idx < locks.size(); idx++) {
-                Lock lock = locks.get(idx);
+                ee.ria.cdoc.Lock lock = locks.get(idx);
                 if (lock.getLabel().equals(label)) {
                     System.out.format("Found lock: %s\n", label);
                     byte[] fmk = rdr.getFMK(idx);
@@ -167,13 +206,43 @@ public class CDocTool {
         }
     }
 
+    static void encryptCertFile(String file, String label, String certfile, Collection<String> files) {
+        System.out.println("Creating file " + file);
+        ToolConf conf = new ToolConf();
+        CDocWriter wrtr = CDocWriter.createWriter(2, file, conf, null, null);
+        try {
+            InputStream ifs = new FileInputStream(certfile);
+            byte[] cert = ifs.readAllBytes();
+            Recipient rcpt = Recipient.makeCertificate(label, cert);
+            long result = wrtr.addRecipient(rcpt);
+            System.out.format("addRecipient: %d\n", result);
+            result = wrtr.beginEncryption();
+            System.out.format("beginEncryption: %d\n", result);
+            for (String name : files) {
+                System.out.format("Adding file %s\n", name);
+                ifs = new FileInputStream(name);
+                byte[] bytes = ifs.readAllBytes();
+                result = wrtr.addFile(name, bytes.length);
+                System.out.format("addFile: %d\n", result);
+                result = wrtr.writeData(bytes);
+                System.out.format("writeData: %d\n", result);
+            }
+            result = wrtr.finishEncryption();
+            System.out.format("finishEncryption: %d\n", result);
+        } catch (IOException exc) {
+            System.err.println("IO Exception: " + exc.getMessage());
+        } catch (CDocException exc) {
+                System.err.format("CDoc Exception %d: %s\n", exc.code, exc.getMessage());
+        }
+    }
+
     static void locks(String path) {
         System.out.println("Parsing file " + path);
         CDocReader rdr = CDocReader.createReader(path, null, null, null);
         System.out.format("Reader created (version %d)\n", rdr.getVersion());
         LockVector locks = rdr.getLocks();
         for (int i = 0; i < locks.size(); i++) {
-            Lock lock = locks.get(i);
+            ee.ria.cdoc.Lock lock = locks.get(i);
             System.out.format("Lock %d\n", i);
             System.out.format("  label: %s\n", lock.getLabel());
             System.out.format("  type: %s\n", lock.getType());
@@ -247,9 +316,27 @@ public class CDocTool {
     
         @Override
         public long getSecret(DataBuffer dst, int idx) {
-            stored = dst;
             dst.setData(secret);
             return CDoc.OK;
+        }
+    }
+
+    private static class P11Crypto extends PKCS11Backend {
+        public int slot;
+        public byte[] pin;
+        public byte[] key_id = null;
+        public String key_label = null;
+
+        public P11Crypto(String library) {
+            super(library);
+        }
+
+        @Override
+        public long connectToKey(int idx, boolean priv) throws CDocException {
+            if (priv) {
+                return usePrivateKey(slot, pin, key_id, key_label);
+            }
+            return CDoc.NOT_IMPLEMENTED;
         }
     }
 
