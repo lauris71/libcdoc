@@ -89,6 +89,7 @@
 %apply long long { libcdoc::result_t }
 %apply long long { int64_t }
 %apply long long { uint64_t }
+%apply int { uint16_t }
 %apply int { int32_t }
 %apply int { unsigned int }
 

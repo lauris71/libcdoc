@@ -96,6 +96,29 @@ struct CDOC_EXPORT NetworkBackend {
         std::string recipient;
     };
 
+    /**
+     * @brief Proxy credentials used for network access
+     * 
+     */
+    struct ProxyCredentials {
+        /**
+         * @brief Proxy host
+         */
+        std::string host;
+        /**
+         * @brief Proxy port
+         */
+        uint16_t port;
+        /**
+         * @brief Proxy username
+         */
+        std::string username;
+        /**
+         * @brief Proxy password
+         */
+        std::string password;
+    };
+
     NetworkBackend() = default;
 	virtual ~NetworkBackend() noexcept = default;
     NetworkBackend(const NetworkBackend&) = delete;
@@ -189,6 +212,14 @@ struct CDOC_EXPORT NetworkBackend {
      */
     virtual result_t getPeerTLSCertificates(std::vector<std::vector<uint8_t>> &dst, const std::string& url) {
         return getPeerTLSCertificates(dst);
+    }
+
+    /**
+     * @brief Get proxy configuration currently set
+     * @param credentials output for proxy credentials
+     */
+    virtual result_t getProxyCredentials(ProxyCredentials& credentials) const {
+        return NOT_IMPLEMENTED;
     }
 
     /**

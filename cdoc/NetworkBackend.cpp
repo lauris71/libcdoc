@@ -198,6 +198,28 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
 }
 
 //
+// Set proxy parameters
+//
+static libcdoc::result_t
+setProxy(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
+{
+    libcdoc::NetworkBackend::ProxyCredentials cred;
+    switch (auto result = network->getProxyCredentials(cred)) {
+    case libcdoc::NOT_IMPLEMENTED:
+        return libcdoc::OK;
+    case libcdoc::OK:
+        if (!cred.host.empty()) {
+            cli.set_proxy(cred.host, cred.port);
+        }
+        if (!cred.username.empty()) {
+            cli.set_proxy_basic_auth(cred.username, cred.password);
+        }
+        return libcdoc::OK;
+    default: return result;
+    }
+}
+
+//
 // Post request and fetch response
 //
 static libcdoc::result_t
@@ -262,6 +284,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-capsules";
     httplib::Response rsp;
@@ -322,6 +345,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-shares";
     httplib::Response rsp;
@@ -360,6 +384,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     httplib::SSLClient cli(host, port, d->x509.get(), d->pkey);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-capsules/" + transaction_id;
     httplib::Headers hdrs;
@@ -395,6 +420,7 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-shares/" + share_id + "/nonce";
     httplib::Response rsp;
@@ -430,6 +456,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
 
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-shares/" + share_id;
     LOG_DBG("Share url: {}", full);
@@ -680,6 +707,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     //
     // Let user choose certificate (if multiple)
@@ -801,6 +829,7 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
 
     //
     // Authenticate
