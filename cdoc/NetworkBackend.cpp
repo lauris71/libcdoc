@@ -152,7 +152,7 @@ libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 		break;
 	}
     std::string_view str = getMIDSIDDescription(code);
-	if (!str.empty()) return std::string(str);
+    if (!str.empty()) return std::string(str);
     return libcdoc::getErrorStr(code);
 }
 

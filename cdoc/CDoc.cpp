@@ -184,17 +184,15 @@ libcdoc::CDocWriter::~CDocWriter()
 static NetworkBackend *
 getDefaultNetworkBackend()
 {
-    static NetworkBackend *network = nullptr;
-    if (!network) network = new NetworkBackend();
-    return network;
+    static NetworkBackend network;
+    return &network;
 }
 
 static CryptoBackend *
 getDefaultCryptoBackend()
 {
-    static CryptoBackend *crypto = nullptr;
-    if (!crypto) crypto = new CryptoBackend();
-    return crypto;
+    static CryptoBackend crypto;
+    return &crypto;
 }
 
 libcdoc::CDocWriter *
