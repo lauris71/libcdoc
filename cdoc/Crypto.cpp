@@ -108,6 +108,12 @@ Crypto::Cipher::blockSize() const
 	return EVP_CIPHER_CTX_get_block_size(ctx);
 }
 
+void
+Crypto::Cipher::clear()
+{
+    EVP_CIPHER_CTX_reset(ctx);
+}
+
 std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data, bool encrypt)
 {
 	AES_KEY aes;

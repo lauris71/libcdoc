@@ -257,7 +257,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
 
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -317,7 +317,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
 
     httplib::SSLClient cli(host, port);
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -349,7 +349,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
 
     std::vector<uint8_t> cert;
     result = getClientTLSCertificate(cert);
@@ -389,7 +389,7 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
 
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
@@ -423,7 +423,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
 
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
@@ -670,7 +670,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
     LOG_DBG("URL:{}", url);
     LOG_DBG("HOST:{}", host);
     LOG_DBG("PORT:{}", port);
@@ -791,7 +791,7 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    if (path == "/") path.clear();
+    if (path.ends_with('/')) path.resize(path.size() - 1);
     LOG_DBG("URL:{}", url);
     LOG_DBG("HOST:{}", host);
     LOG_DBG("PORT:{}", port);

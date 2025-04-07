@@ -50,6 +50,7 @@ public:
 		std::vector<uint8_t> tag() const;
 		bool setTag(const std::vector<uint8_t> &data) const;
 		int blockSize() const;
+		void clear();
 	};
 
 	static constexpr std::string_view KWAES128_MTH = "http://www.w3.org/2001/04/xmlenc#kw-aes128";
