@@ -10,6 +10,10 @@ add_executable(unittests
     ../cdoc/Utils.cpp
 )
 
+target_compile_definitions(unittests PRIVATE
+    DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+
 target_link_libraries(unittests
     OpenSSL::SSL
     LibXml2::LibXml2
