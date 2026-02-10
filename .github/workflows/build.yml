@@ -122,7 +122,15 @@ jobs:
     strategy:
       matrix:
         image: [windows-2025]
+        toolset: [143]
         platform: [x64, arm64]
+        include:
+        - platform: x64
+          setenv: amd64
+          python: 64
+        - platform: arm64
+          setenv: amd64_arm64
+          python: arm64
     env:
       CXXFLAGS: '/D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR' # https://github.com/actions/runner-images/issues/10004
       DEST: ${{ github.workspace }}/${{ matrix.image }}_${{ matrix.platform }}
