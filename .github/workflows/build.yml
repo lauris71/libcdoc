@@ -144,21 +144,19 @@ jobs:
       env:
         VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg_cache,readwrite
       run: |
+        & "$env:LOCALAPPDATA\Microsoft\WindowsApps\py.exe" install --target=.\python\${{ matrix.platform }} 3.12-${{ matrix.python }}
         $swig = (Get-Item "$env:LOCALAPPDATA\Microsoft\WinGet\Links\swig.exe").Target
-        cmake -A ${{ matrix.platform }} -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-          "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          "-DSWIG_EXECUTABLE=$swig" `
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.platform }}-windows-static-md `
-          ${{ matrix.platform == 'x64' && '-DVCPKG_MANIFEST_FEATURES=tests' || '' }} `
-          -DCMAKE_INSTALL_LIBDIR=bin
-        cmake --build build --config RelWithDebInfo
-        ctest -V -C RelWithDebInfo --test-dir build
-        cmake --install build --config RelWithDebInfo --prefix ${{ env.DEST }}
+        & "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Auxiliary\\Build\\vcvarsall.bat" ${{ matrix.setenv }} "&&" pwsh build.ps1 `
+          -vcpkg "C:/vcpkg/vcpkg.exe" `
+          -swig $swig `
+          -doxygen "C:/Program files/doxygen/bin/doxygen.exe" `
+          -boost `
+          -python ${{ github.workspace }}/python
     - name: Archive artifacts
       uses: actions/upload-artifact@v5
       with:
         name: ${{ matrix.image }}_${{ matrix.platform }}
-        path: ${{ env.DEST }}
+        path: ./*.msi
   pages:
     name: Deploy pages
     if: github.repository == 'open-eid/libcdoc' && contains(github.ref, 'master')
