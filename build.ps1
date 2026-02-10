@@ -10,7 +10,7 @@ param(
   [string]$vcpkg_triplet = "x64-windows",
   [string]$vcpkg_installed_platform = "$vcpkg_installed\vcpkg_installed",
   [string]$cmake = "cmake.exe",
-  [string]$generator = "Visual Studio 17 2022",
+  [string]$generator = "NMake Makefiles",
   [switch]$run_tests = $false,
   [string]$swig = $null,
   [string]$doxygen = $null,
