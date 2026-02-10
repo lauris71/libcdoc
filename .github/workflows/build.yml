@@ -141,9 +141,9 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ github.workspace }}/vcpkg_cache
-        key: vcpkg-${{ matrix.image }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json') }}
+        key: vcpkg-${{ matrix.toolset }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json', 'vcpkg-ports/**') }}
     - name: Install dependencies
-      run: winget install --silent --accept-source-agreements --accept-package-agreements swig doxygen
+      run: winget install --silent --accept-source-agreements --accept-package-agreements swig doxygen 9NQ7512CXL7T
     - uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
