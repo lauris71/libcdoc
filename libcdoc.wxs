@@ -20,8 +20,8 @@
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="Libdigidocpp $(sys.BUILDARCH)" UpgradeCode="$(var.UpgradeCode)"
-      Language="1033" Version="!(bind.FileVersion.digidocpp)" Manufacturer="RIA">
+  <Package Name="libcdoc $(sys.BUILDARCH)" UpgradeCode="$(var.UpgradeCode)"
+      Language="1033" Version="!(bind.FileVersion.cdoc)" Manufacturer="RIA">
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
     <Icon Id="ID.ico" SourceFile="$(var.ICON)" />
     <Property Id="ARPPRODUCTICON" Value="ID.ico" />
@@ -34,7 +34,7 @@
     </UI>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="libdigidocpp$(var.Suffix)" />
+      <Directory Id="INSTALLFOLDER" Name="libcdoc$(var.Suffix)" />
     </StandardDirectory>
 
     <ComponentGroup Id="Runtime"
@@ -52,21 +52,18 @@
       <File Name="legacy.dll" />
       <File Name="zlib1.dll" />
       <File Name="libxml2.dll" />
-      <File Name="libxmlsec1.dll" />
-      <File Name="libxmlsec1-openssl.dll" />
     </ComponentGroup>
 
-    <ComponentGroup Id="Libraries" Source="$(var.libdigidocpp)">
+    <ComponentGroup Id="Libraries" Source="$(var.libcdoc)">
       <File Id="digidocpp" Name="digidocpp.dll" />
-      <File Name="digidoc-tool.exe" />
-      <File Source="$(var.libdigidocpp)\etc\digidocpp\digidocpp.conf" />
+      <File Name="cdoc-tool.exe" />
 <?ifdef var.swig ?>
-      <File Name="digidoc_csharp.dll" />
-      <File Name="digidoc_java.dll" />
-      <File Source="$(var.libdigidocpp)\share\digidocpp\digidocpp.jar" />
+      <File Name="libcdoc_csharp.dll" />
+      <File Name="libcdoc_java.dll" />
+      <File Source="$(var.libcdoc)\share\cdoc\cdoc.jar" />
 <?ifdef var.python ?>
-      <File Name="_digidoc_python.pyd" />
-      <File Name="digidoc.py" />
+      <File Name="_libcdoc_python.pyd" />
+      <File Name="libcdoc.py" />
 <?endif?>
 <?endif?>
     </ComponentGroup>
@@ -80,31 +77,32 @@
 <?endif?>
     </ComponentGroup>
 
-    <ComponentGroup Id="LibrariesDev" Source="$(var.libdigidocpp)">
+    <ComponentGroup Id="LibrariesDev" Source="$(var.libcdoc)">
       <Files Include="*.pdb" />
-      <File Name="digidocpp.lib" />
-      <File Name="digidocppd.dll" />
-      <File Name="digidocppd.lib" />
+      <File Name="libcdoc.dll" />
+      <File Name="libcdoc.lib" />
+      <File Name="libcdocd.dll" />
+      <File Name="libcdocd.lib" />
 <?ifdef var.swig ?>
-      <File Name="digidoc_csharpd.dll" />
-      <File Name="digidoc_javad.dll" />
+      <File Name="libcdoc_csharpd.dll" />
+      <File Name="libcdoc_javad.dll" />
 <?ifdef var.python ?>
-      <File Name="_digidoc_pythond.pyd" />
+      <File Name="_libcdoc_pythond.pyd" />
 <?endif?>
 <?endif?>
     </ComponentGroup>
 
-    <Feature Id="InstallLibdigidocpp" Level="1" Title="Libdigidocpp" Display="expand" ConfigurableDirectory="INSTALLFOLDER">
+    <Feature Id="InstallLibcdoc" Level="1" Title="Libcdoc" Display="expand" ConfigurableDirectory="INSTALLFOLDER">
       <ComponentGroupRef Id="Runtime" />
       <ComponentGroupRef Id="Dependencies" />
       <ComponentGroupRef Id="Libraries" />
-      <Files Directory="INSTALLFOLDER" Subdirectory="schema" Include="$(var.libdigidocpp)\etc\digidocpp\schema\*.xsd" />
+      <Files Directory="INSTALLFOLDER" Subdirectory="schema" Include="$(var.libcdoc)\etc\cdoc\schema\*.xsd" />
       <Feature Id="InstallDevel" Level="1" Title="Development">
         <ComponentGroupRef Id="RuntimeDev" />
         <File Directory="INSTALLFOLDER" Source="$(var.vcpkg)\debug\bin\zlibd1.dll" />
         <ComponentGroupRef Id="LibrariesDev" />
-        <Files Directory="INSTALLFOLDER" Subdirectory="include" Include="$(var.libdigidocpp)\include\**" />
-        <Files Directory="INSTALLFOLDER" Subdirectory="cmake\libdigidocpp" Include="$(var.libdigidocpp)\cmake\libdigidocpp\**"  />
+        <Files Directory="INSTALLFOLDER" Subdirectory="include" Include="$(var.libcdoc)\include\**" />
+        <Files Directory="INSTALLFOLDER" Subdirectory="cmake\libcdoc" Include="$(var.libcdoc)\cmake\libcdoc\**"  />
       </Feature>
 <?ifdef var.docLocation ?>
       <Feature Id="InstallDocumentation" Level="1" Title="Documentation">
