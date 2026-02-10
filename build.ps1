@@ -11,8 +11,16 @@ param(
   [string]$vcpkg_installed_platform = "$vcpkg_installed\vcpkg_installed",
   [string]$cmake = "cmake.exe",
   [string]$generator = "Visual Studio 17 2022",
-  [switch]$RunTests = $false,
+  [switch]$run_tests = $false,
 )
+
+Try {
+  & wix > $null
+}
+Catch {
+  & dotnet tool install -g --version 6.0.2 wix
+  & wix extension add -g WixToolset.UI.wixext/6.0.2
+}
 
 if(!(Test-Path -Path $vcpkg)) {
   & $git clone https://github.com/microsoft/vcpkg.git $vcpkg_dir
@@ -20,31 +28,55 @@ if(!(Test-Path -Path $vcpkg)) {
 }
 
 $cmakeext = @()
+$wixext = @()
+$target = @("all")
+if($swig) {
+  $cmakeext += "-DSWIG_EXECUTABLE=$swig"
+  $wixext += "-d", "swig=$swig"
+}
+if($doxygen) {
+  $cmakeext += "-DDOXYGEN_EXECUTABLE=$doxygen"
+}
 if($platform -eq "arm64" -and $env:VSCMD_ARG_HOST_ARCH -ne "arm64") {
-  $cmakeext += "-DCMAKE_DISABLE_FIND_PACKAGE_Python3=yes"
-  $RunTests = $false
+  $run_tests = $false
 }
-if($RunTests) {
+if($run_tests) {
   $cmakeext += "-DVCPKG_MANIFEST_FEATURES=tests"
+  $target += "check"
 }
-
-$buildpath = "build"
-
-& $cmake --fresh -B $buildpath -S . "-G$generator" $cmakeext `
-    "--toolchain $vcpkg_dir/scripts/buildsystems/vcpkg.cmake" `
-    "-DVCPKG_INSTALLED_DIR=$vcpkg_installed_platform" `
-    "-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet"
+if($python) {
+  $cmakeext += "-DPython3_ROOT_DIR=$python/$platform"
+  $wixext += "-d", "python=1"
+}
 
 foreach($type in @("Debug", "RelWithDebInfo")) {
-    "==================="
-    "Build Configuration: " + $type
-    "==================="
-    & $cmake --build $buildpath --config $type
-#    & $cmake --install $buildpath
+  "==================="
+  "Build Configuration: " + $type
+  "==================="
+  $buildpath = $platform+$type
+  & $cmake --fresh -B $buildpath -S . "-G$generator" $cmakeext `
+    "-DCMAKE_BUILD_TYPE=$type" `
+    "-DCMAKE_INSTALL_PREFIX=$platform" `
+    "-DCMAKE_INSTALL_BINDIR=." `
+    "-DCMAKE_INSTALL_LIBDIR=." `
+    "-DCMAKE_TOOLCHAIN_FILE=$vcpkg_dir/scripts/buildsystems/vcpkg.cmake" `
+    "-DVCPKG_INSTALLED_DIR=$vcpkg_installed_platform" `
+    "-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet"
+  & $cmake --build $buildpath --target $target
+  & $cmake --install $buildpath
 }
 
-if($RunTests) {
-    Push-Location "$libcdoc\$buildpath"
-    ctest -V -C Debug
-    Pop-Location
+$docLocation = "$(Get-Location)/$platform/share/doc/libcdoc"
+if (Test-Path -Path $docLocation -PathType Container) {
+  $wixext += "-d", "docLocation=$docLocation"
 }
+
+& wix build -nologo -arch $platform -out $msi_name $wixext `
+  -ext WixToolset.UI.wixext `
+  -bv "WixUIBannerBmp=$libcdoc/banner.bmp" `
+  -bv "WixUIDialogBmp=$libcdoc/dlgbmp.bmp" `
+  -d "ICON=$libcdoc/ID.ico" `
+  -d "vcpkg=$vcpkg_installed_platform/$vcpkg_triplet" `
+  -d "libcdoc=$(Get-Location)/$platform" `
+  $libcdoc\libcdoc.wxs
+
