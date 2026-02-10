@@ -12,6 +12,9 @@ param(
   [string]$cmake = "cmake.exe",
   [string]$generator = "Visual Studio 17 2022",
   [switch]$run_tests = $false,
+  [string]$swig = $null,
+  [string]$doxygen = $null,
+  [string]$python = $null
 )
 
 Try {
