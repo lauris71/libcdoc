@@ -46,7 +46,7 @@
 <?endif?>
     </ComponentGroup>
 
-    <ComponentGroup Id="Dependencies" Source="$(var.vcpkg)">
+    <ComponentGroup Id="Dependencies" Source="$(var.vcpkg)\bin">
       <File Name="libcrypto-3$(var.OpenSSLSuffix).dll" />
       <File Name="libssl-3$(var.OpenSSLSuffix).dll" />
       <File Name="legacy.dll" />

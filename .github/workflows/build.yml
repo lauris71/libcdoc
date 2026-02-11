@@ -158,8 +158,7 @@ jobs:
           -vcpkg "C:/vcpkg/vcpkg.exe" `
           -swig $swig `
           -doxygen "C:/Program files/doxygen/bin/doxygen.exe" `
-          -boost `
-          -python ${{ github.workspace }}/python
+          -boost
     - name: Archive artifacts
       uses: actions/upload-artifact@v5
       with:
