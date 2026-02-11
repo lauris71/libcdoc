@@ -1,7 +1,6 @@
 #powershell -ExecutionPolicy ByPass -File build.ps1
 param(
   [string]$libcdoc = $PSScriptRoot,
-  [string]$platform = "x64",
   [string]$build_number = $(if ($null -eq $env:BUILD_NUMBER) {"0"} else {$env:BUILD_NUMBER}),
   [string]$msiversion = "1.0.0.$build_number",
   [string]$msi_name = "libcdoc-$msiversion$env:VER_SUFFIX.$platform.msi",
