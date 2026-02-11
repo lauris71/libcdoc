@@ -79,7 +79,6 @@
 
     <ComponentGroup Id="LibrariesDev" Source="$(var.libcdoc)">
       <Files Include="*.pdb" />
-      <File Name="cdoc.dll" />
       <File Name="cdoc.lib" />
       <File Name="cdocd.dll" />
       <File Name="cdocd.lib" />
