@@ -54,13 +54,13 @@
       <File Name="libxml2.dll" />
     </ComponentGroup>
 
-    <ComponentGroup Id="Libraries" Source="$(var.libcdoc)">
-      <File Id="digidocpp" Name="digidocpp.dll" />
+    <ComponentGroup Id="Libraries" Source="$(var.libcdoc)\bin">
+      <File Id="libcdoc" Name="cdoc.dll" />
       <File Name="cdoc-tool.exe" />
 <?ifdef var.swig ?>
-      <File Name="libcdoc_csharp.dll" />
-      <File Name="libcdoc_java.dll" />
-      <File Source="$(var.libcdoc)\share\cdoc\cdoc.jar" />
+      <File Name="cdoc_csharp.dll" />
+      <File Name="cdoc_java.dll" />
+      <File Source="$(var.libcdoc)\share\libcdoc\cdoc.jar" />
 <?ifdef var.python ?>
       <File Name="_libcdoc_python.pyd" />
       <File Name="libcdoc.py" />
