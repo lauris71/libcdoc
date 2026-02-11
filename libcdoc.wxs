@@ -46,7 +46,7 @@
 <?endif?>
     </ComponentGroup>
 
-    <ComponentGroup Id="Dependencies" Source="$(var.vcpkg)\bin">
+    <ComponentGroup Id="Dependencies" Source="$(var.vcpkg)">
       <File Name="libcrypto-3$(var.OpenSSLSuffix).dll" />
       <File Name="libssl-3$(var.OpenSSLSuffix).dll" />
       <File Name="legacy.dll" />
@@ -54,7 +54,7 @@
       <File Name="libxml2.dll" />
     </ComponentGroup>
 
-    <ComponentGroup Id="Libraries" Source="$(var.libcdoc)\bin">
+    <ComponentGroup Id="Libraries" Source="$(var.libcdoc)">
       <File Id="libcdoc" Name="cdoc.dll" />
       <File Name="cdoc-tool.exe" />
 <?ifdef var.swig ?>
@@ -96,13 +96,12 @@
       <ComponentGroupRef Id="Runtime" />
       <ComponentGroupRef Id="Dependencies" />
       <ComponentGroupRef Id="Libraries" />
-      <Files Directory="INSTALLFOLDER" Subdirectory="schema" Include="$(var.libcdoc)\etc\cdoc\schema\*.xsd" />
       <Feature Id="InstallDevel" Level="1" Title="Development">
         <ComponentGroupRef Id="RuntimeDev" />
         <File Directory="INSTALLFOLDER" Source="$(var.vcpkg)\debug\bin\zlibd1.dll" />
         <ComponentGroupRef Id="LibrariesDev" />
         <Files Directory="INSTALLFOLDER" Subdirectory="include" Include="$(var.libcdoc)\include\**" />
-        <Files Directory="INSTALLFOLDER" Subdirectory="cmake\libcdoc" Include="$(var.libcdoc)\cmake\libcdoc\**"  />
+        <Files Directory="INSTALLFOLDER" Subdirectory="cmake\cdoc" Include="$(var.libcdoc)\cmake\cdoc\**"  />
       </Feature>
 <?ifdef var.docLocation ?>
       <Feature Id="InstallDocumentation" Level="1" Title="Documentation">
