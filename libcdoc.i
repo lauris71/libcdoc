@@ -103,7 +103,7 @@
 // CDocReader
 //
 
-// Custom wrapper do away with const qualifiers
+// Custom wrapper to do away with const qualifiers
 %extend libcdoc::CDocReader {
     std::vector<libcdoc::Lock> getLocks() {
         const std::vector<libcdoc::Lock> &locks = $self->getLocks();
@@ -505,7 +505,14 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %typemap(javadirectorin) std::string_view "$jniinput"
 // No return of std::string_view so no javadirectorout
 
+// CDocReader
+
 %typemap(javacode) libcdoc::CDocReader %{
+    // Keep Java references to prevent GC deleting these prematurely
+    private Configuration config;
+    private CryptoBackend crypto;
+    private NetworkBackend network;
+
     public void readFile(java.io.OutputStream ofs) throws CDocException, java.io.IOException {
         byte[] buf = new byte[1024];
         long result = readData(buf);
@@ -515,6 +522,37 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
         }
     }
 %}
+
+%typemap(javaout) libcdoc::CDocReader * libcdoc::CDocReader::createReader {
+    long cPtr = $jnicall;
+    if (cPtr == 0) return null;
+    CDocReader rdr = new CDocReader(cPtr, true);
+    // Set Java references
+    rdr.config = conf;
+    rdr.crypto = crypto;
+    rdr.network = network;
+    return rdr;
+}
+
+// CDocWriter
+
+%typemap(javacode) libcdoc::CDocWriter %{
+    // Keep Java references to prevent GC deleting these prematurely
+    private Configuration config;
+    private CryptoBackend crypto;
+    private NetworkBackend network;
+%}
+
+%typemap(javaout) libcdoc::CDocWriter * libcdoc::CDocWriter::createWriter {
+    long cPtr = $jnicall;
+    if (cPtr == 0) return null;
+    CDocWriter wrtr = new CDocWriter(cPtr, true);
+    // Set Java references
+    wrtr.config = conf;
+    wrtr.crypto = crypto;
+    wrtr.network = network;
+    return wrtr;
+}
 
 %typemap(javacode) libcdoc::Configuration %{
     public static final String KEYSERVER_SEND_URL = "KEYSERVER_SEND_URL";
