@@ -162,7 +162,7 @@ jobs:
     - name: Archive artifacts
       uses: actions/upload-artifact@v5
       with:
-        name: ${{ matrix.image }}_${{ matrix.platform }}
+        name: msi_${{ matrix.image }}_${{ matrix.platform }}
         path: ./*.msi
   pages:
     name: Deploy pages
