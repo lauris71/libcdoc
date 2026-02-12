@@ -117,15 +117,17 @@ CDoc2Reader::getLocks()
 
 libcdoc::result_t
 CDoc2Reader::getLockForCert(const std::vector<uint8_t>& cert){
-    libcdoc::Certificate cc(cert);
-    std::vector<uint8_t> other_key = cc.getPublicKey();
+    std::vector<uint8_t> other_key = libcdoc::Certificate(cert).getPublicKey();
+    if (other_key.empty())
+         return libcdoc::NOT_FOUND;
     LOG_DBG("Cert public key: {}", toHex(other_key));
-    for (int lock_idx = 0; lock_idx < priv->locks.size(); lock_idx++) {
-        const Lock &ll = priv->locks.at(lock_idx);
+    int lock_idx = 0;
+    for (const Lock &ll : priv->locks) {
         LOG_DBG("Lock {} type {}", lock_idx, (int) ll.type);
-        if (ll.hasTheSameKey(other_key)) {
+        if (ll.isPKI() && ll.getBytes(libcdoc::Lock::RCPT_KEY) == other_key) {
             return lock_idx;
         }
+        ++lock_idx;
     }
     setLastError("No lock found with certificate key");
     return libcdoc::NOT_FOUND;

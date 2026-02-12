@@ -363,8 +363,7 @@ public class CDocTool {
 
     static void test() {
         System.err.println("Testing label generation");
-        String label = Recipient.buildLabel(new String[] {"Alpha", "1", "Beta", "2", "Gamma", "3", "Delta"});
-        System.err.format("Label: %s\n", label);
+        String label = "data:v=1&type=ID-card&serial_number=PNOEE-38001085718&cn=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718";
         java.util.Map<String,String> map = Recipient.parseLabel(label);
         for (String key : map.keySet()) {
             System.err.format("  %s:%s\n", key, map.get(key));

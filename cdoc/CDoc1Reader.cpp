@@ -327,7 +327,13 @@ CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
                     key.setBytes(Lock::Params::KEY_MATERIAL, reader.readBase64());
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/X509Data/X509Certificate
 				else if(reader.isElement("X509Certificate"))
-                    key.setCertificate(reader.readBase64());
+                {
+                    auto cert = reader.readBase64();
+                    Certificate ssl(cert);
+                    key.setBytes(Lock::CERT, std::move(cert));
+                    key.setBytes(Lock::RCPT_KEY, ssl.getPublicKey());
+                    key.pk_type = (ssl.getAlgorithm() == libcdoc::Certificate::RSA) ? Lock::RSA : Lock::ECC;
+                }
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/CipherData/CipherValue
 				else if(reader.isElement("CipherValue"))
                     key.encrypted_fmk = reader.readBase64();
