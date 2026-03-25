@@ -119,13 +119,13 @@ int64_t CDoc1Writer::Private::writeDocument(bool use_ddoc, const std::vector<Rec
 
 int64_t CDoc1Writer::Private::writeRecipient(const std::vector<uint8_t> &recipient, const Crypto::Key& transportKey)
 {
-    auto peerCert = Crypto::toX509(recipient);
+    Certificate peerCert(recipient);
     if(!peerCert)
         return UNSPECIFIED_ERROR;
     return writeElement(DENC, "EncryptedKey",
-            {{"Recipient", Certificate::getName(peerCert.get(), NID_commonName)}}, [&] -> int64_t {
+            {{"Recipient", peerCert.getName(NID_commonName)}}, [&] -> int64_t {
 		std::vector<uint8_t> encryptedData;
-		auto *peerPKey = X509_get0_pubkey(peerCert.get());
+        auto *peerPKey = X509_get0_pubkey(peerCert.handle());
 		switch(EVP_PKEY_base_id(peerPKey))
 		{
 		case EVP_PKEY_RSA:

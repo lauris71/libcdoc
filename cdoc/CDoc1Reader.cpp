@@ -18,20 +18,15 @@
 
 #include "CDoc1Reader.h"
 
-#include "CDoc.h"
 #include "Certificate.h"
 #include "Crypto.h"
 #include "CryptoBackend.h"
 #include "DDocReader.h"
 #include "Lock.h"
 #include "Utils.h"
-#include "XmlReader.h"
 #include "ZStream.h"
 
-#include <openssl/x509.h>
-
 #include <map>
-#include <set>
 
 using namespace libcdoc;
 

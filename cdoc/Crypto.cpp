@@ -45,14 +45,6 @@ const std::string Crypto::RSA_MTH = "http://www.w3.org/2001/04/xmlenc#rsa-1_5";
 const std::string Crypto::CONCATKDF_MTH = "http://www.w3.org/2009/xmlenc11#ConcatKDF";
 const std::string Crypto::AGREEMENT_MTH = "http://www.w3.org/2009/xmlenc11#ECDH-ES";
 
-template<auto F, auto Free, typename... Args>
-[[nodiscard]]
-constexpr auto d2i(const std::vector<uint8_t> &data, Args&&... args) noexcept
-{
-    const auto *p = data.data();
-    return make_unique_ptr(F(std::forward<Args>(args)..., &p, long(data.size())), Free);
-}
-
 std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data, bool encrypt)
 {
 	AES_KEY aes;
@@ -406,14 +398,6 @@ Crypto::xor_data(std::vector<uint8_t>& dst, const std::vector<uint8_t> &lhs, con
     for(size_t i = 0; i < lhs.size(); ++i)
         dst[i] = lhs[i] ^ rhs[i];
     return OK;
-}
-
-unique_free_t<X509> Crypto::toX509(const std::vector<uint8_t> &data)
-{
-    auto x509 = d2i<d2i_X509,X509_free>(data, nullptr);
-    if(!x509)
-        LOG_SSL_ERROR("d2i_X509");
-    return x509;
 }
 
 void Crypto::LogSslError(const char* funcName, const char* file, int line)

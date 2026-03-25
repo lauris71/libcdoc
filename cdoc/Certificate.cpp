@@ -23,17 +23,19 @@
 
 namespace libcdoc {
 
-Certificate::Certificate(const std::vector<uint8_t>& cert)
-    : cert(Crypto::toX509(cert))
+Certificate::Certificate(const std::vector<uint8_t>& data)
+    : cert(d2i<d2i_X509,X509_free>(data, nullptr))
 {
+    if(!data.empty() && !cert)
+        LOG_SSL_ERROR("d2i_X509");
 }
 
-std::string Certificate::getName(X509 *cert, int NID)
+std::string Certificate::getName(int NID) const
 {
     std::string cn;
     if(!cert)
         return cn;
-    X509_NAME *name = X509_get_subject_name(cert);
+    X509_NAME *name = X509_get_subject_name(cert.get());
     if(!name)
         return cn;
     int pos = X509_NAME_get_index_by_NID(name, NID, -1);
@@ -52,25 +54,25 @@ std::string Certificate::getName(X509 *cert, int NID)
 std::string
 Certificate::getCommonName() const
 {
-    return getName(cert.get(), NID_commonName);
+    return getName(NID_commonName);
 }
 
 std::string
 Certificate::getGivenName() const
 {
-    return getName(cert.get(), NID_givenName);
+    return getName(NID_givenName);
 }
 
 std::string
 Certificate::getSurname() const
 {
-    return getName(cert.get(), NID_surname);
+    return getName(NID_surname);
 }
 
 std::string
 Certificate::getSerialNumber() const
 {
-    return getName(cert.get(), NID_serialNumber);
+    return getName(NID_serialNumber);
 }
 
 time_t
@@ -119,14 +121,17 @@ Certificate::getEIDType() const
         }
 
         if (policy.starts_with("1.3.6.1.4.1.51361.1.1.4") ||
-            policy.starts_with("1.3.6.1.4.1.51361.1.2.4")) {
+            policy.starts_with("1.3.6.1.4.1.51361.1.2.4") ||
+            policy.starts_with("1.3.6.1.4.1.51361.2.1.6")) {
             return DigiID_EResident;
         }
 
         if (policy.starts_with("1.3.6.1.4.1.51361.1.1") ||
-            policy.starts_with("1.3.6.1.4.1.51455.1.1") ||
             policy.starts_with("1.3.6.1.4.1.51361.1.2") ||
-            policy.starts_with("1.3.6.1.4.1.51455.1.2")) {
+            policy.starts_with("1.3.6.1.4.1.51361.2.1") ||
+            policy.starts_with("1.3.6.1.4.1.51455.1.1") ||
+            policy.starts_with("1.3.6.1.4.1.51455.1.2") ||
+            policy.starts_with("1.3.6.1.4.1.51455.2.1")) {
             return IDCard;
         }
     }

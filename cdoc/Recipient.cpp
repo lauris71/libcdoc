@@ -81,7 +81,7 @@ Recipient
 Recipient::makeCertificate(std::string label, std::vector<uint8_t> cert)
 {
     Certificate x509(cert);
-    if (!x509.cert)
+    if (!x509)
         return {Type::NONE};
     Recipient rcpt(Type::PUBLIC_KEY);
     rcpt.label = std::move(label);
@@ -240,10 +240,11 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
 
 map<string, string> Recipient::parseLabel(const string& label)
 {
+    map<string, string> parsed_label;
     // Check if provided label starts with the machine generated label prefix.
     if (!label.starts_with(LABELPREFIX))
     {
-        return {};
+        return parsed_label;
     }
 
     string label_wo_prefix(label.substr(LABELPREFIX.size()));
@@ -270,7 +271,6 @@ map<string, string> Recipient::parseLabel(const string& label)
         label_to_prcss.assign(decodedLabel.cbegin(), decodedLabel.cend());
     }
 
-    map<string, string> parsed_label;
     vector<string> label_parts(split(label_to_prcss, '&'));
     for (vector<string>::const_reference part : label_parts)
     {
