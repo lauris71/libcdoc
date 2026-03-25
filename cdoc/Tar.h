@@ -37,7 +37,7 @@ public:
     libcdoc::result_t open(const std::string& name, int64_t size) final;
 private:
     result_t writeHeader(const Header &h) noexcept;
-    result_t writeHeader(Header &h, const std::string& name, int64_t size) noexcept;
+    result_t writeHeader(const std::string& name, int64_t size, char typeflag = '0') noexcept;
     result_t writePadding(int64_t size) noexcept;
 
 	DataConsumer *_dst;
