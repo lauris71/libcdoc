@@ -235,13 +235,6 @@ struct CDOC_EXPORT Recipient {
      */
     std::string getLabel(const std::vector<std::pair<std::string_view, std::string_view>> &extra) const;
 
-    /**
-     * @brief parse machine-readable CDoc2 label
-     * @param label the label
-     * @return a map of key-value pairs
-     */
-    static std::map<std::string, std::string> parseLabel(const std::string& label);
-
     bool operator== (const Recipient& other) const = default;
 protected:
 	Recipient(Type _type) : type(_type) {};

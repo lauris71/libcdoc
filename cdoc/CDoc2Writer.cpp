@@ -119,6 +119,7 @@ createRSAServerCapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::R
                                                               rsaKeyServer.Union(),
                                                               builder.CreateString(rcpt.server_id),
                                                               builder.CreateString(transaction_id));
+    if (rcpt.expiry_ts) expiry_time = std::min(rcpt.expiry_ts, expiry_time);
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_KeyServerCapsule,
                                                         capsule.Union(),
@@ -153,6 +154,7 @@ createECCServerCapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::R
                                                               eccKeyServer.Union(),
                                                               builder.CreateString(rcpt.server_id),
                                                               builder.CreateString(transaction_id));
+    if (rcpt.expiry_ts) expiry_time = std::min(rcpt.expiry_ts, expiry_time);
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_KeyServerCapsule,
                                                         capsule.Union(),

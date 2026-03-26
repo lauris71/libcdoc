@@ -30,26 +30,6 @@ using namespace std;
 
 namespace libcdoc {
 
-/**
- * @brief Prefix with what starts machine generated Lock's label.
- */
-constexpr string_view LABELPREFIX{"data:"};
-
-/**
- * @brief String after label prefix indicating, the rest of the label is Base64 encoded.
- */
-constexpr string_view LABELBASE64IND{";base64,"};
-
-/**
- * @brief EID type values for machine-readable label
- */
-static constexpr std::string_view eid_strs[] = {
-    "Unknown",
-    "ID-card",
-    "Digi-ID",
-    "Digi-ID E-RESIDENT"
-};
-
 Recipient
 Recipient::makeSymmetric(std::string label, int32_t kdf_iter)
 {
@@ -143,7 +123,7 @@ Recipient::isTheSameRecipient(const std::vector<uint8_t>& public_key) const
 static void
 buildLabel(std::ostream& ofs, std::string_view type, std::initializer_list<std::pair<std::string_view, std::string_view>> components)
 {
-    ofs << LABELPREFIX;
+    ofs << CDoc2::LABELPREFIX;
     ofs << "v" << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
         << "type" << '=' << type;
     for (const auto& [key, value] : components) {
@@ -155,7 +135,7 @@ buildLabel(std::ostream& ofs, std::string_view type, std::initializer_list<std::
 static void
 BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x509)
 {
-    buildLabel(ofs, eid_strs[type], {
+    buildLabel(ofs, CDoc2::eid_strs[type], {
         {"cn", x509.getCommonName()},
         {"serial_number", x509.getSerialNumber()},
         {"last_name", x509.getSurname()},
@@ -236,60 +216,6 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
     }
     LOG_DBG("Generated label: {}", ofs.str());
     return ofs.str();
-}
-
-map<string, string> Recipient::parseLabel(const string& label)
-{
-    map<string, string> parsed_label;
-    // Check if provided label starts with the machine generated label prefix.
-    if (!label.starts_with(LABELPREFIX))
-    {
-        return parsed_label;
-    }
-
-    string label_wo_prefix(label.substr(LABELPREFIX.size()));
-
-    // Label to be processed
-    string label_to_prcss;
-
-    // We ignore mediatype part
-
-    // Check, if the label is Base64 encoded
-    string::size_type base64IndPos = label_wo_prefix.find(LABELBASE64IND);
-    if (base64IndPos == string::npos)
-    {
-        if (label_wo_prefix.starts_with(",")) {
-            label_to_prcss = label_wo_prefix.substr(1);
-        } else {
-            label_to_prcss = std::move(label_wo_prefix);
-        }
-    }
-    else
-    {
-        string base64_label(label_wo_prefix.substr(base64IndPos + LABELBASE64IND.size()));
-        vector<uint8_t> decodedLabel(fromBase64(base64_label));
-        label_to_prcss.assign(decodedLabel.cbegin(), decodedLabel.cend());
-    }
-
-    vector<string> label_parts(split(label_to_prcss, '&'));
-    for (vector<string>::const_reference part : label_parts)
-    {
-        vector<string> label_data_parts(split(part, '='));
-        if (label_data_parts.size() != 2)
-        {
-            // Invalid label data. We just ignore them.
-            LOG_ERROR("The label '{}' is invalid", label);
-        }
-        else
-        {
-            std::string key = urlDecode(label_data_parts[0]);
-            std::string value = urlDecode(label_data_parts[1]);
-            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c){ return std::tolower(c); });
-            parsed_label[key] = value;
-        }
-    }
-
-    return parsed_label;
 }
 
 } // namespace libcdoc
