@@ -673,7 +673,7 @@ void CDocCipher::Locks(const char* file) const
 
     int lock_id = 1;
     for (const Lock& lock : rdr->getLocks()) {
-        map<string, string> parsed_label(Recipient::parseLabel(lock.label));
+        map<string, string> parsed_label(Lock::parseLabel(lock.label));
         if (parsed_label.empty()) {
             // Human-readable label
             cout << lock_id << ": " << lock.label << endl;

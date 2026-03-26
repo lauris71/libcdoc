@@ -153,7 +153,9 @@ libcdoc::TarConsumer::writeHeader(const Header &h) noexcept {
 }
 
 libcdoc::result_t
-libcdoc::TarConsumer::writeHeader(Header &h, const std::string& name, int64_t size) noexcept {
+libcdoc::TarConsumer::writeHeader(const std::string& name, int64_t size, char typeflag) noexcept {
+	Header h {};
+	h.typeflag = typeflag;
     h.chksum.fill(' ');
     size_t len = std::min(name.size(), h.name.size());
     std::copy_n(name.cbegin(), len, h.name.begin());
@@ -214,7 +216,6 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
 
     _current_size = size;
 	_current_written = 0;
-	Header h {};
 
 	bool need_pax_name = (name.size() >= 100);
 	for (auto c : name) {
@@ -225,7 +226,6 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
 	}
     if(need_pax_name || size > 07777777) {
 		LOG_DBG("Writing Pax header: name {} size {}", name, size);
-		h.typeflag = 'x';
 		std::string paxData;
         if(need_pax_name)
             paxData += toPaxRecord("path", name);
@@ -238,15 +238,14 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
 			path = std::filesystem::path("./PaxHeaders.X") / path.filename();
 		}
 		LOG_DBG("Pax path: {}", path.string());
-        if (auto rv = writeHeader(h, path.string(), paxData.size()); rv != OK)
+        if (auto rv = writeHeader(path.string(), paxData.size(), 'x'); rv != OK)
             return rv;
         if (auto rv = _dst->write((const uint8_t *) paxData.data(), paxData.size()); rv != paxData.size())
             return rv < OK ? rv : OUTPUT_ERROR;
         if (auto rv = writePadding(paxData.size()); rv != OK)
             return rv;
     }
-	h.typeflag = '0';
-    return writeHeader(h, name, size);
+    return writeHeader(name, size, '0');
 }
 
 libcdoc::TarSource::TarSource(DataSource *src, bool take_ownership)

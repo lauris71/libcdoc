@@ -25,6 +25,7 @@
 #include <CDocCipher.h>
 #include <CryptoBackend.h>
 #include <Recipient.h>
+#include <Lock.h>
 #include <Utils.h>
 #include <cdoc/Crypto.h>
 
@@ -731,7 +732,7 @@ BOOST_AUTO_TEST_CASE(PlainLabelParsing)
 {
     const string label("data:v=1&type=ID-card&serial_number=PNOEE-38001085718&cn=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
@@ -747,7 +748,7 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsing)
 {
     const string label("data:;base64,dj0xJnR5cGU9SUQtY2FyZCZzZXJpYWxfbnVtYmVyPVBOT0VFLTM4MDAxMDg1NzE4JmNuPUolQzMlOTVFT1JHJTJDSkFBSy1LUklTVEpBTiUyQzM4MDAxMDg1NzE4");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
@@ -763,7 +764,7 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsingWithMediaType)
 {
     const string label("data:application/x-www-form-urlencoded;base64,dj0xJnR5cGU9SUQtY2FyZCZzZXJpYWxfbnVtYmVyPVBOT0VFLTM4MDAxMDg1NzE4JmNuPUolQzMlOTVFT1JHJTJDSkFBSy1LUklTVEpBTiUyQzM4MDAxMDg1NzE4");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
