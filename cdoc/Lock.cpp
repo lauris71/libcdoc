@@ -59,12 +59,12 @@ Lock::parseLabel(const std::string& label)
 {
     std::map<std::string, std::string> parsed_label;
     // Check if provided label starts with the machine generated label prefix.
-    if (!label.starts_with(CDoc2Internal::LABELPREFIX))
+    if (!label.starts_with(CDoc2::LABELPREFIX))
     {
         return parsed_label;
     }
 
-    std::string label_wo_prefix(label.substr(CDoc2Internal::LABELPREFIX.size()));
+    std::string label_wo_prefix(label.substr(CDoc2::LABELPREFIX.size()));
 
     // Label to be processed
     std::string label_to_prcss;
@@ -72,7 +72,7 @@ Lock::parseLabel(const std::string& label)
     // We ignore mediatype part
 
     // Check, if the label is Base64 encoded
-    auto base64IndPos = label_wo_prefix.find(CDoc2Internal::LABELBASE64IND);
+    auto base64IndPos = label_wo_prefix.find(CDoc2::LABELBASE64IND);
     if (base64IndPos == std::string::npos)
     {
         if (label_wo_prefix.starts_with(",")) {
@@ -83,7 +83,7 @@ Lock::parseLabel(const std::string& label)
     }
     else
     {
-        std::string base64_label(label_wo_prefix.substr(base64IndPos + CDoc2Internal::LABELBASE64IND.size()));
+        std::string base64_label(label_wo_prefix.substr(base64IndPos + CDoc2::LABELBASE64IND.size()));
         label_to_prcss = jwt::base::decode<jwt::alphabet::base64>(base64_label);
     }
 

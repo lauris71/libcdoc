@@ -49,9 +49,9 @@ CDoc2Writer::writeHeader(const std::vector<libcdoc::Recipient> &recipients)
         return libcdoc::WRONG_ARGUMENTS;
     }
     std::vector<uint8_t> rnd;
-    if(auto rv = crypto->random(rnd, libcdoc::CDoc2Internal::KEY_LEN); rv < 0)
+    if(auto rv = crypto->random(rnd, libcdoc::CDoc2::KEY_LEN); rv < 0)
         return rv;
-    std::vector<uint8_t> fmk = libcdoc::Crypto::extract(rnd, {libcdoc::CDoc2Internal::SALT.cbegin(), libcdoc::CDoc2Internal::SALT.cend()});
+    std::vector<uint8_t> fmk = libcdoc::Crypto::extract(rnd, {libcdoc::CDoc2::SALT.cbegin(), libcdoc::CDoc2::SALT.cend()});
     std::fill(rnd.begin(), rnd.end(), 0);
     LOG_TRACE_KEY("fmk: {}", fmk);
 
@@ -62,8 +62,8 @@ CDoc2Writer::writeHeader(const std::vector<libcdoc::Recipient> &recipients)
         return rv;
     }
 
-    auto hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2Internal::HMAC);
-    auto cek = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2Internal::CEK);
+    auto hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::HMAC);
+    auto cek = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::CEK);
     std::fill(fmk.begin(), fmk.end(), 0);
     LOG_TRACE_KEY("cek: {}", cek);
     LOG_TRACE_KEY("hhk: {}", hhk);
@@ -75,16 +75,16 @@ CDoc2Writer::writeHeader(const std::vector<libcdoc::Recipient> &recipients)
     // FIXME: not big/little endian friendly
     uint8_t header_len[] {uint8_t(hs >> 24), uint8_t((hs >> 16) & 0xff), uint8_t((hs >> 8) & 0xff), uint8_t(hs & 0xff)};
 
-    dst->write((const uint8_t *) libcdoc::CDoc2Internal::LABEL.data(), libcdoc::CDoc2Internal::LABEL.size());
+    dst->write((const uint8_t *) libcdoc::CDoc2::LABEL.data(), libcdoc::CDoc2::LABEL.size());
     dst->write((const uint8_t *) &header_len, 4);
     dst->write(header.data(), header.size());
     dst->write(headerHMAC.data(), headerHMAC.size());
 
     std::vector<uint8_t> nonce;
-    crypto->random(nonce, libcdoc::CDoc2Internal::NONCE_LEN);
+    crypto->random(nonce, libcdoc::CDoc2::NONCE_LEN);
     LOG_TRACE_KEY("nonce: {}", nonce);
     auto cipher = std::make_unique<EncryptionConsumer>(*dst, EVP_chacha20_poly1305(), Crypto::Key(std::move(cek), nonce));
-    std::vector<uint8_t> aad(libcdoc::CDoc2Internal::PAYLOAD.cbegin(), libcdoc::CDoc2Internal::PAYLOAD.cend());
+    std::vector<uint8_t> aad(libcdoc::CDoc2::PAYLOAD.cbegin(), libcdoc::CDoc2::PAYLOAD.cend());
     aad.insert(aad.end(), header.cbegin(), header.cend());
     aad.insert(aad.end(), headerHMAC.cbegin(), headerHMAC.cend());
     if(auto rv = cipher->writeAAD(aad); rv < 0)
@@ -198,7 +198,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
     flatbuffers::FlatBufferBuilder builder;
     std::vector<flatbuffers::Offset<cdoc20::header::RecipientRecord>> fb_rcpts;
 
-    std::vector<uint8_t> xor_key(libcdoc::CDoc2Internal::KEY_LEN);
+    std::vector<uint8_t> xor_key(libcdoc::CDoc2::KEY_LEN);
     for (unsigned int rcpt_idx = 0; rcpt_idx < recipients.size(); rcpt_idx++) {
         const libcdoc::Recipient& rcpt = recipients.at(rcpt_idx);
         if (rcpt.isPKI()) {
@@ -223,7 +223,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 }
             }
             if(rcpt.pk_type == libcdoc::Recipient::PKType::RSA) {
-                crypto->random(kek, libcdoc::CDoc2Internal::KEY_LEN);
+                crypto->random(kek, libcdoc::CDoc2::KEY_LEN);
                 if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
                     setLastError("Internal error");
                     LOG_ERROR("{}", last_error);
@@ -267,8 +267,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 auto ephKey = libcdoc::Crypto::genECKey(publicKey.get());
                 std::vector<uint8_t> sharedSecret = libcdoc::Crypto::deriveSharedSecret(ephKey.get(), publicKey.get());
                 key_material = libcdoc::Crypto::toPublicKeyDer(ephKey.get());
-                std::vector<uint8_t> kekPm = libcdoc::Crypto::extract(sharedSecret, std::vector<uint8_t>(libcdoc::CDoc2Internal::KEKPREMASTER.cbegin(), libcdoc::CDoc2Internal::KEKPREMASTER.cend()));
-                std::string info_str = libcdoc::CDoc2Internal::getSaltForExpand(key_material, rcpt.rcpt_key);
+                std::vector<uint8_t> kekPm = libcdoc::Crypto::extract(sharedSecret, std::vector<uint8_t>(libcdoc::CDoc2::KEKPREMASTER.cbegin(), libcdoc::CDoc2::KEKPREMASTER.cend()));
+                std::string info_str = libcdoc::CDoc2::getSaltForExpand(key_material, rcpt.rcpt_key);
 
                 kek = libcdoc::Crypto::expand(kekPm, info_str, fmk.size());
                 if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
@@ -302,16 +302,16 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 }
             }
         } else if (rcpt.isSymmetric()) {
-            std::string info_str = libcdoc::CDoc2Internal::getSaltForExpand(rcpt.getLabel({}));
-            std::vector<uint8_t> kek_pm(libcdoc::CDoc2Internal::KEY_LEN);
+            std::string info_str = libcdoc::CDoc2::getSaltForExpand(rcpt.getLabel({}));
+            std::vector<uint8_t> kek_pm(libcdoc::CDoc2::KEY_LEN);
             std::vector<uint8_t> salt;
-            int64_t result = crypto->random(salt, libcdoc::CDoc2Internal::KEY_LEN);
+            int64_t result = crypto->random(salt, libcdoc::CDoc2::KEY_LEN);
             if (result < 0) {
                 setLastError(crypto->getLastErrorStr(result));
                 return result;
             }
             std::vector<uint8_t> pw_salt;
-            result = crypto->random(pw_salt, libcdoc::CDoc2Internal::KEY_LEN);
+            result = crypto->random(pw_salt, libcdoc::CDoc2::KEY_LEN);
             if (result < 0) {
                 setLastError(crypto->getLastErrorStr(result));
                 return result;
@@ -321,7 +321,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 setLastError(crypto->getLastErrorStr(result));
                 return result;
             }
-            std::vector<uint8_t> kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2Internal::KEY_LEN);
+            std::vector<uint8_t> kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2::KEY_LEN);
 
             LOG_DBG("Label: {}", rcpt.label);
             LOG_DBG("KDF iter: {}", rcpt.kdf_iter);
@@ -368,11 +368,11 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             //# KEK_i computation:
             //KeyMaterialSalt_i = CSRNG(256)
             std::vector<uint8_t> key_material_salt;
-            crypto->random(key_material_salt, libcdoc::CDoc2Internal::KEY_LEN);
+            crypto->random(key_material_salt, libcdoc::CDoc2::KEY_LEN);
 
             //KeyMaterial_i = CSRNG(256)
             std::vector<uint8_t> key_material;
-            crypto->random(key_material, libcdoc::CDoc2Internal::KEY_LEN);
+            crypto->random(key_material, libcdoc::CDoc2::KEY_LEN);
 
             //KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i, KeyMaterial_i)
             std::vector<uint8_t> kek_pm = libcdoc::Crypto::extract(key_material_salt, key_material);
@@ -394,7 +394,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             std::vector<std::vector<uint8_t>> kek_shares(N_SHARES);
             for (int i = 1; i < N_SHARES; i++) {
                 // KEK_i_share_j = CSRNG(256)
-                crypto->random(kek_shares[i], libcdoc::CDoc2Internal::KEY_LEN);
+                crypto->random(kek_shares[i], libcdoc::CDoc2::KEY_LEN);
             }
             // KEK_i_share_1 = XOR(KEK_i, KEK_i_share_2, KEK_i_share_3,..., KEK_i_share_n)
             kek_shares[0] = std::move(kek);

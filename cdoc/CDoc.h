@@ -183,12 +183,7 @@ struct FileInfo {
     int64_t size;
 };
 
-/**
- * @brief CDoc2-specific public values
- * 
- * This is class (instead of namespace) to streamline Swig wrapping
- */
-struct CDOC_EXPORT CDoc2 {
+namespace CDoc2 {
 
     /**
      * @brief Recipient types for machine-readable labels
@@ -216,8 +211,6 @@ struct CDOC_EXPORT CDoc2 {
     static constexpr std::string_view LBL_LAST_NAME = "last_name";
     static constexpr std::string_view LBL_FIRST_NAME = "first_name";
     static constexpr std::string_view LBL_CERT_SHA1 = "cert_sha1";
-
-    CDoc2() = delete;
 };
 
 }; // namespace libcdoc

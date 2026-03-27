@@ -244,7 +244,7 @@ libcdoc::WinBackend::deriveHMACExtract(std::vector<uint8_t>& dst, const std::vec
 		dst.resize(int(size));
 		err = NCryptDeriveKey(sharedSecret, BCRYPT_KDF_HMAC, &params, PBYTE(dst.data()), size, &size, 0);
         if (err == ERROR_SUCCESS) {
-		    dst.resize(CDoc2Internal::KEY_LEN);
+		    dst.resize(CDoc2::KEY_LEN);
             result = OK;
         }
     }

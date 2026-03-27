@@ -132,8 +132,8 @@ buildLabel(std::ostream& ofs, std::string_view type, const std::map<std::string_
         if (!value.empty())
             parts[key] = value;
     }
-    ofs << CDoc2Internal::LABELPREFIX;
-    ofs << CDoc2::LBL_VERSION << '=' << std::to_string(CDoc2Internal::KEYLABELVERSION) << '&'
+    ofs << CDoc2::LABELPREFIX;
+    ofs << CDoc2::LBL_VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
         << CDoc2::LBL_TYPE << '=' << type;
     for (const auto& [key, value] : parts) {
         if (!value.empty())
@@ -145,7 +145,7 @@ static void
 BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
 {
     
-    buildLabel(ofs, CDoc2Internal::eid_strs[type], lbl_parts, {
+    buildLabel(ofs, CDoc2::eid_strs[type], lbl_parts, {
         {CDoc2::LBL_CN, x509.getCommonName()},
         {CDoc2::LBL_SERIAL_NUMBER, x509.getSerialNumber()},
         {CDoc2::LBL_LAST_NAME, x509.getSurname()},
