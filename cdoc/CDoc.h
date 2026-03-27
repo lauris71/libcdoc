@@ -188,7 +188,7 @@ struct FileInfo {
  * 
  * This is class (instead of namespace) to streamline Swig wrapping
  */
-struct CDOC_EXPORT CDoc2 {
+struct CDOC_EXPORT CDoc2 final {
 
     /**
      * @brief Recipient types for machine-readable labels
