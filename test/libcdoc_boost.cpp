@@ -21,11 +21,10 @@
 #include <boost/test/unit_test.hpp>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <CDocCipher.h>
 #include <CryptoBackend.h>
-#include <Recipient.h>
 #include <Lock.h>
+#include <Recipient.h>
 #include <Utils.h>
 #include <cdoc/Crypto.h>
 
@@ -731,6 +730,22 @@ BOOST_AUTO_TEST_SUITE(MachineLabelParsing)
 BOOST_AUTO_TEST_CASE(PlainLabelParsing)
 {
     const string label("data:v=1&type=ID-card&serial_number=PNOEE-38001085718&cn=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718");
+
+    auto result = libcdoc::Lock::parseLabel(label);
+    for (const auto& [key, value] : ExpectedParsedLabel)
+    {
+        auto result_pair = result.find(key);
+        BOOST_TEST((result_pair != result.cend()), "Field " << key << " presented");
+        if (result_pair != result.end())
+        {
+            BOOST_CHECK_EQUAL(result_pair->second, value);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(PlainLabelParsingUpper)
+{
+    const string label("data:,TYPE=ID-card&serial_number=PNOEE-38001085718&CN=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718&V=1");
 
     auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)

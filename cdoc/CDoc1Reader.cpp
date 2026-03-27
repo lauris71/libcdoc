@@ -48,9 +48,8 @@ constexpr std::array SUPPORTED_KWAES {
  * @brief CDoc1Reader is used for decrypt data.
  */
 
-class CDoc1Reader::Private
+struct CDoc1Reader::Private
 {
-public:
     libcdoc::DataSource *dsrc = nullptr;
     bool src_owned = false;
     std::string mime, method;
@@ -138,7 +137,6 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_ERROR("{}", last_error);
 		return libcdoc::CRYPTO_ERROR;
 	}
-	setLastError({});
     return libcdoc::OK;
 }
 
@@ -187,7 +185,6 @@ CDoc1Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer
 libcdoc::result_t
 CDoc1Reader::beginDecryption(const std::vector<uint8_t>& fmk)
 {
-    setLastError({});
     return CDoc1Reader::decryptData(fmk, [&](DataSource &src, const std::string &mime) -> result_t {
         if(mime == MIME_DDOC || mime == MIME_DDOC_OLD) {
             LOG_DBG("Contains DDoc content {}", mime);
@@ -257,35 +254,22 @@ CDoc1Reader::readData(uint8_t *dst, size_t size)
  * @param src A DataSource of container
  */
 CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
-	: CDocReader(1), d(new Private)
+    : CDocReader(1), d(new Private{.dsrc = src, .src_owned = delete_on_close})
 {
-    d->dsrc = src;
-    d->src_owned = delete_on_close;
-	auto hex2bin = [](const std::string &in) {
-		std::vector<uint8_t> out;
-        out.reserve(in.size() / 2);
-		char data[] = "00";
-		for(std::string::const_iterator i = in.cbegin(); distance(i, in.cend()) >= 2;)
-		{
-			data[0] = *(i++);
-			data[1] = *(i++);
-			out.push_back(static_cast<uint8_t>(strtoul(data, 0, 16)));
-		}
-		if(out[0] == 0x00)
-			out.erase(out.cbegin());
-		return out;
+    auto hex2bin = [](std::string_view in) {
+        return fromHex(in.starts_with("00") ? in.substr(2) : in);
 	};
 
     XMLReader reader(*d->dsrc);
-	while (reader.read()) {
-		if(reader.isEndElement())
+    while (reader.read()) {
+        if(reader.isEndElement())
 			continue;
 		// EncryptedData
         if(reader.isElement("EncryptedData"))
-			d->mime = reader.attribute("MimeType");
+            d->mime = reader.attribute("MimeType");
 		// EncryptedData/EncryptionMethod
-		else if(reader.isElement("EncryptionMethod"))
-			d->method = reader.attribute("Algorithm");
+        else if(reader.isElement("EncryptionMethod"))
+            d->method = reader.attribute("Algorithm");
 		// EncryptedData/EncryptionProperties/EncryptionProperty
         else if(reader.isElement("EncryptionProperty"))
         {
@@ -293,13 +277,13 @@ CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
             d->properties[std::move(name)] = reader.readText();
         }
         // EncryptedData/KeyInfo/EncryptedKey
-		else if(reader.isElement("EncryptedKey"))
+        else if(reader.isElement("EncryptedKey"))
 		{
             Lock &key = d->locks.emplace_back(Lock::Type::CDOC1);
             key.label = reader.attribute("Recipient");
-			while(reader.read())
+            while(reader.read())
 			{
-				if(reader.isElement("EncryptedKey") && reader.isEndElement())
+                if(reader.isElement("EncryptedKey") && reader.isEndElement())
 					break;
                 if(reader.isEndElement())
 					continue;
@@ -307,20 +291,20 @@ CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
                 if(reader.isElement("EncryptionMethod"))
                     key.setString(Lock::Params::METHOD, reader.attribute("Algorithm"));
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/AgreementMethod/KeyDerivationMethod/ConcatKDFParams
-				else if(reader.isElement("ConcatKDFParams"))
+                else if(reader.isElement("ConcatKDFParams"))
 				{
                     key.setBytes(Lock::Params::ALGORITHM_ID, hex2bin(reader.attribute("AlgorithmID")));
                     key.setBytes(Lock::Params::PARTY_UINFO, hex2bin(reader.attribute("PartyUInfo")));
                     key.setBytes(Lock::Params::PARTY_VINFO, hex2bin(reader.attribute("PartyVInfo")));
 				}
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/AgreementMethod/KeyDerivationMethod/ConcatKDFParams/DigestMethod
-				else if(reader.isElement("DigestMethod"))
+                else if(reader.isElement("DigestMethod"))
                     key.setString(Lock::Params::CONCAT_DIGEST, reader.attribute("Algorithm"));
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/AgreementMethod/OriginatorKeyInfo/KeyValue/ECKeyValue/PublicKey
-				else if(reader.isElement("PublicKey"))
+                else if(reader.isElement("PublicKey"))
                     key.setBytes(Lock::Params::KEY_MATERIAL, reader.readBase64());
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/X509Data/X509Certificate
-				else if(reader.isElement("X509Certificate"))
+                else if(reader.isElement("X509Certificate"))
                 {
                     auto cert = reader.readBase64();
                     Certificate ssl(cert);
@@ -329,14 +313,14 @@ CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
                     key.pk_type = (ssl.getAlgorithm() == libcdoc::Certificate::RSA) ? Lock::RSA : Lock::ECC;
                 }
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/CipherData/CipherValue
-				else if(reader.isElement("CipherValue"))
+                else if(reader.isElement("CipherValue"))
                     key.encrypted_fmk = reader.readBase64();
 			}
 		}
 	}
 }
 
-CDoc1Reader::~CDoc1Reader()
+CDoc1Reader::~CDoc1Reader() noexcept
 {
 	delete d;
 }
@@ -367,6 +351,7 @@ CDoc1Reader::isCDoc1File(libcdoc::DataSource *src)
 result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
     const std::function<libcdoc::result_t(libcdoc::DataSource &src, const std::string &mime)>& f)
 {
+    setLastError({});
     if (fmk.empty()) {
         setLastError("FMK is missing");
         return libcdoc::WRONG_ARGUMENTS;
@@ -414,8 +399,6 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         setLastError("Failed to decrypt data, verify if FMK is correct");
         return CRYPTO_ERROR;
     }
-    setLastError({});
-
     if (d->mime == MIME_ZLIB) {
         libcdoc::ZSource zsrc(&dec);
         if(auto rv = f(zsrc, d->properties["OriginalMimeType"]); rv < OK)

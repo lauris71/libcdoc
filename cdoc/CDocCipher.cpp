@@ -18,7 +18,7 @@
 
 #include "CDocCipher.h"
 #include "CDocReader.h"
-#include "CDoc2.h"
+#include "Io.h"
 #include "Lock.h"
 #include "NetworkBackend.h"
 #include "PKCS11Backend.h"

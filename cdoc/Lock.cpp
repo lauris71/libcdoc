@@ -19,8 +19,9 @@
 #include "Lock.h"
 
 #include "CDoc2.h"
-#include "Certificate.h"
 #include "Utils.h"
+
+#include "json/base.h"
 
 namespace libcdoc {
 
@@ -83,8 +84,7 @@ Lock::parseLabel(const std::string& label)
     else
     {
         std::string base64_label(label_wo_prefix.substr(base64IndPos + CDoc2::LABELBASE64IND.size()));
-        std::vector<uint8_t> decodedLabel(fromBase64(base64_label));
-        label_to_prcss.assign(decodedLabel.cbegin(), decodedLabel.cend());
+        label_to_prcss = jwt::base::decode<jwt::alphabet::base64>(base64_label);
     }
 
     auto label_parts(split(label_to_prcss, '&'));
