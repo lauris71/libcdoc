@@ -184,7 +184,7 @@ struct FileInfo {
 };
 
 namespace CDoc2 {
-
+namespace Label {
     /**
      * @brief Recipient types for machine-readable labels
      * 
@@ -202,16 +202,17 @@ namespace CDoc2 {
      * @brief Recipient data for machine-readable labels
      * 
      */
-    static constexpr std::string_view LBL_VERSION = "v";
-    static constexpr std::string_view LBL_TYPE = "type";
-    static constexpr std::string_view LBL_FILE = "file";
-    static constexpr std::string_view LBL_LABEL = "label";
-    static constexpr std::string_view LBL_CN = "cn";
-    static constexpr std::string_view LBL_SERIAL_NUMBER = "serial_number";
-    static constexpr std::string_view LBL_LAST_NAME = "last_name";
-    static constexpr std::string_view LBL_FIRST_NAME = "first_name";
-    static constexpr std::string_view LBL_CERT_SHA1 = "cert_sha1";
-};
+    static constexpr std::string_view VERSION = "v";
+    static constexpr std::string_view TYPE = "type";
+    static constexpr std::string_view FILE = "file";
+    static constexpr std::string_view LABEL = "label";
+    static constexpr std::string_view CN = "cn";
+    static constexpr std::string_view SERIAL_NUMBER = "serial_number";
+    static constexpr std::string_view LAST_NAME = "last_name";
+    static constexpr std::string_view FIRST_NAME = "first_name";
+    static constexpr std::string_view CERT_SHA1 = "cert_sha1";
+}
+}
 
 }; // namespace libcdoc
 

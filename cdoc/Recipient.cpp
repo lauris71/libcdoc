@@ -133,8 +133,8 @@ buildLabel(std::ostream& ofs, std::string_view type, const std::map<std::string_
             parts[key] = value;
     }
     ofs << CDoc2::LABELPREFIX;
-    ofs << CDoc2::LBL_VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
-        << CDoc2::LBL_TYPE << '=' << type;
+    ofs << CDoc2::Label::VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
+        << CDoc2::Label::TYPE << '=' << type;
     for (const auto& [key, value] : parts) {
         if (!value.empty())
             ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
@@ -146,19 +146,19 @@ BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x
 {
     
     buildLabel(ofs, CDoc2::eid_strs[type], lbl_parts, {
-        {CDoc2::LBL_CN, x509.getCommonName()},
-        {CDoc2::LBL_SERIAL_NUMBER, x509.getSerialNumber()},
-        {CDoc2::LBL_LAST_NAME, x509.getSurname()},
-        {CDoc2::LBL_FIRST_NAME, x509.getGivenName()},
+        {CDoc2::Label::CN, x509.getCommonName()},
+        {CDoc2::Label::SERIAL_NUMBER, x509.getSerialNumber()},
+        {CDoc2::Label::LAST_NAME, x509.getSurname()},
+        {CDoc2::Label::FIRST_NAME, x509.getGivenName()},
     });
 }
 
 static void
 BuildLabelCertificate(std::ostream &ofs, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
 {
-    buildLabel(ofs, CDoc2::TYPE_CERTIFICATE, lbl_parts, {
-        {CDoc2::LBL_CN, x509.getCommonName()},
-        {CDoc2::LBL_CERT_SHA1, toHex(x509.getDigest())}
+    buildLabel(ofs, CDoc2::Label::TYPE_CERTIFICATE, lbl_parts, {
+        {CDoc2::Label::CN, x509.getCommonName()},
+        {CDoc2::Label::CERT_SHA1, toHex(x509.getDigest())}
     });
 }
 
@@ -183,9 +183,9 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
             break;
         case SYMMETRIC_KEY:
             if (kdf_iter > 0) {
-                buildLabel(ofs, CDoc2::TYPE_PASSWORD, parts, {});
+                buildLabel(ofs, CDoc2::Label::TYPE_PASSWORD, parts, {});
             } else {
-                buildLabel(ofs, CDoc2::TYPE_SYMMETRIC, parts, {});
+                buildLabel(ofs, CDoc2::Label::TYPE_SYMMETRIC, parts, {});
             }
             break;
         case PUBLIC_KEY:
@@ -197,7 +197,7 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
                     BuildLabelCertificate(ofs, x509, parts);
                 }
             } else {
-                buildLabel(ofs, CDoc2::TYPE_PUBLIC_KEY, parts, {});
+                buildLabel(ofs, CDoc2::Label::TYPE_PUBLIC_KEY, parts, {});
             }
             break;
         case KEYSHARE:

@@ -59,10 +59,10 @@ constexpr std::string_view LABELBASE64IND{";base64,"};
  * @brief EID type values for machine-readable label
  */
 static constexpr std::string_view eid_strs[] = {
-    CDoc2::TYPE_UNKNOWN,
-    CDoc2::TYPE_ID_CARD,
-    CDoc2::TYPE_DIGI_ID,
-    CDoc2::TYPE_DIGI_ID_E_RESIDENT
+    CDoc2::Label::TYPE_UNKNOWN,
+    CDoc2::Label::TYPE_ID_CARD,
+    CDoc2::Label::TYPE_DIGI_ID,
+    CDoc2::Label::TYPE_DIGI_ID_E_RESIDENT
 };
 
 } // namespace CDoc2
