@@ -18,7 +18,7 @@
 
 #include "Utils.h"
 
-#include "json/jwt.h"
+#include "json/base.h"
 #include "json/picojson/picojson.h"
 
 #include <openssl/evp.h>
@@ -65,16 +65,15 @@ timeFromISO(const std::string& iso)
 }
 
 std::string
-timeToISO(double time)
+timeToISO(time_t time)
 {
 #ifdef __cpp_lib_format
-    auto expiry_tp = std::chrono::system_clock::time_point{std::chrono::seconds{time_t(time)}};
+    auto expiry_tp = std::chrono::system_clock::from_time_t(time);
     return std::format("{:%FT%TZ}", expiry_tp);
 #else
-    char buf[sizeof "2011-10-08T07:07:09Z"];
-    time_t tstamp = (time_t) time;
-    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", gmtime(&tstamp));
-    return std::string(buf);
+    std::string buf = "0000-00-00T00:00:00Z";
+    strftime(buf.data(), buf.size() + 1, "%FT%TZ", gmtime(&time));
+    return buf;
 #endif
 }
 
@@ -154,29 +153,6 @@ operator<<(std::ostream& escaped, urlEncode src)
         escaped << std::nouppercase;
     }
     return escaped;
-}
-
-std::string
-urlDecode(const std::string &src)
-{
-    std::string ret;
-    ret.reserve(src.size());
-    uint8_t value = 0;
-
-    for (auto it = src.begin(), end = src.end(); it != end; ++it) {
-        if (*it == '%' && std::distance(it, end) >= 3 &&
-            std::isxdigit(*(it + 1)) && std::isxdigit(*(it + 2))) {
-            auto result = std::from_chars(&*(it + 1), &*(it + 3), value, 16);
-            if (result.ec == std::errc()) {
-                ret += char(value);
-                std::advance(it, 2);
-                continue;
-            }
-        }
-        ret += *it;
-    }
-
-    return ret;
 }
 
 std::vector<std::string>

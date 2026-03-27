@@ -21,9 +21,9 @@
 
 #include <cdoc/Exports.h>
 
-#include <map>
 #include <string>
 #include <vector>
+#include <map>
 #include <cstdint>
 
 namespace libcdoc {
