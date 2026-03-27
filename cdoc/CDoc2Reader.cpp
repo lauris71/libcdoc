@@ -47,19 +47,19 @@ using namespace libcdoc;
 // Get salt bitstring for HKDF expand method
 
 std::string
-libcdoc::CDoc2::getSaltForExpand(const std::string& label)
+libcdoc::CDoc2Internal::getSaltForExpand(const std::string& label)
 {
     std::ostringstream oss;
-    oss << libcdoc::CDoc2::KEK << cdoc20::header::EnumNameFMKEncryptionMethod(cdoc20::header::FMKEncryptionMethod::XOR) << label;
+    oss << libcdoc::CDoc2Internal::KEK << cdoc20::header::EnumNameFMKEncryptionMethod(cdoc20::header::FMKEncryptionMethod::XOR) << label;
     return oss.str();
 }
 
 // Get salt bitstring for HKDF expand method
 std::string
-libcdoc::CDoc2::getSaltForExpand(const std::vector<uint8_t>& key_material, const std::vector<uint8_t>& rcpt_key)
+libcdoc::CDoc2Internal::getSaltForExpand(const std::vector<uint8_t>& key_material, const std::vector<uint8_t>& rcpt_key)
 {
     std::ostringstream oss;
-    oss << libcdoc::CDoc2::KEK
+    oss << libcdoc::CDoc2Internal::KEK
         << cdoc20::header::EnumNameFMKEncryptionMethod(cdoc20::header::FMKEncryptionMethod::XOR)
         << std::string_view((const char*)rcpt_key.data(), rcpt_key.size())
         << std::string_view((const char*)key_material.data(), key_material.size());
@@ -149,7 +149,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     if (lock.type == Lock::Type::PASSWORD) {
         // Password
         LOG_DBG("password");
-        std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
+        std::string info_str = libcdoc::CDoc2Internal::getSaltForExpand(lock.label);
         LOG_DBG("info: {}", toHex(info_str));
         std::vector<uint8_t> kek_pm;
         if (auto rv = crypto->extractHKDF(kek_pm, lock.getBytes(Lock::SALT), lock.getBytes(Lock::PW_SALT), lock.getInt(Lock::KDF_ITER), lock_idx); rv != libcdoc::OK) {
@@ -163,7 +163,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     } else if (lock.type == Lock::Type::SYMMETRIC_KEY) {
         // Symmetric key
         LOG_DBG("symmetric");
-        std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
+        std::string info_str = libcdoc::CDoc2Internal::getSaltForExpand(lock.label);
         LOG_DBG("info: {}", toHex(info_str));
         std::vector<uint8_t> kek_pm;
         if (auto rv = crypto->extractHKDF(kek_pm, lock.getBytes(Lock::SALT), {}, 0, lock_idx); rv != libcdoc::OK) {
@@ -217,16 +217,16 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             }
         } else {
             std::vector<uint8_t> kek_pm;
-            int result = crypto->deriveHMACExtract(kek_pm, key_material, toUint8Vector(libcdoc::CDoc2::KEKPREMASTER), lock_idx);
+            int result = crypto->deriveHMACExtract(kek_pm, key_material, toUint8Vector(libcdoc::CDoc2Internal::KEKPREMASTER), lock_idx);
             if (result < 0) {
                 setLastError(crypto->getLastErrorStr(result));
                 LOG_ERROR("{}", last_error);
                 return result;
             }
             LOG_TRACE_KEY("Key kekPm: {}", kek_pm);
-            std::string info_str = libcdoc::CDoc2::getSaltForExpand(key_material, lock.getBytes(Lock::Params::RCPT_KEY));
+            std::string info_str = libcdoc::CDoc2Internal::getSaltForExpand(key_material, lock.getBytes(Lock::Params::RCPT_KEY));
             LOG_DBG("info: {}", toHex(info_str));
-            kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2::KEY_LEN);
+            kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2Internal::KEY_LEN);
         }
     } else  if (lock.type == Lock::Type::SHARE_SERVER) {
         /* SALT */
@@ -345,7 +345,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_ERROR("{}", last_error);
         return libcdoc::CRYPTO_ERROR;
     }
-    std::vector<uint8_t> hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::HMAC);
+    std::vector<uint8_t> hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2Internal::HMAC);
 
     LOG_TRACE_KEY("xor: {}", lock.encrypted_fmk);
     LOG_TRACE_KEY("fmk: {}", fmk);
@@ -409,11 +409,11 @@ CDoc2Reader::beginDecryption(const std::vector<uint8_t>& fmk)
         }
     }
     priv->_at_nonce = false;
-    std::vector<uint8_t> cek = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::CEK);
+    std::vector<uint8_t> cek = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2Internal::CEK);
     LOG_TRACE_KEY("cek: {}", cek);
 
-    priv->dec = std::make_unique<libcdoc::DecryptionSource>(*priv->_src, EVP_chacha20_poly1305(), cek, libcdoc::CDoc2::NONCE_LEN);
-    std::vector<uint8_t> aad = toUint8Vector(libcdoc::CDoc2::PAYLOAD);
+    priv->dec = std::make_unique<libcdoc::DecryptionSource>(*priv->_src, EVP_chacha20_poly1305(), cek, libcdoc::CDoc2Internal::NONCE_LEN);
+    std::vector<uint8_t> aad = toUint8Vector(libcdoc::CDoc2Internal::PAYLOAD);
     aad.insert(aad.end(), priv->header_data.cbegin(), priv->header_data.cend());
     aad.insert(aad.end(), priv->headerHMAC.cbegin(), priv->headerHMAC.cend());
     if(auto rv = priv->dec->updateAAD(aad); rv != OK) {
@@ -621,16 +621,16 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
 
     setLastError(t_("Invalid CDoc 2.0 header"));
 
-    uint8_t in[libcdoc::CDoc2::LABEL.size()];
-    if (priv->_src->read(in, libcdoc::CDoc2::LABEL.size()) != libcdoc::CDoc2::LABEL.size()) {
+    uint8_t in[libcdoc::CDoc2Internal::LABEL.size()];
+    if (priv->_src->read(in, libcdoc::CDoc2Internal::LABEL.size()) != libcdoc::CDoc2Internal::LABEL.size()) {
         LOG_ERROR("{}", last_error);
         return;
     }
-    if (memcmp(libcdoc::CDoc2::LABEL.data(), in, libcdoc::CDoc2::LABEL.size())) {
+    if (memcmp(libcdoc::CDoc2Internal::LABEL.data(), in, libcdoc::CDoc2Internal::LABEL.size())) {
         LOG_ERROR("{}", last_error);
         return;
     }
-    //if (libcdoc::CDoc2::LABEL.compare(0, libcdoc::CDoc2::LABEL.size(), (const char *) in)) return;
+    //if (libcdoc::CDoc2Internal::LABEL.compare(0, libcdoc::CDoc2Internal::LABEL.size(), (const char *) in)) return;
 
     // Read 32-bit header length in big endian order
     uint8_t c[4];
@@ -648,13 +648,13 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
         LOG_ERROR("{}", last_error);
         return;
     }
-    priv->headerHMAC.resize(libcdoc::CDoc2::KEY_LEN);
-    if (priv->_src->read(priv->headerHMAC.data(), libcdoc::CDoc2::KEY_LEN) != libcdoc::CDoc2::KEY_LEN) {
+    priv->headerHMAC.resize(libcdoc::CDoc2Internal::KEY_LEN);
+    if (priv->_src->read(priv->headerHMAC.data(), libcdoc::CDoc2Internal::KEY_LEN) != libcdoc::CDoc2Internal::KEY_LEN) {
         LOG_ERROR("{}", last_error);
         return;
     }
 
-    priv->_nonce_pos = libcdoc::CDoc2::LABEL.size() + 4 + header_len + libcdoc::CDoc2::KEY_LEN;
+    priv->_nonce_pos = libcdoc::CDoc2Internal::LABEL.size() + 4 + header_len + libcdoc::CDoc2Internal::KEY_LEN;
     priv->_at_nonce = true;
 
     flatbuffers::Verifier verifier(priv->header_data.data(), priv->header_data.size());
@@ -687,12 +687,12 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
 bool
 CDoc2Reader::isCDoc2File(libcdoc::DataSource *src)
 {
-    std::array<uint8_t,libcdoc::CDoc2::LABEL.size()> in {};
+    std::array<uint8_t,libcdoc::CDoc2Internal::LABEL.size()> in {};
     if (src->read(in.data(), in.size()) != in.size()) {
         LOG_DBG("CDoc2Reader::isCDoc2File: Cannot read tag");
         return false;
     }
-    if (libcdoc::CDoc2::LABEL.compare(0, in.size(), (char *) in.data(), in.size())) {
+    if (libcdoc::CDoc2Internal::LABEL.compare(0, in.size(), (char *) in.data(), in.size())) {
         LOG_DBG("CDoc2Reader::isCDoc2File: Invalid tag: {}", toHex(in));
         return false;
     }
