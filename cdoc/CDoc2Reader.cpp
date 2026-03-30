@@ -630,7 +630,6 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
         LOG_ERROR("{}", last_error);
         return;
     }
-    //if (libcdoc::CDoc2::LABEL.compare(0, libcdoc::CDoc2::LABEL.size(), (const char *) in)) return;
 
     // Read 32-bit header length in big endian order
     uint8_t c[4];

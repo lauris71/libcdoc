@@ -183,6 +183,41 @@ struct FileInfo {
     int64_t size;
 };
 
+#ifdef VERSION
+#undef VERSION
+#endif
+
+namespace CDoc2 {
+namespace Label {
+    /**
+     * @brief Recipient types for machine-readable labels
+     * 
+     */
+    static constexpr std::string_view TYPE_PASSWORD = "pw";
+    static constexpr std::string_view TYPE_SYMMETRIC = "secret";
+    static constexpr std::string_view TYPE_PUBLIC_KEY = "pub_key";
+    static constexpr std::string_view TYPE_CERTIFICATE = "cert";
+    static constexpr std::string_view TYPE_UNKNOWN = "Unknown";
+    static constexpr std::string_view TYPE_ID_CARD = "ID-card";
+    static constexpr std::string_view TYPE_DIGI_ID = "Digi-ID";
+    static constexpr std::string_view TYPE_DIGI_ID_E_RESIDENT = "Digi-ID E-RESIDENT";
+
+    /**
+     * @brief Recipient data for machine-readable labels
+     * 
+     */
+    static constexpr std::string_view VERSION = "v";
+    static constexpr std::string_view TYPE = "type";
+    static constexpr std::string_view FILE = "file";
+    static constexpr std::string_view LABEL = "label";
+    static constexpr std::string_view CN = "cn";
+    static constexpr std::string_view SERIAL_NUMBER = "serial_number";
+    static constexpr std::string_view LAST_NAME = "last_name";
+    static constexpr std::string_view FIRST_NAME = "first_name";
+    static constexpr std::string_view CERT_SHA1 = "cert_sha1";
+}
+}
+
 }; // namespace libcdoc
 
 #endif // CDOC_H

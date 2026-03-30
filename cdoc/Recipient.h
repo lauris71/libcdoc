@@ -23,6 +23,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 #include <cstdint>
 
 namespace libcdoc {
@@ -108,16 +109,6 @@ struct CDOC_EXPORT Recipient {
      * 
      */
     uint64_t expiry_ts = 0;
-    /**
-     * @brief key/certificate filename for machine-readable label
-     * 
-     */
-    std::string file_name;
-    /**
-     * @brief public key/password name for machine-readable label
-     * 
-     */
-    std::string key_name;
 
     /**
      * @brief test whether the Recipient structure is initialized
@@ -234,9 +225,25 @@ struct CDOC_EXPORT Recipient {
      */
     std::string getLabel(const std::vector<std::pair<std::string_view, std::string_view>> &extra) const;
 
+    /**
+     * @brief Set a property for automatic label generation
+     * 
+     * @param key the property name
+     * @param value the property value
+     */
+    void setLabelValue(std::string_view key, std::string_view value) {
+        if (!value.empty()) {
+            lbl_parts[std::string(key)] = value;
+        } else {
+            lbl_parts.erase(std::string(key));
+        }
+    }
+
     bool operator== (const Recipient& other) const = default;
 protected:
 	Recipient(Type _type) : type(_type) {};
+private:
+    std::map<std::string,std::string> lbl_parts;
 };
 
 } // namespace libcdoc

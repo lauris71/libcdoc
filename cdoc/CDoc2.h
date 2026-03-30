@@ -19,6 +19,8 @@
 #ifndef __CDOC2_H__
 #define __CDOC2_H__
 
+#include "CDoc.h"
+
 #include <string_view>
 
 namespace libcdoc {
@@ -57,10 +59,10 @@ constexpr std::string_view LABELBASE64IND{";base64,"};
  * @brief EID type values for machine-readable label
  */
 static constexpr std::string_view eid_strs[] = {
-    "Unknown",
-    "ID-card",
-    "Digi-ID",
-    "Digi-ID E-RESIDENT"
+    CDoc2::Label::TYPE_UNKNOWN,
+    CDoc2::Label::TYPE_ID_CARD,
+    CDoc2::Label::TYPE_DIGI_ID,
+    CDoc2::Label::TYPE_DIGI_ID_E_RESIDENT
 };
 
 } // namespace CDoc2

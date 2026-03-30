@@ -121,60 +121,44 @@ Recipient::isTheSameRecipient(const std::vector<uint8_t>& public_key) const
 }
 
 static void
-buildLabel(std::ostream& ofs, std::string_view type, std::initializer_list<std::pair<std::string_view, std::string_view>> components)
+buildLabel(std::ostream& ofs, std::string_view type, const std::map<std::string_view,std::string_view> lbl_parts, std::initializer_list<std::pair<std::string_view, std::string_view>> extra)
 {
+    auto parts = lbl_parts;
+    if (parts.contains("v"))
+        parts.erase("v");
+    if (parts.contains("type"))
+        parts.erase("type");
+    for (const auto& [key, value] : extra) {
+        if (!value.empty())
+            parts[key] = value;
+    }
     ofs << CDoc2::LABELPREFIX;
-    ofs << "v" << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
-        << "type" << '=' << type;
-    for (const auto& [key, value] : components) {
+    ofs << CDoc2::Label::VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
+        << CDoc2::Label::TYPE << '=' << type;
+    for (const auto& [key, value] : parts) {
         if (!value.empty())
             ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
     }
 }
 
 static void
-BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x509)
+BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
 {
-    buildLabel(ofs, CDoc2::eid_strs[type], {
-        {"cn", x509.getCommonName()},
-        {"serial_number", x509.getSerialNumber()},
-        {"last_name", x509.getSurname()},
-        {"first_name", x509.getGivenName()},
+    
+    buildLabel(ofs, CDoc2::eid_strs[type], lbl_parts, {
+        {CDoc2::Label::CN, x509.getCommonName()},
+        {CDoc2::Label::SERIAL_NUMBER, x509.getSerialNumber()},
+        {CDoc2::Label::LAST_NAME, x509.getSurname()},
+        {CDoc2::Label::FIRST_NAME, x509.getGivenName()},
     });
 }
 
 static void
-BuildLabelCertificate(std::ostream &ofs, const std::string& file, const Certificate& x509)
+BuildLabelCertificate(std::ostream &ofs, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
 {
-    buildLabel(ofs, "cert", {
-        {"file", file},
-        {"cn", x509.getCommonName()},
-        {"cert_sha1", toHex(x509.getDigest())}
-    });
-}
-
-static void
-BuildLabelPublicKey(std::ostream &ofs, const std::string& file)
-{
-    buildLabel(ofs, "pub_key", {
-        {"file", file}
-    });
-}
-
-static void
-BuildLabelSymmetricKey(std::ostream &ofs, const std::string& label, const std::string& file)
-{
-    buildLabel(ofs, "secret", {
-        {"label", label},
-        {"file", file}
-    });
-}
-
-static void
-BuildLabelPassword(std::ostream &ofs, const std::string& label)
-{
-    buildLabel(ofs, "pw", {
-        {"label", label}
+    buildLabel(ofs, CDoc2::Label::TYPE_CERTIFICATE, lbl_parts, {
+        {CDoc2::Label::CN, x509.getCommonName()},
+        {CDoc2::Label::CERT_SHA1, toHex(x509.getDigest())}
     });
 }
 
@@ -183,6 +167,15 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
 {
     LOG_DBG("Generating label");
     if (!label.empty()) return label;
+    std::map<std::string_view,std::string_view> parts;
+    for (const auto& [key, value] : lbl_parts) {
+        if (!value.empty())
+            parts[key] = value;
+    }
+    for (const auto& [key, value] : extra) {
+        if (!value.empty())
+            parts[key] = value;
+    }
     std::ostringstream ofs;
     switch(type) {
         case NONE:
@@ -190,29 +183,25 @@ Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_vi
             break;
         case SYMMETRIC_KEY:
             if (kdf_iter > 0) {
-                BuildLabelPassword(ofs, key_name);
+                buildLabel(ofs, CDoc2::Label::TYPE_PASSWORD, parts, {});
             } else {
-                BuildLabelSymmetricKey(ofs, key_name, file_name);
+                buildLabel(ofs, CDoc2::Label::TYPE_SYMMETRIC, parts, {});
             }
             break;
         case PUBLIC_KEY:
             if (!cert.empty()) {
                 Certificate x509(cert);
                 if (auto eid = x509.getEIDType(); eid != Certificate::Unknown) {
-                    BuildLabelEID(ofs, eid, x509);
+                    BuildLabelEID(ofs, eid, x509, parts);
                 } else {
-                    BuildLabelCertificate(ofs, file_name, x509);
+                    BuildLabelCertificate(ofs, x509, parts);
                 }
             } else {
-                BuildLabelPublicKey(ofs, file_name);
+                buildLabel(ofs, CDoc2::Label::TYPE_PUBLIC_KEY, parts, {});
             }
             break;
         case KEYSHARE:
             break;
-    }
-    for (const auto& [key, value] : extra) {
-        if (!value.empty())
-            ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
     }
     LOG_DBG("Generated label: {}", ofs.str());
     return ofs.str();
