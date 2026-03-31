@@ -205,4 +205,23 @@ Recipient::getLabel(std::map<std::string_view, std::string_view> extra) const
     return ofs.str();
 }
 
+bool
+Recipient::validate() const
+{
+    switch(type) {
+        case SYMMETRIC_KEY:
+            // Either user-defined label or LABEL property is required
+            return !label.empty() || lbl_parts.contains("CDoc2::Label::LABEL");
+            break;
+        case PUBLIC_KEY:
+            // Public key should not be empty
+            if (rcpt_key.empty())
+                return false;
+            break;
+        default:
+            return false;
+    }
+    return true;
+}
+
 } // namespace libcdoc

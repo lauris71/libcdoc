@@ -31,6 +31,8 @@
 
 #include <openssl/x509.h>
 
+#define FAIL(m,r) return fail(m, r)
+
 using namespace libcdoc;
 
 CDoc2Writer::CDoc2Writer(libcdoc::DataConsumer *dst, bool take_ownership)
@@ -43,11 +45,8 @@ CDoc2Writer::~CDoc2Writer() noexcept = default;
 libcdoc::result_t
 CDoc2Writer::writeHeader(const std::vector<libcdoc::Recipient> &recipients)
 {
-    if(recipients.empty()) {
-        setLastError("No recipients specified");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WRONG_ARGUMENTS;
-    }
+    if(recipients.empty())
+        FAIL("No recipients specified", libcdoc::WRONG_ARGUMENTS);
     std::vector<uint8_t> rnd;
     if(auto rv = crypto->random(rnd, libcdoc::CDoc2::KEY_LEN); rv < 0)
         return rv;
@@ -205,36 +204,21 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             std::vector<uint8_t> key_material, kek;
             std::string send_url;
             if(rcpt.isKeyServer()) {
-                if(!conf) {
-                    setLastError("Configuration is missing");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CONFIGURATION_ERROR;
-                }
-                if(!network) {
-                    setLastError("Network backend is missing");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CONFIGURATION_ERROR;
-                }
+                if(!conf)
+                    FAIL("Configuration is missing", libcdoc::CONFIGURATION_ERROR);
+                if(!network)
+                    FAIL("Network backend is missing", libcdoc::CONFIGURATION_ERROR);
                 send_url = conf->getValue(rcpt.server_id, libcdoc::Configuration::KEYSERVER_SEND_URL);
-                if (send_url.empty()) {
-                    setLastError("Missing keyserver URL for ID " + rcpt.server_id);
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CONFIGURATION_ERROR;
-                }
+                if (send_url.empty())
+                    FAIL("Missing keyserver URL for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             }
             if(rcpt.pk_type == libcdoc::PKType::RSA) {
                 crypto->random(kek, libcdoc::CDoc2::KEY_LEN);
-                if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
-                    setLastError("Internal error");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CRYPTO_ERROR;
-                }
+                if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK)
+                    FAIL("Internal error", libcdoc::CRYPTO_ERROR);
                 auto publicKey = libcdoc::Crypto::fromRSAPublicKeyDer(rcpt.rcpt_key);
-                if(!publicKey) {
-                    setLastError("Invalid RSA key");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CRYPTO_ERROR;
-                }
+                if(!publicKey)
+                    FAIL("Invalid RSA key", libcdoc::CRYPTO_ERROR);
                 key_material = libcdoc::Crypto::encrypt(publicKey.get(), RSA_PKCS1_OAEP_PADDING, kek);
 
                 LOG_TRACE_KEY("publicKeyDer: {}", rcpt.rcpt_key);
@@ -244,11 +228,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 if(rcpt.isKeyServer()) {
                     libcdoc::NetworkBackend::CapsuleInfo cinfo;
                     auto result = network->sendKey(cinfo, send_url, rcpt.rcpt_key, key_material, "rsa", rcpt.expiry_ts);
-                    if (result < 0) {
-                        setLastError(network->getLastErrorStr(result));
-                        LOG_ERROR("{}", last_error);
-                        return libcdoc::IO_ERROR;
-                    }
+                    if (result < 0)
+                        FAIL(network->getLastErrorStr(result), result);
 
                     LOG_DBG("Keyserver Id: {}", rcpt.server_id);
                     LOG_DBG("Transaction Id: {}", cinfo.transaction_id);
@@ -259,11 +240,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 }
             } else {
                 auto publicKey = libcdoc::Crypto::fromECPublicKeyDer(rcpt.rcpt_key, NID_secp384r1);
-                if(!publicKey) {
-                    setLastError("Invalid ECC key");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CRYPTO_ERROR;
-                }
+                if(!publicKey)
+                    FAIL("Invalid ECC key", libcdoc::CRYPTO_ERROR);
                 auto ephKey = libcdoc::Crypto::genECKey(publicKey.get());
                 std::vector<uint8_t> sharedSecret = libcdoc::Crypto::deriveSharedSecret(ephKey.get(), publicKey.get());
                 key_material = libcdoc::Crypto::toPublicKeyDer(ephKey.get());
@@ -271,11 +249,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 std::string info_str = libcdoc::CDoc2::getSaltForExpand(key_material, rcpt.rcpt_key);
 
                 kek = libcdoc::Crypto::expand(kekPm, info_str, fmk.size());
-                if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
-                    setLastError("Internal error");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CRYPTO_ERROR;
-                }
+                if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK)
+                    FAIL("Internal error", libcdoc::CRYPTO_ERROR);
 
                 LOG_DBG("info: {}", toHex(info_str));
                 LOG_TRACE_KEY("publicKeyDer: {}", rcpt.rcpt_key);
@@ -287,11 +262,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 if(rcpt.isKeyServer()) {
                     libcdoc::NetworkBackend::CapsuleInfo cinfo;
                     auto result = network->sendKey(cinfo, send_url, rcpt.rcpt_key, key_material, "ecc_secp384r1", rcpt.expiry_ts);
-                    if (result < 0) {
-                        setLastError(network->getLastErrorStr(result));
-                        LOG_ERROR("{}", last_error);
-                        return libcdoc::IO_ERROR;
-                    }
+                    if (result < 0)
+                        FAIL(network->getLastErrorStr(result), result);
 
                     LOG_DBG("Keyserver Id: {}", rcpt.server_id);
                     LOG_DBG("Transaction Id: {}", cinfo.transaction_id);
@@ -306,21 +278,15 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             std::vector<uint8_t> kek_pm(libcdoc::CDoc2::KEY_LEN);
             std::vector<uint8_t> salt;
             int64_t result = crypto->random(salt, libcdoc::CDoc2::KEY_LEN);
-            if (result < 0) {
-                setLastError(crypto->getLastErrorStr(result));
-                return result;
-            }
+            if (result < 0)
+                FAIL(crypto->getLastErrorStr(result), result);
             std::vector<uint8_t> pw_salt;
             result = crypto->random(pw_salt, libcdoc::CDoc2::KEY_LEN);
-            if (result < 0) {
-                setLastError(crypto->getLastErrorStr(result));
-                return result;
-            }
+            if (result < 0)
+                FAIL(crypto->getLastErrorStr(result), result);
             result = crypto->extractHKDF(kek_pm, salt, pw_salt, rcpt.kdf_iter, rcpt_idx);
-            if (result < 0) {
-                setLastError(crypto->getLastErrorStr(result));
-                return result;
-            }
+            if (result < 0)
+                FAIL(crypto->getLastErrorStr(result), result);
             std::vector<uint8_t> kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2::KEY_LEN);
 
             LOG_DBG("Label: {}", rcpt.label);
@@ -332,11 +298,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             LOG_TRACE_KEY("kek: {}", kek);
 
             if (kek.empty()) return libcdoc::CRYPTO_ERROR;
-            if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
-                setLastError("Internal error");
-                LOG_ERROR("{}", last_error);
-                return libcdoc::CRYPTO_ERROR;
-            }
+            if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK)
+                FAIL("Internal error", libcdoc::CRYPTO_ERROR);
             if (rcpt.kdf_iter > 0) {
                 fb_rcpts.push_back(createPasswordCapsule(builder, rcpt, salt, pw_salt, xor_key));
             } else {
@@ -344,18 +307,12 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             }
         } else if (rcpt.isKeyShare()) {
             std::string url_list = conf->getValue(rcpt.server_id, libcdoc::Configuration::SHARE_SERVER_URLS);
-            if (url_list.empty()) {
-                setLastError("Missing server list for ID " + rcpt.server_id);
-                LOG_ERROR("{}", last_error);
-                return libcdoc::CONFIGURATION_ERROR;
-            }
+            if (url_list.empty())
+                FAIL("Missing server list for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             LOG_DBG("Share servers: {}", url_list);
             std::vector<std::string> urls = libcdoc::JsonToStringArray(url_list);
-            if (urls.size() < 1) {
-                setLastError("No server URLs in " + rcpt.server_id);
-                LOG_ERROR("{}", last_error);
-                return libcdoc::CONFIGURATION_ERROR;
-            }
+            if (urls.size() < 1)
+                FAIL("No server URLs in " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             int N_SHARES = urls.size();
             LOG_DBG("Number of shares: {}", N_SHARES);
 
@@ -383,11 +340,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             std::vector<uint8_t> kek = libcdoc::Crypto::expand(kek_pm, info_str);
             LOG_TRACE_KEY("kek: {}", kek);
             if (kek.empty()) return libcdoc::CRYPTO_ERROR;
-            if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
-                setLastError("Internal error");
-                LOG_ERROR("{}", last_error);
-                return libcdoc::CRYPTO_ERROR;
-            }
+            if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK)
+                FAIL("Internal error", libcdoc::CRYPTO_ERROR);
 
             // # Splitting KEK_i into shares
             // for j in (2, 3, ..., n):
@@ -399,11 +353,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             // KEK_i_share_1 = XOR(KEK_i, KEK_i_share_2, KEK_i_share_3,..., KEK_i_share_n)
             kek_shares[0] = std::move(kek);
             for (int i = 1; i < N_SHARES; i++) {
-                if (libcdoc::Crypto::xor_data(kek_shares[0], kek_shares[0], kek_shares[i]) != libcdoc::OK) {
-                    setLastError("Internal error");
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::CRYPTO_ERROR;
-                }
+                if (libcdoc::Crypto::xor_data(kek_shares[0], kek_shares[0], kek_shares[i]) != libcdoc::OK)
+                    FAIL("Internal error", libcdoc::CRYPTO_ERROR);
             }
             //   # Client uploads all shares of KEK_i to CSS servers and
             //   # gets corresponding Capsule_i_Share_j_ID for each KEK_i_share_j
@@ -414,11 +365,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 std::string send_url = urls[i];
                 LOG_DBG("Sending share: {} {} {}", i, send_url, libcdoc::toHex(kek_shares[i]));
                 int result = network->sendShare(transaction_ids[i], send_url, RecipientInfo_i, kek_shares[i]);
-                if (result < 0) {
-                    setLastError(network->getLastErrorStr(result));
-                    LOG_ERROR("{}", last_error);
-                    return libcdoc::IO_ERROR;
-                }
+                if (result < 0)
+                    FAIL(network->getLastErrorStr(result), result);
                 LOG_DBG("Share {} Transaction Id: {}", i, std::string((const char *) transaction_ids[i].data(), transaction_ids[i].size()));
             }
             std::vector<flatbuffers::Offset<cdoc20::recipients::KeyShare>> shares;
@@ -441,9 +389,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                                                          cdoc20::header::FMKEncryptionMethod::XOR);
             fb_rcpts.push_back(offset);
         } else {
-            setLastError("Invalid recipient type");
-            LOG_ERROR("{}", last_error);
-            return libcdoc::UNSPECIFIED_ERROR;
+            FAIL("Invalid recipient type", libcdoc::UNSPECIFIED_ERROR);
         }
     }
 
@@ -458,15 +404,26 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
 libcdoc::result_t
 CDoc2Writer::addRecipient(const libcdoc::Recipient& rcpt)
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(tar) {
-        setLastError("Cannot add Recipient when files are added");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
+    if(tar)
+        FAIL("Cannot add Recipient when files are added", libcdoc::WORKFLOW_ERROR);
+    // Validate
+    switch(rcpt.type) {
+        case Recipient::SYMMETRIC_KEY:
+            if (!crypto)
+                FAIL("Symmetric key requires CryptoBackend", libcdoc::WORKFLOW_ERROR);
+            if(!rcpt.validate())
+                FAIL("Invalid recipient parameters", libcdoc::WRONG_ARGUMENTS);
+            break;
+        case Recipient::PUBLIC_KEY:
+            if(!rcpt.server_id.empty() && !network)
+                FAIL("Server capsule requires NetworkBackend", libcdoc::WORKFLOW_ERROR);
+            if(!rcpt.validate())
+                FAIL("Invalid recipient parameters", libcdoc::WRONG_ARGUMENTS);
+            break;
+        default:
+            FAIL("Invalid recipient type", WRONG_ARGUMENTS);
     }
     recipients.push_back(rcpt);
     return libcdoc::OK;
@@ -475,22 +432,13 @@ CDoc2Writer::addRecipient(const libcdoc::Recipient& rcpt)
 libcdoc::result_t
 CDoc2Writer::beginEncryption()
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
     last_error.clear();
-    if(recipients.empty()) {
-        setLastError("No recipients added");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(tar) {
-        setLastError("Encryption already started");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
+    if(recipients.empty())
+        FAIL("No recipients added", libcdoc::WORKFLOW_ERROR);
+    if(tar)
+        FAIL("Encryption already started", libcdoc::WORKFLOW_ERROR);
     if(auto rv = writeHeader(recipients); rv < 0)
         return rv;
     return libcdoc::OK;
@@ -499,67 +447,38 @@ CDoc2Writer::beginEncryption()
 libcdoc::result_t
 CDoc2Writer::addFile(const std::string& name, size_t size)
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(!tar) {
-        setLastError("Encryption not started");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if (name.empty() || !libcdoc::isValidUtf8(name)) {
-        setLastError("Invalid file name");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::DATA_FORMAT_ERROR;
-    }
-    if (size > 8ULL * 1024 * 1024 * 1024) {
-        setLastError("Invalid file size");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WRONG_ARGUMENTS;
-    }
-    if(auto rv = tar->open(name, size); rv < 0) {
-        setLastError(tar->getLastErrorStr(rv));
-        LOG_ERROR("{}", last_error);
-        return rv;
-    }
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
+    if(!tar)
+        FAIL("Encryption not started", libcdoc::WORKFLOW_ERROR);
+    if (name.empty() || !libcdoc::isValidUtf8(name))
+        FAIL("Invalid file name", libcdoc::DATA_FORMAT_ERROR);
+    if (size > 8ULL * 1024 * 1024 * 1024)
+        FAIL("Invalid file size", libcdoc::WRONG_ARGUMENTS);
+    if(auto rv = tar->open(name, size); rv < 0)
+        FAIL(tar->getLastErrorStr(rv), rv);
     return libcdoc::OK;
 }
 
 libcdoc::result_t
 CDoc2Writer::writeData(const uint8_t *src, size_t size)
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(!tar) {
-        setLastError("No file added");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(auto rv = tar->write(src, size); rv != size) {
-        setLastError(tar->getLastErrorStr(rv));
-        return rv;
-    }
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
+    if(!tar)
+        FAIL("No file added", libcdoc::WORKFLOW_ERROR);
+    if(auto rv = tar->write(src, size); rv != size)
+        FAIL(tar->getLastErrorStr(rv), rv);
     return libcdoc::OK;
 }
 
 libcdoc::result_t
 CDoc2Writer::finishEncryption()
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
-    if(!tar) {
-        setLastError("No file added");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
+    if(!tar)
+        FAIL("No file added", libcdoc::WORKFLOW_ERROR);
     auto rv = tar->close();
     if(rv < 0)
         setLastError(tar->getLastErrorStr(rv));
@@ -573,11 +492,8 @@ CDoc2Writer::finishEncryption()
 libcdoc::result_t
 CDoc2Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::Recipient>& keys)
 {
-    if (finished) {
-        setLastError("Encryption finished");
-        LOG_ERROR("{}", last_error);
-        return libcdoc::WORKFLOW_ERROR;
-    }
+    if (finished)
+        FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
     for (auto rcpt : keys) {
         if(auto rv = addRecipient(rcpt); rv != libcdoc::OK)
             return rv;
@@ -599,4 +515,12 @@ CDoc2Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::R
         return result;
     }
     return finishEncryption();
+}
+
+result_t
+libcdoc::CDoc2Writer::fail(const std::string& message, result_t result)
+{
+    setLastError(message);
+    LOG_ERROR("{}", message);
+    return result;
 }
