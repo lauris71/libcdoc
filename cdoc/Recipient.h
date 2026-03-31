@@ -19,7 +19,7 @@
 #ifndef __RECIPIENT_H__
 #define __RECIPIENT_H__
 
-#include <cdoc/Exports.h>
+#include "CDoc.h"
 
 #include <string>
 #include <vector>
@@ -27,6 +27,8 @@
 #include <cstdint>
 
 namespace libcdoc {
+
+struct Lock;
 
 /**
  * @brief A descriptor of encryption method and key to be used in container
@@ -54,20 +56,6 @@ struct CDOC_EXPORT Recipient {
          * @brief n of n shared symmetric key
          */
         KEYSHARE
-	};
-
-    /**
-     * @brief The public key type
-     */
-    enum PKType : uint8_t {
-        /**
-         * Elliptic curve
-         */
-		ECC,
-        /**
-         * RSA
-         */
-		RSA
 	};
 
 	Recipient() = default;
@@ -175,6 +163,12 @@ struct CDOC_EXPORT Recipient {
      */
     static Recipient makePublicKey(std::string label, std::vector<uint8_t> public_key, PKType pk_type);
     /**
+     * @brief Create a new public key based Recipient
+     * @param lock Lock to derive parameters from
+     * @return a new Recipient structure
+     */
+    static Recipient makePublicKey(const Lock &lock);
+    /**
      * @brief Create a new certificate based Recipient
      * @param label the label text
      * @param cert the certificate value (der-encoded)
@@ -206,6 +200,15 @@ struct CDOC_EXPORT Recipient {
     static Recipient makeServer(std::string label, std::vector<uint8_t> cert, std::string server_id);
 
     /**
+     * @brief Create a new capsule server based Recipient
+     *
+     * @param lock Lock to derive parameters from
+     * @param server_id the keyserver id
+     * @return a new Recipient structure
+     */
+    static Recipient makeServer(const Lock &lock, std::string server_id);
+
+    /**
      * @brief Create new keyshare recipient
      * 
      * @param label the label text
@@ -223,7 +226,7 @@ struct CDOC_EXPORT Recipient {
      * @param extra additional parameter values to use
      * @return a label value
      */
-    std::string getLabel(const std::vector<std::pair<std::string_view, std::string_view>> &extra) const;
+    std::string getLabel(std::map<std::string_view, std::string_view> extra) const;
 
     /**
      * @brief Set a property for automatic label generation
@@ -232,11 +235,7 @@ struct CDOC_EXPORT Recipient {
      * @param value the property value
      */
     void setLabelValue(std::string_view key, std::string_view value) {
-        if (!value.empty()) {
-            lbl_parts[std::string(key)] = value;
-        } else {
-            lbl_parts.erase(std::string(key));
-        }
+        lbl_parts[std::string(key)] = value;
     }
 
     bool operator== (const Recipient& other) const = default;

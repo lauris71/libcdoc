@@ -21,6 +21,7 @@
 #include "CDoc2.h"
 #include "Certificate.h"
 #include "Crypto.h"
+#include "Lock.h"
 #include "Utils.h"
 
 #include <algorithm>
@@ -33,10 +34,11 @@ namespace libcdoc {
 Recipient
 Recipient::makeSymmetric(std::string label, int32_t kdf_iter)
 {
-	Recipient rcpt(Type::SYMMETRIC_KEY);
-	rcpt.label = std::move(label);
-	rcpt.kdf_iter = kdf_iter;
-	return rcpt;
+    Recipient rcpt(Type::SYMMETRIC_KEY);
+    rcpt.label = std::move(label);
+    rcpt.lbl_parts[std::string(CDoc2::Label::TYPE)] = kdf_iter ? CDoc2::Label::TYPE_PASSWORD : CDoc2::Label::TYPE_SYMMETRIC;
+    rcpt.kdf_iter = kdf_iter;
+    return rcpt;
 }
 
 Recipient
@@ -46,6 +48,7 @@ Recipient::makePublicKey(std::string label, std::vector<uint8_t> public_key, PKT
         return {Type::NONE};
     Recipient rcpt(Type::PUBLIC_KEY);
     rcpt.label = std::move(label);
+    rcpt.lbl_parts[std::string(CDoc2::Label::TYPE)] = CDoc2::Label::TYPE_PUBLIC_KEY;
     rcpt.pk_type = pk_type;
     if (pk_type == PKType::ECC && public_key[0] == 0x30) {
         // 0x30 identifies SEQUENCE tag in ASN.1 encoding
@@ -54,7 +57,30 @@ Recipient::makePublicKey(std::string label, std::vector<uint8_t> public_key, PKT
     } else {
         rcpt.rcpt_key = std::move(public_key);
     }
-	return rcpt;
+    return rcpt;
+}
+
+Recipient
+Recipient::makePublicKey(const Lock &lock)
+{
+    auto params = Lock::parseLabel(lock.label);
+    Recipient rcpt(Type::PUBLIC_KEY);
+    rcpt.pk_type = lock.pk_type;
+    rcpt.rcpt_key = lock.getBytes(Lock::RCPT_KEY);
+    if (rcpt.rcpt_key.empty())
+        return {Type::NONE};
+    if (lock.isCDoc1())
+        rcpt.cert = lock.getBytes(Lock::CERT);
+    if (params.empty())
+        rcpt.label = lock.label;
+    if (params.contains(CDoc2::Label::EXPIRY))
+    {
+        const auto &val = params[CDoc2::Label::EXPIRY];
+        if(std::from_chars(val.data(), val.data() + val.size(), rcpt.expiry_ts).ec == std::errc{})
+            params.erase(CDoc2::Label::EXPIRY);
+    }
+    rcpt.lbl_parts = std::move(params);
+    return rcpt;
 }
 
 Recipient
@@ -67,8 +93,23 @@ Recipient::makeCertificate(std::string label, std::vector<uint8_t> cert)
     rcpt.label = std::move(label);
     rcpt.cert = std::move(cert);
     rcpt.rcpt_key = x509.getPublicKey();
-    rcpt.pk_type = (x509.getAlgorithm() == libcdoc::Certificate::RSA) ? PKType::RSA : PKType::ECC;
+    rcpt.pk_type = x509.getAlgorithm();
     rcpt.expiry_ts = x509.getNotAfter();
+    if (auto eid = x509.getEIDType(); eid != Certificate::Unknown) {
+        rcpt.lbl_parts = {
+            {std::string(CDoc2::Label::TYPE), std::string(CDoc2::eid_strs[eid])},
+            {std::string(CDoc2::Label::CN), x509.getCommonName()},
+            {std::string(CDoc2::Label::SERIAL_NUMBER), x509.getSerialNumber()},
+            {std::string(CDoc2::Label::LAST_NAME), x509.getSurname()},
+            {std::string(CDoc2::Label::FIRST_NAME), x509.getGivenName()},
+        };
+    } else {
+        rcpt.lbl_parts = {
+            {std::string(CDoc2::Label::TYPE), std::string(CDoc2::Label::TYPE_CERTIFICATE)},
+            {std::string(CDoc2::Label::CN), x509.getCommonName()},
+            {std::string(CDoc2::Label::CERT_SHA1), toHex(x509.getDigest())},
+        };
+    }
     return rcpt;
 }
 
@@ -95,6 +136,14 @@ Recipient::makeServer(std::string label, std::vector<uint8_t> cert, std::string 
 }
 
 Recipient
+Recipient::makeServer(const Lock &lock, std::string server_id)
+{
+    auto rcpt = makePublicKey(lock);
+    rcpt.server_id = std::move(server_id);
+    return rcpt;
+}
+
+Recipient
 Recipient::makeShare(std::string label, std::string server_id, std::string recipient_id)
 {
     Recipient rcpt(Type::KEYSHARE);
@@ -107,105 +156,53 @@ Recipient::makeShare(std::string label, std::string server_id, std::string recip
 bool
 Recipient::isTheSameRecipient(const Recipient& other) const
 {
-	if (!isPKI()) return false;
-	if (!other.isPKI()) return false;
+    if (!isPKI()) return false;
+    if (!other.isPKI()) return false;
     return rcpt_key == other.rcpt_key;
 }
 
 bool
 Recipient::isTheSameRecipient(const std::vector<uint8_t>& public_key) const
 {
-	if (!isPKI()) return false;
+    if (!isPKI()) return false;
     if (rcpt_key.empty() || public_key.empty()) return false;
     return rcpt_key == public_key;
 }
 
-static void
-buildLabel(std::ostream& ofs, std::string_view type, const std::map<std::string_view,std::string_view> lbl_parts, std::initializer_list<std::pair<std::string_view, std::string_view>> extra)
-{
-    auto parts = lbl_parts;
-    if (parts.contains("v"))
-        parts.erase("v");
-    if (parts.contains("type"))
-        parts.erase("type");
-    for (const auto& [key, value] : extra) {
-        if (!value.empty())
-            parts[key] = value;
-    }
-    ofs << CDoc2::LABELPREFIX;
-    ofs << CDoc2::Label::VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION) << '&'
-        << CDoc2::Label::TYPE << '=' << type;
-    for (const auto& [key, value] : parts) {
-        if (!value.empty())
-            ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
-    }
-}
-
-static void
-BuildLabelEID(std::ostream& ofs, Certificate::EIDType type, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
-{
-    
-    buildLabel(ofs, CDoc2::eid_strs[type], lbl_parts, {
-        {CDoc2::Label::CN, x509.getCommonName()},
-        {CDoc2::Label::SERIAL_NUMBER, x509.getSerialNumber()},
-        {CDoc2::Label::LAST_NAME, x509.getSurname()},
-        {CDoc2::Label::FIRST_NAME, x509.getGivenName()},
-    });
-}
-
-static void
-BuildLabelCertificate(std::ostream &ofs, const Certificate& x509, const std::map<std::string_view,std::string_view>& lbl_parts)
-{
-    buildLabel(ofs, CDoc2::Label::TYPE_CERTIFICATE, lbl_parts, {
-        {CDoc2::Label::CN, x509.getCommonName()},
-        {CDoc2::Label::CERT_SHA1, toHex(x509.getDigest())}
-    });
-}
-
 std::string
-Recipient::getLabel(const std::vector<std::pair<std::string_view, std::string_view>> &extra) const
+Recipient::getLabel(std::map<std::string_view, std::string_view> extra) const
 {
     LOG_DBG("Generating label");
     if (!label.empty()) return label;
-    std::map<std::string_view,std::string_view> parts;
-    for (const auto& [key, value] : lbl_parts) {
-        if (!value.empty())
-            parts[key] = value;
-    }
-    for (const auto& [key, value] : extra) {
-        if (!value.empty())
-            parts[key] = value;
-    }
     std::ostringstream ofs;
     switch(type) {
-        case NONE:
-            LOG_DBG("The recipient is not initialized");
-            break;
-        case SYMMETRIC_KEY:
-            if (kdf_iter > 0) {
-                buildLabel(ofs, CDoc2::Label::TYPE_PASSWORD, parts, {});
+    case NONE:
+        LOG_DBG("The recipient is not initialized");
+        break;
+    case SYMMETRIC_KEY:
+    case PUBLIC_KEY:
+        ofs << CDoc2::LABELPREFIX
+            << CDoc2::Label::VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION);
+        for (const auto& [key, value] : lbl_parts) {
+            if (key == "v")
+                continue;
+            if (auto it = extra.find(key); it != extra.end()) {
+                ofs << '&' << urlEncode(key) << '=' << urlEncode(it->second);
+                extra.erase(it);
             } else {
-                buildLabel(ofs, CDoc2::Label::TYPE_SYMMETRIC, parts, {});
+                ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
             }
-            break;
-        case PUBLIC_KEY:
-            if (!cert.empty()) {
-                Certificate x509(cert);
-                if (auto eid = x509.getEIDType(); eid != Certificate::Unknown) {
-                    BuildLabelEID(ofs, eid, x509, parts);
-                } else {
-                    BuildLabelCertificate(ofs, x509, parts);
-                }
-            } else {
-                buildLabel(ofs, CDoc2::Label::TYPE_PUBLIC_KEY, parts, {});
-            }
-            break;
-        case KEYSHARE:
-            break;
+        }
+        for (const auto& [key, value] : extra) {
+            if (!value.empty())
+                ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
+        }
+        break;
+    case KEYSHARE:
+        break;
     }
     LOG_DBG("Generated label: {}", ofs.str());
     return ofs.str();
 }
 
 } // namespace libcdoc
-

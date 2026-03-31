@@ -23,13 +23,15 @@
 
 #include "json/base.h"
 
+#include <ranges>
+
 namespace libcdoc {
 
 std::string
 Lock::getString(Params key) const
 {
-	const std::vector<uint8_t>& bytes = params.at(key);
-	return std::string((const char *) bytes.data(), bytes.size());
+    const std::vector<uint8_t>& bytes = params.at(key);
+    return {(const char *) bytes.data(), bytes.size()};
 }
 
 int32_t
@@ -59,50 +61,47 @@ Lock::parseLabel(const std::string& label)
 {
     std::map<std::string, std::string> parsed_label;
     // Check if provided label starts with the machine generated label prefix.
-    if (!label.starts_with(CDoc2::LABELPREFIX))
-    {
+    if (!label.starts_with(CDoc2::LABELPREFIX)) {
         return parsed_label;
     }
 
-    std::string label_wo_prefix(label.substr(CDoc2::LABELPREFIX.size()));
+    auto label_wo_prefix = std::string_view(label).substr(CDoc2::LABELPREFIX.size());
 
     // Label to be processed
-    std::string label_to_prcss;
+    std::string decodedBase64; // Strong ref
+    std::string_view label_to_prcss;
 
     // We ignore mediatype part
 
     // Check, if the label is Base64 encoded
-    auto base64IndPos = label_wo_prefix.find(CDoc2::LABELBASE64IND);
-    if (base64IndPos == std::string::npos)
-    {
-        if (label_wo_prefix.starts_with(",")) {
-            label_to_prcss = label_wo_prefix.substr(1);
-        } else {
-            label_to_prcss = std::move(label_wo_prefix);
-        }
-    }
-    else
+    if (auto base64IndPos = label_wo_prefix.find(CDoc2::LABELBASE64IND);
+        base64IndPos != std::string::npos)
     {
         std::string base64_label(label_wo_prefix.substr(base64IndPos + CDoc2::LABELBASE64IND.size()));
-        label_to_prcss = jwt::base::decode<jwt::alphabet::base64>(base64_label);
+        decodedBase64 = jwt::base::decode<jwt::alphabet::base64>(base64_label);
+        label_to_prcss = decodedBase64;
+    } else if (label_wo_prefix.starts_with(",")) {
+        label_to_prcss = label_wo_prefix.substr(1);
+    } else {
+        label_to_prcss = label_wo_prefix;
     }
 
-    auto label_parts(split(label_to_prcss, '&'));
-    for (auto& part : label_parts)
+    auto range_to_sv = [](auto range) constexpr {
+        return std::string_view(&*range.begin(), std::ranges::distance(range));
+    };
+    for (const auto &part : std::ranges::split_view(label_to_prcss, '&'))
     {
-        auto label_data_parts(split(part, '='));
-        if (label_data_parts.size() != 2)
-        {
-            // Invalid label data. We just ignore them.
+        auto label_data_parts = std::ranges::split_view(part, '=');
+        if (label_data_parts.empty()) {
             LOG_ERROR("The label '{}' is invalid", label);
+            continue;
         }
-        else
-        {
-            std::string key = urlDecode(label_data_parts[0]);
-            std::string value = urlDecode(label_data_parts[1]);
-            std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c){ return std::tolower(c); });
-            parsed_label[key] = value;
-        }
+        auto it = label_data_parts.begin();
+        std::string key = urlDecode(range_to_sv(*it));
+        std::ranges::transform(key, key.begin(), [](unsigned char c){ return std::tolower(c); });
+        ++it;
+        std::string value = urlDecode(range_to_sv(*it));
+        parsed_label[std::move(key)] = std::move(value);
     }
 
     return parsed_label;

@@ -790,6 +790,27 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsingWithMediaType)
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(LabelParsingEmptyLabel)
+{
+    const string label("data:v=1&type=pw&label=");
+
+    auto result = libcdoc::Lock::parseLabel(label);
+    for (const auto& [key, value] : {
+            pair<string, string> {"v", "1"},
+            pair<string, string> {"type", "pw"},
+            pair<string, string> {"label", ""},
+        })
+    {
+        auto result_pair = result.find(key);
+        BOOST_TEST((result_pair != result.cend()), "Field " << key << " presented");
+        if (result_pair != result.end())
+        {
+            BOOST_CHECK_EQUAL(result_pair->second, value);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(StreamingDecryption)

@@ -104,7 +104,7 @@ createRSACapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::Recipie
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_RSAPublicKeyCapsule,
                                                         capsule.Union(),
-                                                        builder.CreateString(rcpt.getLabel({{"server_exp", rcpt.expiry_ts == 0 ? std::string() : std::to_string(rcpt.expiry_ts)}})),
+                                                        builder.CreateString(rcpt.getLabel({{CDoc2::Label::EXPIRY, rcpt.expiry_ts == 0 ? std::string() : std::to_string(rcpt.expiry_ts)}})),
                                                         builder.CreateVector(xor_key),
                                                         cdoc20::header::FMKEncryptionMethod::XOR);
 }
@@ -123,7 +123,7 @@ createRSAServerCapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::R
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_KeyServerCapsule,
                                                         capsule.Union(),
-                                                        builder.CreateString(rcpt.getLabel({{"server_exp", std::to_string(expiry_time)}})),
+                                                        builder.CreateString(rcpt.getLabel({{CDoc2::Label::EXPIRY, std::to_string(expiry_time)}})),
                                                         builder.CreateVector(xor_key),
                                                         cdoc20::header::FMKEncryptionMethod::XOR);
 }
@@ -138,7 +138,7 @@ createECCCapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::Recipie
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_ECCPublicKeyCapsule,
                                                         capsule.Union(),
-                                                        builder.CreateString(rcpt.getLabel({{"server_exp", rcpt.expiry_ts == 0 ? std::string() : std::to_string(rcpt.expiry_ts)}})),
+                                                        builder.CreateString(rcpt.getLabel({{CDoc2::Label::EXPIRY, rcpt.expiry_ts == 0 ? std::string() : std::to_string(rcpt.expiry_ts)}})),
                                                         builder.CreateVector(xor_key),
                                                         cdoc20::header::FMKEncryptionMethod::XOR);
 }
@@ -158,7 +158,7 @@ createECCServerCapsule(flatbuffers::FlatBufferBuilder& builder, const libcdoc::R
     return cdoc20::header::CreateRecipientRecord(builder,
                                                         cdoc20::header::Capsule::recipients_KeyServerCapsule,
                                                         capsule.Union(),
-                                                        builder.CreateString(rcpt.getLabel({{"server_exp", std::to_string(expiry_time)}})),
+                                                        builder.CreateString(rcpt.getLabel({{CDoc2::Label::EXPIRY, std::to_string(expiry_time)}})),
                                                         builder.CreateVector(xor_key),
                                                         cdoc20::header::FMKEncryptionMethod::XOR);
 }
@@ -222,7 +222,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                     return libcdoc::CONFIGURATION_ERROR;
                 }
             }
-            if(rcpt.pk_type == libcdoc::Recipient::PKType::RSA) {
+            if(rcpt.pk_type == libcdoc::PKType::RSA) {
                 crypto->random(kek, libcdoc::CDoc2::KEY_LEN);
                 if (libcdoc::Crypto::xor_data(xor_key, fmk, kek) != libcdoc::OK) {
                     setLastError("Internal error");

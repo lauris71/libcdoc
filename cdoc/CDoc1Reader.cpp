@@ -83,12 +83,12 @@ CDoc1Reader::getLockForCert(const std::vector<uint8_t>& cert)
             ll.encrypted_fmk.empty())
             continue;
         switch(cc.getAlgorithm()) {
-        case libcdoc::Certificate::RSA:
+        case libcdoc::PKType::RSA:
             if (ll.getString(Lock::Params::METHOD) == libcdoc::Crypto::RSA_MTH) {
                 return i;
             }
             break;
-        case libcdoc::Certificate::ECC:
+        case libcdoc::PKType::ECC:
             if(!ll.getBytes(Lock::Params::KEY_MATERIAL).empty() &&
                 std::find(SUPPORTED_KWAES.cbegin(), SUPPORTED_KWAES.cend(), ll.getString(Lock::Params::METHOD)) != SUPPORTED_KWAES.cend()) {
                 return i;
@@ -310,7 +310,7 @@ CDoc1Reader::CDoc1Reader(libcdoc::DataSource *src, bool delete_on_close)
                     Certificate ssl(cert);
                     key.setBytes(Lock::CERT, std::move(cert));
                     key.setBytes(Lock::RCPT_KEY, ssl.getPublicKey());
-                    key.pk_type = (ssl.getAlgorithm() == libcdoc::Certificate::RSA) ? Lock::RSA : Lock::ECC;
+                    key.pk_type = ssl.getAlgorithm();
                 }
 				// EncryptedData/KeyInfo/EncryptedKey/KeyInfo/CipherData/CipherValue
                 else if(reader.isElement("CipherValue"))

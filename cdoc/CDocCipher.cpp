@@ -280,7 +280,7 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
             LOG_DBG("Creating symmetric key:");
         } else if (rcpt.type == RcptInfo::Type::PKEY) {
             if (!conf.servers.empty()) {
-                key = libcdoc::Recipient::makeServer(label, rcpt.secret, libcdoc::Recipient::PKType::ECC, conf.servers[0].ID);
+                key = libcdoc::Recipient::makeServer(label, rcpt.secret, libcdoc::PKType::ECC, conf.servers[0].ID);
             } else {
                 const uint8_t *der = rcpt.secret.data();
                 EVP_PKEY *pkey = d2i_PUBKEY(nullptr, &der, rcpt.secret.size());
@@ -289,9 +289,9 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
                 uint8_t *p = d.data();
                 i2d_PublicKey(pkey, &p);
                 if (id == EVP_PKEY_EC) {
-                    key = libcdoc::Recipient::makePublicKey(label, rcpt.secret, libcdoc::Recipient::PKType::ECC);
+                    key = libcdoc::Recipient::makePublicKey(label, rcpt.secret, libcdoc::PKType::ECC);
                 } else if (id == EVP_PKEY_RSA) {
-                    key = libcdoc::Recipient::makePublicKey(label, rcpt.secret, libcdoc::Recipient::PKType::RSA);
+                    key = libcdoc::Recipient::makePublicKey(label, rcpt.secret, libcdoc::PKType::RSA);
                 }
             }
             LOG_DBG("Creating public key:");
@@ -308,9 +308,9 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
             }
             LOG_DBG("Public key ({}): {}", rsa ? "rsa" : "ecc", toHex(val));
             if (!conf.servers.empty()) {
-                key = libcdoc::Recipient::makeServer(label, val, rsa ? libcdoc::Recipient::PKType::RSA : libcdoc::Recipient::PKType::ECC, conf.servers[0].ID);
+                key = libcdoc::Recipient::makeServer(label, val, rsa ? libcdoc::PKType::RSA : libcdoc::PKType::ECC, conf.servers[0].ID);
             } else {
-                key = libcdoc::Recipient::makePublicKey(label, val, rsa ? libcdoc::Recipient::PKType::RSA : libcdoc::Recipient::PKType::ECC);
+                key = libcdoc::Recipient::makePublicKey(label, val, rsa ? libcdoc::PKType::RSA : libcdoc::PKType::ECC);
             }
         } else if (rcpt.type == RcptInfo::Type::PASSWORD) {
             LOG_DBG("Creating password key:");
