@@ -161,12 +161,21 @@ urlDecode(std::string_view src)
     uint8_t value = 0;
 
     for (auto it = src.cbegin(), end = src.cend(); it != end; ++it) {
-        if (*it == '%' && fromHex(it + 1, end, value)) {
-            ret += char(value);
-            std::advance(it, 2);
-            continue;
+        switch (*it)
+        {
+        case '+':
+            ret += ' ';
+            break;
+        case '%':
+            if (fromHex(it + 1, end, value)) {
+                ret += char(value);
+                std::advance(it, 2);
+                continue;
+            }
+            [[fallthrough]];
+        default:
+            ret += *it;
         }
-        ret += *it;
     }
 
     return ret;

@@ -181,7 +181,7 @@ Recipient::getLabel(std::map<std::string_view, std::string_view> extra) const
         break;
     case SYMMETRIC_KEY:
     case PUBLIC_KEY:
-        ofs << CDoc2::LABELPREFIX
+        ofs << CDoc2::LABELPREFIX << ','
             << CDoc2::Label::VERSION << '=' << std::to_string(CDoc2::KEYLABELVERSION);
         for (const auto& [key, value] : lbl_parts) {
             if (key == "v")
