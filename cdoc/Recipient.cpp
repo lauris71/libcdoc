@@ -212,12 +212,9 @@ Recipient::validate() const
         case SYMMETRIC_KEY:
             // Either user-defined label or LABEL property is required
             return !label.empty() || lbl_parts.contains("CDoc2::Label::LABEL");
-            break;
         case PUBLIC_KEY:
             // Public key should not be empty
-            if (rcpt_key.empty())
-                return false;
-            break;
+            return !rcpt_key.empty();
         default:
             return false;
     }
