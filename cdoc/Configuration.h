@@ -42,6 +42,7 @@ struct CDOC_EXPORT Configuration {
      * @brief Fetch URL of keyserver (Domain is server id)
      */
     static constexpr char const *KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
+#ifdef HAS_KEYSHARES
     /**
      * @brief JSON array of share server base urls (Domain is server id)
      */
@@ -74,6 +75,7 @@ struct CDOC_EXPORT Configuration {
      * @brief Mobile ID phone number (domain is MOBILE_ID)
      */
     static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
+#endif
 
 	Configuration() = default;
 	virtual ~Configuration() noexcept = default;

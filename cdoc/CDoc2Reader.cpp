@@ -228,6 +228,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_DBG("info: {}", toHex(info_str));
             kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2::KEY_LEN);
         }
+#ifdef HAS_KEYSHARES
     } else  if (lock.type == Lock::Type::SHARE_SERVER) {
         /* SALT */
         std::vector<uint8_t> salt = lock.getBytes(Lock::SALT);
@@ -327,6 +328,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             }
         }
         LOG_INFO("Fetched all shares");
+#endif
     } else {
         setLastError(t_("Unknown lock type"));
         LOG_ERROR("Unknown lock type: %d", (int) lock.type);
@@ -578,6 +580,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
             lock.setInt(Lock::KDF_ITER, capsule->kdf_iterations());
         }
         return;
+#ifdef HAS_KEYSHARES
     case Capsule::recipients_KeySharesCapsule:
         if (const auto *capsule = recipient.capsule_as_recipients_KeySharesCapsule()) {
             if (capsule->recipient_type() != cdoc20::recipients::KeyShareRecipientType::SID_MID) {
@@ -609,6 +612,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
             lock.setString(Lock::RECIPIENT_ID, recipient_id);
         }
         return;
+#endif
     default:
         LOG_ERROR("Unsupported capsule type");
     }

@@ -50,7 +50,7 @@ add_library(cdoc
     CDoc2Writer.cpp CDoc2Writer.h
     DDocReader.cpp DDocReader.h
     DDocWriter.cpp DDocWriter.h
-    KeyShares.cpp KeyShares.h
+    # KeyShares.cpp KeyShares.h
     XmlReader.cpp XmlReader.h
     XmlWriter.cpp XmlWriter.h
     RcptInfo.h

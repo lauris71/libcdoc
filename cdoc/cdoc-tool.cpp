@@ -49,17 +49,17 @@ enum {
 static void print_usage(ostream& ofs)
 {
     ofs << "cdoc-tool version: " << VERSION_STR << endl;
+    ofs << "libcdoc version: " << libcdoc::getVersion() << endl;
     ofs << "cdoc-tool encrypt --rcpt RECIPIENT [--rcpt...] [-v1] [--genlabel] --out OUTPUTFILE FILE [FILE...]" << endl;
     ofs << "  Encrypt files for one or more recipients" << endl;
     ofs << "  RECIPIENT has to be one of the following:" << endl;
     ofs << "    [label]:cert:CERTIFICATE_FILE - public key from certificate" << endl;
-    ofs << "    [label]:pkey:SECRET_KEY_HEX - public key" << endl;
+    ofs << "    [label]:pkey:PUB_KEY_HEX - hex-encoded public key from command line" << endl;
     ofs << "    [label]:pfkey:PUB_KEY_FILE - path to DER file with EC (secp384r1 curve) public key" << endl;
     ofs << "    [label]:skey:SECRET_KEY_HEX - AES key" << endl;
-    ofs << "    [label]:pw:PASSWORD - Derive key using PWBKDF" << endl;
+    ofs << "    [label]:pw:PASSWORD - Derive key from provided password using PWBKDF" << endl;
     ofs << "    [label]:p11sk:SLOT:[PIN]:[PKCS11 ID]:[PKCS11 LABEL] - use AES key from PKCS11 module" << endl;
     ofs << "    [label]:p11pk:SLOT:[PIN]:[PKCS11 ID]:[PKCS11 LABEL] - use public key from PKCS11 module" << endl;
-    ofs << "    [label]:share:ID - use keyshares with given ID (personal code)" << endl;
     ofs << "  -v1 - creates CDOC1 version container. Supported only for encryption with certificate." << endl;
     ofs << "  --genlabel - If specified, the lock label is generated." << endl;
     ofs << endl;
