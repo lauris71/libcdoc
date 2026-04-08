@@ -273,7 +273,12 @@ CDoc1Writer::addRecipient(const libcdoc::Recipient& rcpt)
 {
     if(d)
         return WORKFLOW_ERROR;
-	rcpts.push_back(rcpt);
+    if (!rcpt.isCertificate()) {
+        setLastError("Invalid recipient type");
+        LOG_ERROR("{}", last_error);
+        return WRONG_ARGUMENTS;
+    }
+    rcpts.push_back(rcpt);
     return libcdoc::OK;
 }
 

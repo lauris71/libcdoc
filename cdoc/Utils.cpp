@@ -142,6 +142,10 @@ operator<<(std::ostream& escaped, urlEncode src)
     escaped << std::hex;
 
     for (auto c : src.src) {
+        if (c == ' ') {
+            escaped << '+';
+            continue;
+        }
         // Keep alphanumeric and other accepted characters intact
         if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
             escaped << c;

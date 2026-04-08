@@ -511,7 +511,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
         if(const auto *key = recipient.capsule_as_recipients_ECCPublicKeyCapsule()) {
             if(key->curve() == EllipticCurve::secp384r1) {
                 lock.type = Lock::Type::PUBLIC_KEY;
-                lock.pk_type = Lock::PKType::ECC;
+                lock.pk_type = PKType::ECC;
                 lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(key->recipient_public_key()));
                 lock.setBytes(Lock::Params::KEY_MATERIAL, toUint8Vector(key->sender_public_key()));
                 LOG_DBG("Load PK: {}", toHex(lock.getBytes(Lock::Params::RCPT_KEY)));
@@ -524,7 +524,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
         if(const auto *key = recipient.capsule_as_recipients_RSAPublicKeyCapsule())
         {
             lock.type = Lock::Type::PUBLIC_KEY;
-            lock.pk_type = Lock::PKType::RSA;
+            lock.pk_type = PKType::RSA;
             lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(key->recipient_public_key()));
             lock.setBytes(Lock::Params::KEY_MATERIAL, toUint8Vector(key->encrypted_kek()));
         }
@@ -539,13 +539,13 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
                         LOG_ERROR("Unsupported elliptic curve key type");
                         return;
                     }
-                    lock.pk_type = Lock::PKType::ECC;
+                    lock.pk_type = PKType::ECC;
                     lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(eccDetails->recipient_public_key()));
                 }
                 break;
             case KeyDetailsUnion::RsaKeyDetails:
                 if(const RsaKeyDetails *rsaDetails = server->recipient_key_details_as_RsaKeyDetails()) {
-                    lock.pk_type = Lock::PKType::RSA;
+                    lock.pk_type = PKType::RSA;
                     lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(rsaDetails->recipient_public_key()));
                 }
                 break;

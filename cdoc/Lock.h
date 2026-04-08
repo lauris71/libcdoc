@@ -19,7 +19,7 @@
 #ifndef __LOCK_H__
 #define __LOCK_H__
 
-#include <cdoc/Exports.h>
+#include "CDoc.h"
 
 #include <cstdint>
 #include <string>
@@ -72,20 +72,6 @@ struct CDOC_EXPORT Lock
          * @brief Symmetric key distributed on several servers
          */
         SHARE_SERVER
-    };
-
-    /**
-     * @brief The public key type
-     */
-    enum PKType : unsigned char {
-        /**
-         * Elliptic curve
-         */
-        ECC,
-        /**
-         * RSA
-         */
-        RSA
     };
 
     /**

@@ -31,6 +31,21 @@ namespace libcdoc {
  */
 using result_t = int64_t;
 
+
+/**
+ * @brief The public key type
+ */
+enum class PKType : uint8_t {
+    /**
+     * Elliptic curve
+     */
+    ECC,
+    /**
+     * RSA
+     */
+    RSA
+};
+
 enum {
     /**
      * @brief Operation completed successfully
@@ -215,6 +230,7 @@ namespace Label {
     static constexpr std::string_view LAST_NAME = "last_name";
     static constexpr std::string_view FIRST_NAME = "first_name";
     static constexpr std::string_view CERT_SHA1 = "cert_sha1";
+    static constexpr const char* EXPIRY = "server_exp";
 }
 }
 
