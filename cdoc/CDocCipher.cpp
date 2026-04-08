@@ -470,7 +470,7 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
             fpath = fpath.filename();
         }
         fpath = base_path / fpath;
-        std::ofstream ofs(fpath.string(), std::ios_base::binary);
+        std::ofstream ofs(fpath, std::ios_base::binary);
         if (ofs.bad()) {
             LOG_ERROR("Cannot open file {} for writing", fpath.string());
             return 1;
