@@ -540,7 +540,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithPasswordWithoutLabel, EncryptFixtu
         * utf::description("Encrypting a file with password and without label"))
 {
     std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::PASSWORD, {}, {}, std::vector<uint8_t>(Password.cbegin(), Password.cend())}
+        {libcdoc::RcptInfo::PASSWORD, "auto", {}, std::vector<uint8_t>(Password.cbegin(), Password.cend())}
     };
     encrypt(2, {checkDataFile(sources[0])}, formTargetFile("PasswordUsageWithoutLabel.cdoc"), rcpts);
 }
@@ -559,7 +559,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithAESKey, EncryptFixture,
         * utf::description("Encrypting a file with symmetric AES key"))
 {
     std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::SKEY, {}, {}, libcdoc::fromHex(AESKey)}
+        {libcdoc::RcptInfo::SKEY, "AES", {}, libcdoc::fromHex(AESKey)}
     };
     encrypt(2, {checkDataFile(sources[0])}, formTargetFile("AESKeyUsage.cdoc"), rcpts);
 }

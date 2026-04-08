@@ -238,6 +238,13 @@ struct CDOC_EXPORT Recipient {
         lbl_parts[std::string(key)] = value;
     }
 
+    /**
+     * @brief Validate recipient record
+     * 
+     * @return true if Recipient is valid
+     */
+    bool validate() const;
+
     bool operator== (const Recipient& other) const = default;
 protected:
 	Recipient(Type _type) : type(_type) {};

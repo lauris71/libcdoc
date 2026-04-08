@@ -37,8 +37,6 @@
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
-#include <fstream>
-
 // fixme: Placeholder
 #define t_(t) t
 

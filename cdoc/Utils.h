@@ -43,6 +43,11 @@ namespace fmt = std;
 
 namespace libcdoc {
 
+static auto encodeName(std::string_view path)
+{
+    return std::u8string_view(reinterpret_cast<const char8_t*>(path.data()), path.size());
+}
+
 std::string toBase64(const uint8_t *data, size_t len);
 
 static std::string toBase64(const std::vector<uint8_t> &data) {
@@ -76,7 +81,7 @@ fromHex(std::string_view hex) {
         return val;
     val.resize(hex.size() / 2);
     auto p = val.begin();
-    for (auto i = hex.cbegin(), end = hex.cend(); fromHex(i, end, *p); i += 2, ++p);
+    for (auto i = hex.cbegin(), end = hex.cend(); p != val.end() && fromHex(i, end, *p); i += 2, ++p);
     return val;
 }
 
@@ -117,11 +122,11 @@ readAllBytes(std::string_view filename)
 {
     std::vector<uint8_t> dst;
     std::filesystem::path path(filename);
-    if (!std::filesystem::exists(path)) {
+    if (std::error_code ec; !std::filesystem::exists(path, ec)) {
         std::cerr << "readAllBytes(): File '" << filename << "' does not exist" << std::endl;
         return dst;
     }
-    std::ifstream ifs(path, std::ios_base::in | std::ios_base::binary);
+    std::ifstream ifs(path, std::ios_base::binary);
     if (!ifs) {
         std::cerr << "readAllBytes(): Opening '" << filename << "' failed." << std::endl;
         return dst;

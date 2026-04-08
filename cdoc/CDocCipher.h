@@ -25,7 +25,6 @@
 #include "ToolConf.h"
 #include "Exports.h"
 
-#include <map>
 #include <memory>
 
 namespace libcdoc

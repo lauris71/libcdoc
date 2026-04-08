@@ -18,7 +18,11 @@
 
 #include "Io.h"
 
+#include "Utils.h"
+
 #include <array>
+
+namespace fs = std::filesystem;
 
 namespace libcdoc {
 
@@ -88,17 +92,32 @@ DataSource::skip(size_t size) {
 }
 
 IStreamSource::IStreamSource(const std::string& path)
-	: IStreamSource(new std::ifstream(path, std::ios_base::in | std::ios_base::binary), true)
+    : IStreamSource(new std::ifstream(fs::path(encodeName(path)), std::ios_base::binary), true)
 {
 }
 
 OStreamConsumer::OStreamConsumer(const std::string& path)
-	: OStreamConsumer(new std::ofstream(path, std::ios_base::binary), true)
+    : OStreamConsumer(new std::ofstream(fs::path(encodeName(path)), std::ios_base::binary), true)
 {
 }
 
+result_t FileListConsumer::open(const std::string &name, int64_t size) {
+    std::string_view fileName = name;
+    if (ofs.is_open()) {
+        ofs.close();
+    }
+    size_t lastSlashPos = fileName.find_last_of("\\/");
+    if (lastSlashPos != std::string::npos) {
+        fileName = fileName.substr(lastSlashPos + 1);
+    }
+    fs::path path(base);
+    path /= encodeName(fileName);
+    ofs.open(path, std::ios_base::binary);
+    return ofs.bad() ? OUTPUT_STREAM_ERROR : OK;
+}
+
 FileListSource::FileListSource(const std::string& base, const std::vector<std::string>& files)
-	: _base(base), _files(files), _current(-1)
+    : _base(encodeName(base)), _files(files)
 {
 }
 
@@ -139,13 +158,15 @@ FileListSource::next(std::string& name, int64_t& size)
 	_ifs.close();
 	_current += 1;
 	if (_current >= _files.size()) return END_OF_STREAM;
-	std::filesystem::path path(_base);
-	path.append(_files[_current]);
-	if (!std::filesystem::exists(path)) return IO_ERROR;
-	_ifs.open(path, std::ios_base::in | std::ios_base::binary);
+    fs::path path(_base);
+    path.append(encodeName(_files[_current]));
+    if (std::error_code ec; !fs::exists(path, ec)) return IO_ERROR;
+    _ifs.open(path, std::ios_base::binary);
 	if (_ifs.bad()) return IO_ERROR;
 	name = _files[_current];
-	size = std::filesystem::file_size(path);
+    std::error_code ec;
+    size = fs::file_size(path, ec);
+    if (!ec) return IO_ERROR;
     return OK;
 }
 
