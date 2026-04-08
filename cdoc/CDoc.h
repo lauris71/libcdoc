@@ -198,10 +198,6 @@ struct FileInfo {
     int64_t size;
 };
 
-#ifdef VERSION
-#undef VERSION
-#endif
-
 namespace CDoc2 {
 namespace Label {
     /**

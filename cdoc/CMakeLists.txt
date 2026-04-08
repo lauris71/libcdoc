@@ -21,7 +21,7 @@ set(PUBLIC_HEADERS
 add_library(cdoc_ver INTERFACE)
 target_compile_definitions(cdoc_ver INTERFACE
     VERSION_STR="${VERSION}"
-    $<$<PLATFORM_ID:Windows>:VERSION=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${BUILD_NUMBER}>
+    $<$<PLATFORM_ID:Windows>:VERSION_NUMBER=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${BUILD_NUMBER}>
     $<$<PLATFORM_ID:Windows>:TARGET_NAME="$<TARGET_PROPERTY:NAME>">
     $<$<PLATFORM_ID:Windows>:$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:APP>>
 )
@@ -93,6 +93,9 @@ if(BUILD_TOOLS)
     add_executable(cdoc-tool cdoc-tool.cpp)
     target_include_directories(cdoc-tool PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_link_libraries(cdoc-tool cdoc_ver cdoc)
+    target_link_options(cdoc-tool PRIVATE
+        $<$<PLATFORM_ID:Windows>: /MANIFEST:NO /MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/cdoc-tool.manifest>
+    )
     set_target_properties(cdoc-tool PROPERTIES
         INSTALL_RPATH $<$<PLATFORM_ID:Darwin>:@executable_path/../lib>
     )
