@@ -19,6 +19,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 namespace libcdoc {
 
@@ -39,11 +40,14 @@ struct free_argument<R (*)(T *)>
     using type = T;
 };
 
+template<auto D>
+using free_argument_t = typename free_argument<decltype(D)>::type;
+
 template <class T>
 using unique_free_t = std::unique_ptr<T, void(*)(T*)>;
 
 template <auto D>
-using unique_ptr_t = std::unique_ptr<typename free_argument<decltype(D)>::type, free_deleter<D>>;
+using unique_ptr_t = std::unique_ptr<free_argument_t<D>, free_deleter<D>>;
 
 template<class T, typename D>
 [[nodiscard]]
@@ -72,6 +76,16 @@ constexpr auto make_unique_cast(P *p) noexcept
 {
     using T = typename free_argument<decltype(D)>::type;
     return make_unique_ptr<D>(static_cast<T*>(p));
+}
+
+template<auto F, auto Free, typename... Args>
+[[nodiscard]]
+constexpr auto d2i(const std::vector<uint8_t> &data, Args&&... args) noexcept
+{
+    if(data.empty())
+        return std::unique_ptr<free_argument_t<Free>, decltype(Free)>(nullptr, Free);
+    const auto *p = data.data();
+    return make_unique_ptr(F(std::forward<Args>(args)..., &p, long(data.size())), Free);
 }
 
 }

@@ -104,7 +104,7 @@ int64_t CDoc1Writer::Private::writeDocument(bool use_ddoc, const std::vector<Rec
             });
         }));
         return writeElement(DENC, "EncryptionProperties", [&] -> int64_t {
-            RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "LibraryVersion"}}, "cdoc|0.0.1"));
+            RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "LibraryVersion"}}, VERSION_STR));
             RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "DocumentFormat"}}, documentFormat));
             RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "Filename"}}, use_ddoc ? "tmp.ddoc" : files.at(0).name));
             for(const FileEntry &file: files)
@@ -119,13 +119,13 @@ int64_t CDoc1Writer::Private::writeDocument(bool use_ddoc, const std::vector<Rec
 
 int64_t CDoc1Writer::Private::writeRecipient(const std::vector<uint8_t> &recipient, const Crypto::Key& transportKey)
 {
-    auto peerCert = Crypto::toX509(recipient);
+    Certificate peerCert(recipient);
     if(!peerCert)
         return UNSPECIFIED_ERROR;
     return writeElement(DENC, "EncryptedKey",
-            {{"Recipient", Certificate::getName(peerCert.get(), NID_commonName)}}, [&] -> int64_t {
+            {{"Recipient", peerCert.getName(NID_commonName)}}, [&] -> int64_t {
 		std::vector<uint8_t> encryptedData;
-		auto *peerPKey = X509_get0_pubkey(peerCert.get());
+        auto *peerPKey = X509_get0_pubkey(peerCert.handle());
 		switch(EVP_PKEY_base_id(peerPKey))
 		{
 		case EVP_PKEY_RSA:
@@ -273,7 +273,12 @@ CDoc1Writer::addRecipient(const libcdoc::Recipient& rcpt)
 {
     if(d)
         return WORKFLOW_ERROR;
-	rcpts.push_back(rcpt);
+    if (!rcpt.isCertificate()) {
+        setLastError("Invalid recipient type");
+        LOG_ERROR("{}", last_error);
+        return WRONG_ARGUMENTS;
+    }
+    rcpts.push_back(rcpt);
     return libcdoc::OK;
 }
 

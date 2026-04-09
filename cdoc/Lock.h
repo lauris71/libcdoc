@@ -19,7 +19,7 @@
 #ifndef __LOCK_H__
 #define __LOCK_H__
 
-#include <cdoc/Exports.h>
+#include "CDoc.h"
 
 #include <cstdint>
 #include <string>
@@ -68,24 +68,12 @@ struct CDOC_EXPORT Lock
          * @brief Public key stored on keyserver
          */
         SERVER,
+#ifdef HAS_KEYSHARES
         /**
          * @brief Symmetric key distributed on several servers
          */
         SHARE_SERVER
-    };
-
-    /**
-     * @brief The public key type
-     */
-    enum PKType : unsigned char {
-        /**
-         * Elliptic curve
-         */
-        ECC,
-        /**
-         * RSA
-         */
-        RSA
+#endif
     };
 
     /**
@@ -128,10 +116,12 @@ struct CDOC_EXPORT Lock
          * @brief Keyshare recipient ID
          */
         RECIPIENT_ID,
+#ifdef HAS_KEYSHARES
         /**
          * @brief Keyshare server urls (separated by ';')
          */
         SHARE_URLS,
+#endif
         /**
          * @brief CDoc1 specific
          */
@@ -238,6 +228,13 @@ struct CDOC_EXPORT Lock
      * @param val the value
      */
     void setInt(Params param, int32_t val);
+
+    /**
+     * @brief parse machine-readable CDoc2 label
+     * @param label the label
+     * @return a map of key-value pairs
+     */
+    static std::map<std::string, std::string> parseLabel(const std::string& label);
 
     bool operator== (const Lock& other) const noexcept = default;
 

@@ -19,13 +19,15 @@
 #ifndef __LIBCDOC_UTILS_H__
 #define __LIBCDOC_UTILS_H__
 
-#include "Io.h"
-
-#include <algorithm>
+#include <array>
+#include <charconv>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
-
 #include <string>
+#include <vector>
 
 #ifdef __cpp_lib_format
 #include <format>
@@ -40,6 +42,11 @@ namespace fmt = std;
 #define FORMAT fmt::format
 
 namespace libcdoc {
+
+static auto encodeName(std::string_view path)
+{
+    return std::u8string_view(reinterpret_cast<const char8_t*>(path.data()), path.size());
+}
 
 std::string toBase64(const uint8_t *data, size_t len);
 
@@ -59,15 +66,23 @@ static std::string toHex(const F &data)
     return os.str();
 }
 
+static constexpr bool fromHex(auto pos, auto end, auto& val)
+{
+    if(std::distance(pos, end) < 2)
+        return false;
+    auto p = std::to_address(pos);
+    return std::from_chars(p, p + 2, val, 16).ec == std::errc{};
+}
+
 static std::vector<uint8_t>
 fromHex(std::string_view hex) {
-    std::vector<uint8_t> val(hex.size() / 2);
-    char c[3] = {0};
-    for (size_t i = 0; i < (hex.size() & 0xfffffffe); i += 2) {
-        std::copy(hex.cbegin() + i, hex.cbegin() + i + 2, c);
-        val[i / 2] = (uint8_t) strtol(c, NULL, 16);
-    }
-    return std::move(val);
+    std::vector<uint8_t> val;
+    if((hex.size() % 2) != 0)
+        return val;
+    val.resize(hex.size() / 2);
+    auto p = val.begin();
+    for (auto i = hex.cbegin(), end = hex.cend(); p != val.end() && fromHex(i, end, *p); i += 2, ++p);
+    return val;
 }
 
 static std::vector<std::string>
@@ -85,7 +100,7 @@ static std::string
 join(const std::vector<std::string> &parts, const std::string_view sep)
 {
 	std::string result;
-	for (auto& part : parts) {
+    for (const auto& part : parts) {
 		if (part != parts.front()) result += sep;
 		result += part;
 	}
@@ -98,37 +113,31 @@ std::vector<std::string> JsonToStringArray(std::string_view json);
 
 double getTime();
 double timeFromISO(const std::string& iso);
-std::string timeToISO(double time);
+std::string timeToISO(time_t time);
 
 bool isValidUtf8 (std::string str);
 
 static std::vector<uint8_t>
-readAllBytes(std::istream& ifs)
-{
-	std::vector<uint8_t> dst;
-	uint8_t b[4096];
-	while (!ifs.eof()) {
-		ifs.read((char *) b, 4096);
-		if (ifs.bad()) return {};
-		dst.insert(dst.end(), b, b + ifs.gcount());
-	}
-    return dst;
-}
-
-static std::vector<uint8_t>
 readAllBytes(std::string_view filename)
 {
-    std::filesystem::path keyFilePath(filename);
-    if (!std::filesystem::exists(keyFilePath)) {
+    std::vector<uint8_t> dst;
+    std::filesystem::path path(filename);
+    if (std::error_code ec; !std::filesystem::exists(path, ec)) {
         std::cerr << "readAllBytes(): File '" << filename << "' does not exist" << std::endl;
-        return {};
+        return dst;
     }
-    std::ifstream keyStream(keyFilePath, std::ios_base::in | std::ios_base::binary);
-    if (!keyStream) {
+    std::ifstream ifs(path, std::ios_base::binary);
+    if (!ifs) {
         std::cerr << "readAllBytes(): Opening '" << filename << "' failed." << std::endl;
-        return {};
+        return dst;
     }
-    return readAllBytes(keyStream);
+    std::array<uint8_t, 4096> b;
+    while (!ifs.eof()) {
+        ifs.read((char *) b.data(), b.size());
+        if (ifs.bad()) return {};
+        dst.insert(dst.end(), b.begin(), std::next(b.begin(), ifs.gcount()));
+    }
+    return dst;
 }
 
 int parseURL(const std::string& url, std::string& host, int& port, std::string& path, bool end_with_slash = false);
@@ -149,7 +158,33 @@ std::vector<uint8_t> toUint8Vector(const auto& data)
     return {data.cbegin(), data.cend()};
 }
 
-std::string urlDecode(const std::string &src);
+static std::string
+urlDecode(std::string_view src)
+{
+    std::string ret;
+    ret.reserve(src.size());
+    uint8_t value = 0;
+
+    for (auto it = src.cbegin(), end = src.cend(); it != end; ++it) {
+        switch (*it)
+        {
+        case '+':
+            ret += ' ';
+            break;
+        case '%':
+            if (fromHex(it + 1, end, value)) {
+                ret += char(value);
+                std::advance(it, 2);
+                continue;
+            }
+            [[fallthrough]];
+        default:
+            ret += *it;
+        }
+    }
+
+    return ret;
+}
 
 #ifndef SWIG
 template<typename... Args>

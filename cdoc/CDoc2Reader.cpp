@@ -37,8 +37,6 @@
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
-#include <fstream>
-
 // fixme: Placeholder
 #define t_(t) t
 
@@ -228,6 +226,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_DBG("info: {}", toHex(info_str));
             kek = libcdoc::Crypto::expand(kek_pm, info_str, libcdoc::CDoc2::KEY_LEN);
         }
+#ifdef HAS_KEYSHARES
     } else  if (lock.type == Lock::Type::SHARE_SERVER) {
         /* SALT */
         std::vector<uint8_t> salt = lock.getBytes(Lock::SALT);
@@ -327,6 +326,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             }
         }
         LOG_INFO("Fetched all shares");
+#endif
     } else {
         setLastError(t_("Unknown lock type"));
         LOG_ERROR("Unknown lock type: %d", (int) lock.type);
@@ -511,7 +511,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
         if(const auto *key = recipient.capsule_as_recipients_ECCPublicKeyCapsule()) {
             if(key->curve() == EllipticCurve::secp384r1) {
                 lock.type = Lock::Type::PUBLIC_KEY;
-                lock.pk_type = Lock::PKType::ECC;
+                lock.pk_type = PKType::ECC;
                 lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(key->recipient_public_key()));
                 lock.setBytes(Lock::Params::KEY_MATERIAL, toUint8Vector(key->sender_public_key()));
                 LOG_DBG("Load PK: {}", toHex(lock.getBytes(Lock::Params::RCPT_KEY)));
@@ -524,7 +524,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
         if(const auto *key = recipient.capsule_as_recipients_RSAPublicKeyCapsule())
         {
             lock.type = Lock::Type::PUBLIC_KEY;
-            lock.pk_type = Lock::PKType::RSA;
+            lock.pk_type = PKType::RSA;
             lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(key->recipient_public_key()));
             lock.setBytes(Lock::Params::KEY_MATERIAL, toUint8Vector(key->encrypted_kek()));
         }
@@ -539,13 +539,13 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
                         LOG_ERROR("Unsupported elliptic curve key type");
                         return;
                     }
-                    lock.pk_type = Lock::PKType::ECC;
+                    lock.pk_type = PKType::ECC;
                     lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(eccDetails->recipient_public_key()));
                 }
                 break;
             case KeyDetailsUnion::RsaKeyDetails:
                 if(const RsaKeyDetails *rsaDetails = server->recipient_key_details_as_RsaKeyDetails()) {
-                    lock.pk_type = Lock::PKType::RSA;
+                    lock.pk_type = PKType::RSA;
                     lock.setBytes(Lock::Params::RCPT_KEY, toUint8Vector(rsaDetails->recipient_public_key()));
                 }
                 break;
@@ -578,6 +578,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
             lock.setInt(Lock::KDF_ITER, capsule->kdf_iterations());
         }
         return;
+#ifdef HAS_KEYSHARES
     case Capsule::recipients_KeySharesCapsule:
         if (const auto *capsule = recipient.capsule_as_recipients_KeySharesCapsule()) {
             if (capsule->recipient_type() != cdoc20::recipients::KeyShareRecipientType::SID_MID) {
@@ -609,6 +610,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
             lock.setString(Lock::RECIPIENT_ID, recipient_id);
         }
         return;
+#endif
     default:
         LOG_ERROR("Unsupported capsule type");
     }
@@ -630,7 +632,6 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
         LOG_ERROR("{}", last_error);
         return;
     }
-    //if (libcdoc::CDoc2::LABEL.compare(0, libcdoc::CDoc2::LABEL.size(), (const char *) in)) return;
 
     // Read 32-bit header length in big endian order
     uint8_t c[4];

@@ -18,10 +18,10 @@
 
 #include "NetworkBackend.h"
 
+#include "Certificate.h"
 #include "Crypto.h"
 #include "CryptoBackend.h"
 #include "Utils.h"
-#include "utils/memory.h"
 
 #define OPENSSL_SUPPRESS_DEPRECATED
 
@@ -49,17 +49,17 @@ static ECDSA_SIG* ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const B
 static int rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const ::RSA *rsa);
 
 struct Private {
-    libcdoc::unique_free_t<X509> x509{nullptr, X509_free};
+    libcdoc::Certificate x509;
     EVP_PKEY *pkey = nullptr;
 
     RSA_METHOD *rsamethod = nullptr;
     EC_KEY_METHOD *ecmethod = nullptr;
 
-    explicit Private(libcdoc::NetworkBackend *backend, std::vector<uint8_t> client_cert) {
-        if (client_cert.empty()) return;
-        x509 = libcdoc::Crypto::toX509(client_cert);
+    explicit Private(libcdoc::NetworkBackend *backend, const std::vector<uint8_t> &client_cert)
+        : x509(client_cert)
+    {
         if (!x509) return;
-        pkey = X509_get_pubkey(x509.get());
+        pkey = X509_get_pubkey(x509.handle());
         if (!pkey) return;
         int id = EVP_PKEY_get_id(pkey);
         if (id == EVP_PKEY_EC) {
@@ -92,6 +92,7 @@ struct Private {
     }
 };
 
+#ifdef HAS_KEYSHARES
 struct MIDSIDResultData {
     int code;
     std::string_view str;
@@ -135,6 +136,7 @@ getMIDSIDDescription(libcdoc::result_t code)
     }
     return {};
 }
+#endif
 
 thread_local std::string error;
 
@@ -150,9 +152,11 @@ libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 	default:
 		break;
 	}
+#ifdef HAS_KEYSHARES
     std::string_view str = getMIDSIDDescription(code);
     if (!str.empty()) return std::string(str);
-    return libcdoc::getErrorStr(code);
+#endif
+   return libcdoc::getErrorStr(code);
 }
 
 //
@@ -174,9 +178,9 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
         X509_STORE *store = SSL_CTX_get_cert_store(ctx);
         X509_STORE_set_flags(store, X509_V_FLAG_TRUSTED_FIRST | X509_V_FLAG_PARTIAL_CHAIN);
         for (const std::vector<uint8_t>& c : certs) {
-            auto x509 = libcdoc::Crypto::toX509(c);
+            libcdoc::Certificate x509(c);
             if (!x509) return libcdoc::CRYPTO_ERROR;
-            X509_STORE_add_cert(store, x509.get());
+            X509_STORE_add_cert(store, x509.handle());
         }
         cli.enable_server_certificate_verification(true);
         cli.enable_server_hostname_verification(true);
@@ -312,6 +316,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     return OK;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
 {
@@ -354,6 +359,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
 
     return OK;
 }
+#endif
 
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id)
@@ -369,7 +375,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
     if (!cert.empty() && (!d->x509 || !d->pkey)) return CRYPTO_ERROR;
 
-    httplib::SSLClient cli(host, port, d->x509.get(), d->pkey);
+    httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
@@ -392,6 +398,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     return libcdoc::OK;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id)
 {
@@ -475,6 +482,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }
+#endif
 
 ECDSA_SIG *
 ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
@@ -527,6 +535,7 @@ rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *si
     return 1;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::showVerificationCode(unsigned int code)
 {
@@ -879,3 +888,4 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
 
     return OK;
 }
+#endif

@@ -19,6 +19,8 @@
 #ifndef __CDOC2_H__
 #define __CDOC2_H__
 
+#include "CDoc.h"
+
 #include <string_view>
 
 namespace libcdoc {
@@ -43,6 +45,25 @@ std::string getSaltForExpand(const std::string& label);
 // Get salt bitstring for HKDF expand method
 std::string getSaltForExpand(const std::vector<uint8_t>& key_material, const std::vector<uint8_t>& rcpt_key);
 
+/**
+ * @brief Prefix with what starts machine generated Lock's label.
+ */
+constexpr std::string_view LABELPREFIX{"data:"};
+
+/**
+ * @brief String after label prefix indicating, the rest of the label is Base64 encoded.
+ */
+constexpr std::string_view LABELBASE64IND{";base64,"};
+
+/**
+ * @brief EID type values for machine-readable label
+ */
+static constexpr std::string_view eid_strs[] = {
+    CDoc2::Label::TYPE_UNKNOWN,
+    CDoc2::Label::TYPE_ID_CARD,
+    CDoc2::Label::TYPE_DIGI_ID,
+    CDoc2::Label::TYPE_DIGI_ID_E_RESIDENT
+};
 
 } // namespace CDoc2
 } // namespace libcdoc

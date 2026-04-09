@@ -14,7 +14,7 @@ jobs:
     container: ubuntu:${{ matrix.container }}
     strategy:
       matrix:
-        container: ['22.04', '24.04', '25.10']
+        container: ['22.04', '24.04', '25.10', '26.04']
         arch: ['amd64', 'arm64']
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -41,7 +41,7 @@ jobs:
     - name: Lintian
       run: lintian *.deb;
     - name: Archive artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: ubuntu_${{ matrix.container }}_${{ matrix.arch }}
         path: |
@@ -75,7 +75,7 @@ jobs:
         cmake --build --preset ${{ matrix.target }}
         cmake --build --preset ${{ matrix.target }} --target install/strip
     - name: Archive artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.target }}
         path: |
@@ -122,7 +122,7 @@ jobs:
         sudo cmake --build --preset ${{ matrix.target }} --target install/strip
         zip -r libcdoc.${{ matrix.target }}.zip ${{ matrix.target }}
     - name: Archive artifacts
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.target }}
         path: |
@@ -172,12 +172,12 @@ jobs:
           -doxygen "C:/Program files/doxygen/bin/doxygen.exe" `
           -boost
     - name: Archive artifacts (MSI)
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: msi_${{ matrix.image }}_${{ matrix.platform }}
         path: ./*.msi
     - name: Archive artifacts (ZIP)
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.image }}_${{ matrix.platform }}
         path: ${{ matrix.platform }}

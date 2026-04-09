@@ -37,7 +37,7 @@ public:
     libcdoc::result_t open(const std::string& name, int64_t size) final;
 private:
     result_t writeHeader(const Header &h) noexcept;
-    result_t writeHeader(Header &h, int64_t size) noexcept;
+    result_t writeHeader(const std::string& name, int64_t size, char typeflag = '0') noexcept;
     result_t writePadding(int64_t size) noexcept;
 
 	DataConsumer *_dst;
@@ -64,6 +64,8 @@ private:
 	size_t _block_size;
 	size_t _data_size;
 	size_t _pos;
+
+	libcdoc::result_t readPaxHeader(const Header& hdr, std::string& name, int64_t& size);
 };
 
 } // namespace libcdoc

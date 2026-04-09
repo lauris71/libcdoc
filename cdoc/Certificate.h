@@ -19,6 +19,7 @@
 #ifndef SSLCERTIFICATE_H
 #define SSLCERTIFICATE_H
 
+#include "CDoc.h"
 #include "utils/memory.h"
 
 #include <string>
@@ -30,11 +31,6 @@ namespace libcdoc {
 
 class Certificate {
 public:
-	enum Algorithm : unsigned char {
-		RSA,
-		ECC
-	};
-
     enum EIDType : unsigned char {
         Unknown,
         IDCard,
@@ -42,11 +38,9 @@ public:
         DigiID_EResident
     };
 
-    unique_free_t<X509> cert;
+    explicit Certificate(const std::vector<uint8_t>& data);
 
-    explicit Certificate(const std::vector<uint8_t>& cert);
-
-    static std::string getName(X509 *cert, int NID);
+    std::string getName(int NID) const;
     std::string getCommonName() const;
     std::string getGivenName() const;
     std::string getSurname() const;
@@ -55,10 +49,16 @@ public:
     EIDType getEIDType() const;
 
 	std::vector<uint8_t> getPublicKey() const;
-    Algorithm getAlgorithm() const;
+    PKType getAlgorithm() const;
     time_t getNotAfter() const;
 
     std::vector<uint8_t> getDigest() const;
+
+    X509* handle() const noexcept { return cert.get(); }
+    operator bool() const noexcept { return cert.operator bool(); };
+
+private:
+    unique_free_t<X509> cert;
 };
 
 } // Namespace
