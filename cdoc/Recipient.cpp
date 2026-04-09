@@ -42,6 +42,33 @@ Recipient::makeSymmetric(std::string label, int32_t kdf_iter)
 }
 
 Recipient
+Recipient::makeRSA(std::string label, std::vector<uint8_t> public_key)
+{
+    if (public_key.empty())
+        return {Type::NONE};
+    Recipient rcpt(Type::PUBLIC_KEY);
+    rcpt.label = std::move(label);
+    rcpt.pk_type = RSA;
+    rcpt.rcpt_key = std::move(public_key);
+    return rcpt;
+}
+ 
+Recipient
+Recipient::makeECC(std::string label, std::vector<uint8_t> public_key, Curve ec_type)
+{
+    if (public_key.empty())
+        return {Type::NONE};
+    Recipient rcpt(Type::PUBLIC_KEY);
+    rcpt.label = std::move(label);
+    rcpt.pk_type = ECC;
+    rcpt.ec_type = ec_type;
+    // 0x30 identifies SEQUENCE tag in ASN.1 encoding
+    auto evp = Crypto::fromECPublicKeyDer(public_key);
+    rcpt.rcpt_key = Crypto::toPublicKeyDer(evp.get());
+    return rcpt;
+}
+
+Recipient
 Recipient::makePublicKey(const Lock &lock)
 {
     auto params = Lock::parseLabel(lock.label);
