@@ -129,9 +129,6 @@ Recipient::makeServer(std::string label, std::vector<uint8_t> cert, std::string 
 {
     Recipient rcpt = makeCertificate(std::move(label), std::move(cert));
     rcpt.server_id = std::move(server_id);
-    const auto six_months_from_now = std::chrono::system_clock::now() + std::chrono::months(6);
-    const auto expiry_ts = std::chrono::system_clock::to_time_t(six_months_from_now);
-    rcpt.expiry_ts = std::min(rcpt.expiry_ts, uint64_t(expiry_ts)); 
     return rcpt;
 }
 
@@ -143,6 +140,7 @@ Recipient::makeServer(const Lock &lock, std::string server_id)
     return rcpt;
 }
 
+#ifdef HAS_KEYSHARES
 Recipient
 Recipient::makeShare(std::string label, std::string server_id, std::string recipient_id)
 {
@@ -152,6 +150,7 @@ Recipient::makeShare(std::string label, std::string server_id, std::string recip
     rcpt.id = std::move(recipient_id);
     return rcpt;
 }
+#endif
 
 bool
 Recipient::isTheSameRecipient(const Recipient& other) const
@@ -198,8 +197,10 @@ Recipient::getLabel(std::map<std::string_view, std::string_view> extra) const
                 ofs << '&' << urlEncode(key) << '=' << urlEncode(value);
         }
         break;
+#ifdef HAS_KEYSHARES
     case KEYSHARE:
         break;
+#endif
     }
     LOG_DBG("Generated label: {}", ofs.str());
     return ofs.str();

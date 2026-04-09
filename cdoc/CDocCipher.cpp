@@ -321,9 +321,11 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
             key = libcdoc::Recipient::makeSymmetric(label, 65535);
             if (conf.gen_label)
                 key.setLabelValue(CDoc2::Label::LABEL, rcpt.label);
+#ifdef HAS_KEYSHARES
         } else if (rcpt.type == RcptInfo::Type::SHARE) {
             LOG_DBG("Creating keyshare recipient:");
             key = libcdoc::Recipient::makeShare(label, conf.servers[0].ID, "PNOEE-" + rcpt.id);
+#endif
         }
 
         rcpts.push_back(std::move(key));

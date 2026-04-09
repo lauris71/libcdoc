@@ -1,8 +1,8 @@
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
-  FILEVERSION VERSION
-  PRODUCTVERSION VERSION
+  FILEVERSION VERSION_NUMBER
+  PRODUCTVERSION VERSION_NUMBER
   FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
   FILEFLAGS VS_FF_DEBUG
@@ -25,7 +25,7 @@ BEGIN
 			VALUE "FileDescription", TARGET_NAME
 			VALUE "FileVersion", VERSION_STR
 			VALUE "InternalName", TARGET_NAME
-			VALUE "LegalCopyright", "(C) 2025 Estonian Information System Authority"
+			VALUE "LegalCopyright", "(C) 2025-2026 Estonian Information System Authority"
 #ifdef APP
 			VALUE "OriginalFilename", TARGET_NAME ".exe"
 #else
