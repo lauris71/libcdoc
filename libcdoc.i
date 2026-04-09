@@ -51,6 +51,9 @@
 %ignore libcdoc::FileListConsumer;
 %ignore libcdoc::FileListSource;
 
+// Ignore until there is straightfoward string_view translation
+%ignore libcdoc::CDoc2;
+
 %ignore libcdoc::CDocWriter::createWriter(int version, DataConsumer *dst, bool take_ownership, Configuration *conf, CryptoBackend *crypto, NetworkBackend *network);
 %ignore libcdoc::CDocWriter::createWriter(int version, std::ostream& ofs, Configuration *conf, CryptoBackend *crypto, NetworkBackend *network);
 %ignore libcdoc::CDocWriter::encrypt(MultiDataSource& src, const std::vector<libcdoc::Recipient>& recipients);

@@ -31,6 +31,20 @@ namespace libcdoc {
  */
 using result_t = int64_t;
 
+/**
+ * @brief The public key type
+ */
+enum class PKType : uint8_t {
+    /**
+     * Elliptic curve
+     */
+    ECC,
+    /**
+     * RSA
+     */
+    RSA
+};
+
 enum {
     /**
      * @brief Operation completed successfully
@@ -125,8 +139,19 @@ enum {
     UNSPECIFIED_ERROR = -199,
 };
 
+/**
+ * @brief Get the standard text description of error code
+ * 
+ * @param code the error code
+ * @return the text description
+ */
 CDOC_EXPORT std::string getErrorStr(int64_t code);
 
+/**
+ * @brief Get the library version
+ * 
+ * @return The version string
+ */
 CDOC_EXPORT std::string getVersion();
 
 /**
@@ -187,15 +212,33 @@ enum LogLevel : uint8_t
     LEVEL_DEBUG,
 
     /**
-     * @brief Most verbose level. Used for development, NOP in production code.
+     * @brief The most verbose level. Present only in development builds, ignored in production code.
      */
     LEVEL_TRACE
 };
 
 class Logger;
 
+/**
+ * @brief Set the Logger object for library
+ * 
+ * @param logger the Logger implementation
+ */
 CDOC_EXPORT void setLogger(Logger *logger);
+/**
+ * @brief Set logging level
+ * 
+ * @param level the requested logging level
+ */
 CDOC_EXPORT void setLogLevel(LogLevel level);
+/**
+ * @brief Log a message to the library logging system
+ * 
+ * @param level logging level
+ * @param file the source file name
+ * @param line the line in source file
+ * @param msg the message
+ */
 CDOC_EXPORT void log(LogLevel level, std::string_view file, int line, std::string_view msg);
 
 /**
@@ -207,6 +250,38 @@ struct FileInfo {
     std::string name;
     int64_t size;
 };
+
+namespace CDoc2 {
+namespace Label {
+    /**
+     * @brief Recipient types for machine-readable labels
+     * 
+     */
+    static constexpr std::string_view TYPE_PASSWORD = "pw";
+    static constexpr std::string_view TYPE_SYMMETRIC = "secret";
+    static constexpr std::string_view TYPE_PUBLIC_KEY = "pub_key";
+    static constexpr std::string_view TYPE_CERTIFICATE = "cert";
+    static constexpr std::string_view TYPE_UNKNOWN = "Unknown";
+    static constexpr std::string_view TYPE_ID_CARD = "ID-card";
+    static constexpr std::string_view TYPE_DIGI_ID = "Digi-ID";
+    static constexpr std::string_view TYPE_DIGI_ID_E_RESIDENT = "Digi-ID E-RESIDENT";
+
+    /**
+     * @brief Recipient data for machine-readable labels
+     * 
+     */
+    static constexpr std::string_view VERSION = "v";
+    static constexpr std::string_view TYPE = "type";
+    static constexpr std::string_view FILE = "file";
+    static constexpr std::string_view LABEL = "label";
+    static constexpr std::string_view CN = "cn";
+    static constexpr std::string_view SERIAL_NUMBER = "serial_number";
+    static constexpr std::string_view LAST_NAME = "last_name";
+    static constexpr std::string_view FIRST_NAME = "first_name";
+    static constexpr std::string_view CERT_SHA1 = "cert_sha1";
+    static constexpr const char* EXPIRY = "server_exp";
+}
+}
 
 }; // namespace libcdoc
 

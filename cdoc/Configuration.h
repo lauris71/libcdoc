@@ -42,6 +42,7 @@ struct CDOC_EXPORT Configuration {
      * @brief Fetch URL of keyserver (Domain is server id)
      */
     static constexpr char const *KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
+#ifdef HAS_KEYSHARES
     /**
      * @brief JSON array of share server base urls (Domain is server id)
      */
@@ -74,6 +75,7 @@ struct CDOC_EXPORT Configuration {
      * @brief Mobile ID phone number (domain is MOBILE_ID)
      */
     static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
+#endif
 
 	Configuration() = default;
 	virtual ~Configuration() noexcept = default;
@@ -92,20 +94,20 @@ struct CDOC_EXPORT Configuration {
     virtual std::string getValue(std::string_view domain, std::string_view param) const {return {};}
 
     /**
-     * @brief get a value of configuration parameter from default domain
+     * @brief get a value of configuration parameter from the default domain
      * @param param the parameter name.
      * @return a string value or empty string if parameter is not defined.
      */
     std::string getValue(std::string_view param) const {return getValue({}, param);}
     /**
-     * @brief get boolean value of configuration parameter from default domain
+     * @brief get boolean value of configuration parameter from the default domain
      * @param param the parameter name
      * @param def_val the default value to return if parameter is not set
      * @return the parameter value
      */
     bool getBoolean(std::string_view param, bool def_val = false) const;
     /**
-     * @brief get integer value of configuration parameter from default domain
+     * @brief get integer value of configuration parameter from the default domain
      * @param param the parameter name
      * @param def_val the default value to return if parameter is not set
      * @return the key value
@@ -117,7 +119,7 @@ struct CDOC_EXPORT Configuration {
  * @brief A Configuration object implementation that reads values from JSON file
  * 
  * The file should represent a single object with key/value pairs
- * Domain should contain sub-objects with corresponding key/value pairs
+ * Domains are sub-objects with corresponding key/value pairs
  * Strings are returned unquoted, everything else is returned as JSON
  * 
  */

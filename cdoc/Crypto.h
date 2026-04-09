@@ -96,8 +96,6 @@ public:
 	static std::vector<uint8_t> random(uint32_t len = 32);
 	static int xor_data(std::vector<uint8_t>& dst, const std::vector<uint8_t> &lhs, const std::vector<uint8_t> &rhs);
 
-	static unique_free_t<X509> toX509(const std::vector<uint8_t> &data);
-
     static bool isError(int retval, const char* funcName, const char* file, int line)
     {
         if (retval < 1) {

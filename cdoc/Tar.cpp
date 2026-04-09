@@ -96,7 +96,15 @@ struct libcdoc::Header {
 			   referenceChecksum == checkSum.second;
 	}
 
-    bool operator==(const Header&) const = default;
+	std::string getName() const {
+		return std::string(name.data(), std::min<size_t>(name.size(), strlen(name.data())));
+	}
+
+	int64_t getSize() const {
+		return fromOctal(size);
+	}
+
+	bool operator==(const Header&) const = default;
 };
 
 static_assert (sizeof(Header) == BLOCKSIZE, "Header struct size is incorrect");
@@ -145,8 +153,12 @@ libcdoc::TarConsumer::writeHeader(const Header &h) noexcept {
 }
 
 libcdoc::result_t
-libcdoc::TarConsumer::writeHeader(Header &h, int64_t size) noexcept {
+libcdoc::TarConsumer::writeHeader(const std::string& name, int64_t size, char typeflag) noexcept {
+	Header h {};
+	h.typeflag = typeflag;
     h.chksum.fill(' ');
+    size_t len = std::min(name.size(), h.name.size());
+    std::copy_n(name.cbegin(), len, h.name.begin());
     toOctal(h.size, size);
     toOctal(h.chksum, h.checksum().first);
     return writeHeader(h);
@@ -204,27 +216,36 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
 
     _current_size = size;
 	_current_written = 0;
-	Header h {};
-    size_t len = std::min(name.size(), h.name.size());
-    std::copy_n(name.cbegin(), len, h.name.begin());
 
-    // TODO: Create pax record if name contains special symbols
-    if(name.size() > 100 || size > 07777777) {
-		h.typeflag = 'x';
+	bool need_pax_name = (name.size() >= 100);
+	for (auto c : name) {
+		if ((c & 0x80) || (c < ' ')) {
+			need_pax_name = true;
+			break;
+		}
+	}
+    if(need_pax_name || size > 07777777) {
+		LOG_DBG("Writing Pax header: name {} size {}", name, size);
 		std::string paxData;
-        if(name.size() > 100)
+        if(need_pax_name)
             paxData += toPaxRecord("path", name);
 		if(size > 07777777)
 			paxData += toPaxRecord("size", std::to_string(size));
-        if (auto rv = writeHeader(h, paxData.size()); rv != OK)
+		std::filesystem::path path(name);
+		if (path.has_parent_path()) {
+			path = path.parent_path() / "PaxHeaders.X" / path.filename();
+		} else {
+			path = std::filesystem::path("./PaxHeaders.X") / path.filename();
+		}
+		LOG_DBG("Pax path: {}", path.string());
+        if (auto rv = writeHeader(path.string(), paxData.size(), 'x'); rv != OK)
             return rv;
         if (auto rv = _dst->write((const uint8_t *) paxData.data(), paxData.size()); rv != paxData.size())
             return rv < OK ? rv : OUTPUT_ERROR;
         if (auto rv = writePadding(paxData.size()); rv != OK)
             return rv;
     }
-	h.typeflag = '0';
-    return writeHeader(h, size);
+    return writeHeader(name, size, '0');
 }
 
 libcdoc::TarSource::TarSource(DataSource *src, bool take_ownership)
@@ -272,10 +293,51 @@ libcdoc::TarSource::isEof() noexcept
 }
 
 libcdoc::result_t
+libcdoc::TarSource::readPaxHeader(const Header& hdr, std::string& name, int64_t& size)
+{
+	int64_t h_size = hdr.getSize();
+	std::string paxData(h_size, 0);
+	result_t result = _src->read((uint8_t *) paxData.data(), paxData.size());
+	if (result != h_size) {
+		_error = INPUT_STREAM_ERROR;
+		return _error;
+	}
+	_src->skip(padding(h_size));
+	// Parse Pax data
+	for(const std::string &data: split(paxData, '\n')) {
+		if(data.empty()) break;
+		size_t eq_pos = data.find_first_of('=');
+		if (eq_pos == std::string::npos) {
+			_error = DATA_FORMAT_ERROR;
+			return _error;
+		}
+		std::string headerValue = data.substr(eq_pos + 1, data.size() - eq_pos - 1);
+		size_t sp_pos = data.find_first_of(' ');
+		if ((sp_pos == std::string::npos) || (sp_pos >= eq_pos)) {
+			_error = DATA_FORMAT_ERROR;
+			return _error;
+		}
+		std::string lenStr = data.substr(0, sp_pos);
+		std::string keyWord = data.substr(sp_pos + 1, eq_pos - sp_pos - 1);
+		if(data.size() + 1 != stoi(lenStr)) {
+			_error = DATA_FORMAT_ERROR;
+			return _error;
+		}
+		LOG_DBG("PAX {} : {}", keyWord, headerValue);
+		if(keyWord == "path")
+			name = std::move(headerValue);
+		if(keyWord == "size")
+			size = stoll(headerValue);
+	}
+	return OK;
+}
+
+libcdoc::result_t
 libcdoc::TarSource::next(std::string& name, int64_t& size)
 {
 	Header h;
 
+	// Skip if not at the start of a block
 	if (_pos < _block_size) {
 		int64_t result = _src->skip(_block_size - _pos);
 		_pos = 0;
@@ -286,18 +348,23 @@ libcdoc::TarSource::next(std::string& name, int64_t& size)
 			return _error;
 		}
 	}
+
 	while (!_src->isEof()) {
+		// Read header
 		int64_t result = _src->read((uint8_t *)&h, BLOCKSIZE);
 		if (result != BLOCKSIZE) {
 			_error = INPUT_STREAM_ERROR;
 			return _error;
 		}
 		if (h.isNull()) {
+			// Two null headers mark end of archive
+			LOG_DBG("NULL header");
 			result = _src->read((uint8_t *)&h, BLOCKSIZE);
 			if (result != BLOCKSIZE) {
 				_error = INPUT_STREAM_ERROR;
 				return _error;
 			}
+			LOG_DBG("EOF");
 			_eof = true;
 			return END_OF_STREAM;
 		}
@@ -305,18 +372,15 @@ libcdoc::TarSource::next(std::string& name, int64_t& size)
 			_error = DATA_FORMAT_ERROR;
 			return _error;
 		}
+		LOG_DBG("Header typeflag {} name {} size {}", h.typeflag, h.getName(), h.getSize());
 
-		std::string h_name = std::string(h.name.data(), std::min<size_t>(h.name.size(), strlen(h.name.data())));
-		size_t h_size = fromOctal(h.size);
+		std::string h_name;
+		int64_t h_size = -1;
 		if(h.typeflag == 'x') {
-			std::vector<char> pax_in(h_size);
-			result = _src->read((uint8_t *) pax_in.data(), pax_in.size());
-			if (result != h_size) {
-				_error = INPUT_STREAM_ERROR;
+			_error = readPaxHeader(h, h_name, h_size);
+			if (_error != OK)
 				return _error;
-			}
-			std::string paxData(pax_in.data(), pax_in.size());
-			_src->skip(padding(h_size));
+			// Read ustar header
 			result = _src->read((uint8_t *)&h, BLOCKSIZE);
 			if (result != BLOCKSIZE) {
 				_error = INPUT_STREAM_ERROR;
@@ -326,40 +390,22 @@ libcdoc::TarSource::next(std::string& name, int64_t& size)
 				_error = DATA_FORMAT_ERROR;
 				return _error;
 			}
-			h_size = fromOctal(h.size);
-			std::stringstream ss(paxData);
-			for(const std::string &data: split(paxData, '\n')) {
-				if(data.empty()) break;
-				size_t eq_pos = data.find_first_of('=');
-				if (eq_pos == std::string::npos) {
-					_error = DATA_FORMAT_ERROR;
-					return _error;
-				}
-				std::string headerValue = data.substr(eq_pos + 1, data.size() - eq_pos - 1);
-				size_t sp_pos = data.find_first_of(' ');
-				if ((sp_pos == std::string::npos) || (sp_pos >= eq_pos)) {
-					_error = DATA_FORMAT_ERROR;
-					return _error;
-				}
-				std::string lenStr = data.substr(0, sp_pos);
-				std::string keyWord = data.substr(sp_pos + 1, eq_pos - sp_pos - 1);
-				if(data.size() + 1 != stoi(lenStr)) {
-					_error = DATA_FORMAT_ERROR;
-					return _error;
-				}
-				if(keyWord == "path") h_name = std::move(headerValue);
-				if(keyWord == "size") h_size = stoi(headerValue);
+			if(h.typeflag != '0' && h.typeflag != 0) {
+				_error = DATA_FORMAT_ERROR;
+				return _error;
 			}
 		}
-		if(h.typeflag == '0' || h.typeflag == 0) {
-			name = std::move(h_name);
-			size = h_size;
+		if (h.typeflag == '0' || h.typeflag == 0) {
+			name = (h_name.empty()) ? h.getName() : std::move(h_name);
+			size = (h_size < 0) ? h.getSize() : h_size;
 			_pos = 0;
-			_data_size = h_size;
-			_block_size = h_size + padding(h_size);
+			_data_size = size;
+			_block_size = size + padding(size);
 			_eof = false;
             return OK;
 		} else {
+			// Skip other header types ('g')
+			h_size = h.getSize();
 			_src->skip(h_size + padding(h_size));
 		}
 	}

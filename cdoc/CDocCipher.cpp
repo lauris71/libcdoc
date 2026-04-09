@@ -20,6 +20,7 @@
 #include "CDocReader.h"
 #include "CDoc2.h"
 #include "Crypto.h"
+#include "Io.h"
 #include "Lock.h"
 #include "NetworkBackend.h"
 #include "PKCS11Backend.h"
@@ -283,6 +284,8 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
             }
         } else if (rcpt.type == RcptInfo::Type::SKEY) {
             key = libcdoc::Recipient::makeSymmetric(label, 0);
+            if (conf.gen_label)
+                key.setLabelValue(CDoc2::Label::LABEL, rcpt.label);
             LOG_DBG("Creating symmetric key:");
         } else if (rcpt.type == RcptInfo::Type::PKEY) {
             libcdoc::Algorithm algo = libcdoc::Algorithm::ECC;
@@ -329,7 +332,8 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
             LOG_DBG("Creating public key:");
         } else if (rcpt.type == RcptInfo::Type::P11_SYMMETRIC) {
             key = libcdoc::Recipient::makeSymmetric(label, 0);
-            key.key_name = rcpt.label;
+            if (conf.gen_label)
+                key.setLabelValue(CDoc2::Label::LABEL, rcpt.label);
         } else if (rcpt.type == RcptInfo::Type::P11_PKI) {
             std::vector<uint8_t> val;
             libcdoc::Algorithm algo;
@@ -348,13 +352,13 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
         } else if (rcpt.type == RcptInfo::Type::PASSWORD) {
             LOG_DBG("Creating password key:");
             key = libcdoc::Recipient::makeSymmetric(label, 65535);
-            key.key_name = rcpt.label;
+            if (conf.gen_label)
+                key.setLabelValue(CDoc2::Label::LABEL, rcpt.label);
+#ifdef HAS_KEYSHARES
         } else if (rcpt.type == RcptInfo::Type::SHARE) {
             LOG_DBG("Creating keyshare recipient:");
             key = libcdoc::Recipient::makeShare(label, conf.servers[0].ID, "PNOEE-" + rcpt.id);
-        } else {
-            LOG_ERROR("Invalid recipient type: {}", (int) rcpt.type);
-            return false;
+#endif
         }
 
         rcpts.push_back(std::move(key));
@@ -496,7 +500,7 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
             fpath = fpath.filename();
         }
         fpath = base_path / fpath;
-        std::ofstream ofs(fpath.string(), std::ios_base::binary);
+        std::ofstream ofs(fpath, std::ios_base::binary);
         if (ofs.bad()) {
             LOG_ERROR("Cannot open file {} for writing", fpath.string());
             return 1;
@@ -704,7 +708,7 @@ void CDocCipher::Locks(const char* file) const
 
     int lock_id = 1;
     for (const Lock& lock : rdr->getLocks()) {
-        map<string, string> parsed_label(Recipient::parseLabel(lock.label));
+        map<string, string> parsed_label(Lock::parseLabel(lock.label));
         if (parsed_label.empty()) {
             // Human-readable label
             cout << lock_id << ": " << lock.label << endl;

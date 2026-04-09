@@ -21,9 +21,9 @@
 #include <boost/test/unit_test.hpp>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <CDocCipher.h>
 #include <CryptoBackend.h>
+#include <Lock.h>
 #include <Recipient.h>
 #include <Utils.h>
 #include <cdoc/Crypto.h>
@@ -543,7 +543,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithPasswordWithoutLabel, EncryptFixtu
         * utf::description("Encrypting a file with password and without label"))
 {
     std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::PASSWORD, {}, {}, std::vector<uint8_t>(Password.cbegin(), Password.cend())}
+        {libcdoc::RcptInfo::PASSWORD, "auto", {}, std::vector<uint8_t>(Password.cbegin(), Password.cend())}
     };
     encrypt(2, {checkDataFile(sources[0])}, formTargetFile("PasswordUsageWithoutLabel.cdoc"), rcpts);
 }
@@ -562,7 +562,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithAESKey, EncryptFixture,
         * utf::description("Encrypting a file with symmetric AES key"))
 {
     std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::SKEY, {}, {}, libcdoc::fromHex(AESKey)}
+        {libcdoc::RcptInfo::SKEY, "AES", {}, libcdoc::fromHex(AESKey)}
     };
     encrypt(2, {checkDataFile(sources[0])}, formTargetFile("AESKeyUsage.cdoc"), rcpts);
 }
@@ -736,7 +736,23 @@ BOOST_AUTO_TEST_CASE(PlainLabelParsing)
 {
     const string label("data:v=1&type=ID-card&serial_number=PNOEE-38001085718&cn=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
+    for (const auto& [key, value] : ExpectedParsedLabel)
+    {
+        auto result_pair = result.find(key);
+        BOOST_TEST((result_pair != result.cend()), "Field " << key << " presented");
+        if (result_pair != result.end())
+        {
+            BOOST_CHECK_EQUAL(result_pair->second, value);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(PlainLabelParsingUpper)
+{
+    const string label("data:,TYPE=ID-card&serial_number=PNOEE-38001085718&CN=J%C3%95EORG%2CJAAK-KRISTJAN%2C38001085718&V=1");
+
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
@@ -752,7 +768,7 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsing)
 {
     const string label("data:;base64,dj0xJnR5cGU9SUQtY2FyZCZzZXJpYWxfbnVtYmVyPVBOT0VFLTM4MDAxMDg1NzE4JmNuPUolQzMlOTVFT1JHJTJDSkFBSy1LUklTVEpBTiUyQzM4MDAxMDg1NzE4");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
@@ -768,7 +784,7 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsingWithMediaType)
 {
     const string label("data:application/x-www-form-urlencoded;base64,dj0xJnR5cGU9SUQtY2FyZCZzZXJpYWxfbnVtYmVyPVBOT0VFLTM4MDAxMDg1NzE4JmNuPUolQzMlOTVFT1JHJTJDSkFBSy1LUklTVEpBTiUyQzM4MDAxMDg1NzE4");
 
-    auto result = libcdoc::Recipient::parseLabel(label);
+    auto result = libcdoc::Lock::parseLabel(label);
     for (const auto& [key, value] : ExpectedParsedLabel)
     {
         auto result_pair = result.find(key);
@@ -779,6 +795,27 @@ BOOST_AUTO_TEST_CASE(Base64LabelParsingWithMediaType)
         }
     }
 }
+
+BOOST_AUTO_TEST_CASE(LabelParsingEmptyLabel)
+{
+    const string label("data:v=1&type=pw&label=");
+
+    auto result = libcdoc::Lock::parseLabel(label);
+    for (const auto& [key, value] : {
+            pair<string, string> {"v", "1"},
+            pair<string, string> {"type", "pw"},
+            pair<string, string> {"label", ""},
+        })
+    {
+        auto result_pair = result.find(key);
+        BOOST_TEST((result_pair != result.cend()), "Field " << key << " presented");
+        if (result_pair != result.end())
+        {
+            BOOST_CHECK_EQUAL(result_pair->second, value);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(StreamingDecryption)
