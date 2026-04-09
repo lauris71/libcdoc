@@ -515,6 +515,8 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
                 lock.ec_type = Curve::SECP_384_R1;
             } else if (capsule->curve() == EllipticCurve::secp256r1) {
                 lock.ec_type = Curve::SECP_256_R1;
+            } else if (capsule->curve() == EllipticCurve::secp521r1) {
+                lock.ec_type = Curve::SECP_521_R1;
             } else {
                 LOG_WARN("Unknown ECC curve: {}", (int) capsule->curve());
                 lock.ec_type = Curve::UNKNOWN_CURVE;
@@ -545,6 +547,8 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
                         lock.ec_type = Curve::SECP_384_R1;
                     } else if (eccDetails->curve() == EllipticCurve::secp256r1) {
                         lock.ec_type = Curve::SECP_256_R1;
+                    } else if (eccDetails->curve() == EllipticCurve::secp521r1) {
+                        lock.ec_type = Curve::SECP_521_R1;
                     } else {
                         LOG_WARN("Unknown ECC curve: {}", (int) eccDetails->curve());
                         lock.ec_type = Curve::UNKNOWN_CURVE;

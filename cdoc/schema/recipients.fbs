@@ -35,7 +35,8 @@ union KeyDetailsUnion {
 enum EllipticCurve:byte {
     UNKNOWN,
     secp384r1,
-    secp256r1
+    secp256r1,
+    secp521r1
 }
 
 table RsaKeyDetails {

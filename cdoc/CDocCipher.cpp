@@ -307,6 +307,9 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
                     case NID_X9_62_prime256v1:
                         curve = libcdoc::Curve::SECP_256_R1;
                         break;
+                    case NID_secp521r1:
+                        curve = libcdoc::Curve::SECP_521_R1;
+                        break;
                     default:
                         LOG_ERROR("Unknown public key nid: {}", nid);
                         return false;

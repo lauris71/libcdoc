@@ -175,7 +175,8 @@ enum Algorithm : uint8_t {
 enum Curve : uint8_t {
     UNKNOWN_CURVE,
     SECP_384_R1,
-    SECP_256_R1
+    SECP_256_R1,
+    SECP_521_R1
 };
 
 

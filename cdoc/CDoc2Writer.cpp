@@ -102,7 +102,8 @@ struct ECData {
 
 static std::map<Curve,ECData> ecdata = {
     {Curve::SECP_384_R1, {NID_secp384r1, cdoc20::recipients::EllipticCurve::secp384r1, "ecc_secp384r1"}},
-    {Curve::SECP_256_R1, {NID_X9_62_prime256v1, cdoc20::recipients::EllipticCurve::secp256r1, "ecc_secp256r1"}}
+    {Curve::SECP_256_R1, {NID_X9_62_prime256v1, cdoc20::recipients::EllipticCurve::secp256r1, "ecc_secp256r1"}},
+    {Curve::SECP_521_R1, {NID_secp521r1, cdoc20::recipients::EllipticCurve::secp521r1, "ecc_secp521r1"}}
 };
 
 static flatbuffers::Offset<cdoc20::header::RecipientRecord>

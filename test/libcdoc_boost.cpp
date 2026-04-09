@@ -57,6 +57,9 @@ constexpr string_view ECCertFile("ec-secp384r1-cert.der");
 constexpr string_view EC256PrivKeyFile("ec-secp256r1-priv.der");
 constexpr string_view EC256PubKeyFile("ec-secp256r1-pub.der");
 constexpr string_view EC256CertFile("ec-secp256r1-cert.der");
+constexpr string_view EC521PrivKeyFile("ec-secp521r1-priv.der");
+constexpr string_view EC521PubKeyFile("ec-secp521r1-pub.der");
+constexpr string_view EC521CertFile("ec-secp521r1-cert.der");
 constexpr string_view RSAPrivKeyFile("rsa_2048_priv.der");
 constexpr string_view RSAPubKeyFile("rsa_2048_pub.der");
 constexpr string_view RSACertFile("rsa_2048_cert.der");
@@ -555,62 +558,32 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithPasswordLabelIndex, DecryptFixture
 }
 BOOST_AUTO_TEST_SUITE_END()
 
-// CDoc2 AES key
+// CDoc2 public/private/symmetric key
 
-BOOST_AUTO_TEST_SUITE(AESKeyUsage)
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithAESKey, EncryptFixture,
-        * utf::description("Encrypting a file with symmetric AES key"))
-{
-    std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::SKEY, "AES", {}, libcdoc::fromHex(AESKey)}
-    };
-    encrypt(2, {checkDataFile(sources[0])}, formTargetFile("AESKeyUsage.cdoc"), rcpts);
-}
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithAESKey, DecryptFixture,
-                     * utf::depends_on("AESKeyUsage/EncryptWithAESKey")
-                     * utf::description("Decrypting a file with with symmetric AES key"))
-{
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("AESKeyUsage.cdoc"), tmpDataPath.string(), libcdoc::fromHex(AESKey));
-}
-BOOST_AUTO_TEST_SUITE_END()
-
-// CDoc2 EC public/private key
-
-BOOST_AUTO_TEST_SUITE(ECKeyUsage)
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithECKey, EncryptFixture,
-        * utf::description("Encrypting a file with EC key"))
+BOOST_AUTO_TEST_SUITE(CDoc2KeyUsage)
+static constexpr string_view CONTAINER("CDoc2KeyUsage.cdoc");
+BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithCDoc2Key, EncryptFixture,
+        * utf::description("Encrypting a CDoc2 file with a key"))
 {
     std::vector<libcdoc::RcptInfo> rcpts {
         {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(ECPubKeyFile)},
-        {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(EC256PubKeyFile)}
+        {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(EC256PubKeyFile)},
+        {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(EC521PubKeyFile)},
+        {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(RSAPubKeyFile)},
+        {libcdoc::RcptInfo::SKEY, "AES", {}, libcdoc::fromHex(AESKey)}
     };
-    encrypt(2, {checkDataFile(sources[0])}, formTargetFile("ECKeyUsage.cdoc"), rcpts);
+    encrypt(2, {checkDataFile(sources[0])}, formTargetFile(CONTAINER), rcpts);
 }
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithECKey, DecryptFixture,
-                     * utf::depends_on("ECKeyUsage/EncryptWithECKey")
-                     * utf::description("Decrypting a file with with EC private key"))
-{
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("ECKeyUsage.cdoc"), tmpDataPath.string(), fetchDataFile(ECPrivKeyFile), 0, false);
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("ECKeyUsage.cdoc"), tmpDataPath.string(), fetchDataFile(EC256PrivKeyFile), 1, true);
-}
-BOOST_AUTO_TEST_SUITE_END()
 
-// CDoc2 RSA public/private key
-
-BOOST_AUTO_TEST_SUITE(RSAKeyUsage)
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithRSAKey, EncryptFixture,
-        * utf::description("Encrypting a file with RSA key"))
+BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithCDoc2Key, DecryptFixture,
+                     * utf::depends_on("CDoc2KeyUsage/EncryptWithCDoc2Key")
+                     * utf::description("Decrypting a CDoc2 file with a key"))
 {
-    std::vector<libcdoc::RcptInfo> rcpts {
-        {libcdoc::RcptInfo::PKEY, {}, {}, fetchDataFile(RSAPubKeyFile)}
-    };
-    encrypt(2, {checkDataFile(sources[0])}, formTargetFile("RSAKeyUsage.cdoc"), rcpts);
-}
-BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithRSAKey, DecryptFixture,
-                     * utf::depends_on("RSAKeyUsage/EncryptWithRSAKey")
-                     * utf::description("Decrypting a file with with RSA private key"))
-{
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("RSAKeyUsage.cdoc"), tmpDataPath.string(), fetchDataFile(RSAPrivKeyFile));
+    decrypt({checkDataFile(sources[0])}, checkTargetFile(CONTAINER), tmpDataPath.string(), fetchDataFile(ECPrivKeyFile), 0, false);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile(CONTAINER), tmpDataPath.string(), fetchDataFile(EC256PrivKeyFile), 1, false);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile(CONTAINER), tmpDataPath.string(), fetchDataFile(EC521PrivKeyFile), 2, false);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile(CONTAINER), tmpDataPath.string(), fetchDataFile(RSAPrivKeyFile), 3, false);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile(CONTAINER), tmpDataPath.string(), libcdoc::fromHex(AESKey), 4, true);
 }
 BOOST_AUTO_TEST_SUITE_END()
 
