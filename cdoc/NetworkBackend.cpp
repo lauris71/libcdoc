@@ -92,6 +92,7 @@ struct Private {
     }
 };
 
+#ifdef HAS_KEYSHARES
 struct MIDSIDResultData {
     int code;
     std::string_view str;
@@ -135,6 +136,7 @@ getMIDSIDDescription(libcdoc::result_t code)
     }
     return {};
 }
+#endif
 
 thread_local std::string error;
 
@@ -150,9 +152,11 @@ libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 	default:
 		break;
 	}
+#ifdef HAS_KEYSHARES
     std::string_view str = getMIDSIDDescription(code);
     if (!str.empty()) return std::string(str);
-    return libcdoc::getErrorStr(code);
+#endif
+   return libcdoc::getErrorStr(code);
 }
 
 //
@@ -312,6 +316,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     return OK;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
 {
@@ -354,6 +359,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
 
     return OK;
 }
+#endif
 
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id)
@@ -392,6 +398,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     return libcdoc::OK;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id)
 {
@@ -475,6 +482,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }
+#endif
 
 ECDSA_SIG *
 ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
@@ -527,6 +535,7 @@ rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *si
     return 1;
 }
 
+#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::showVerificationCode(unsigned int code)
 {
@@ -879,3 +888,4 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
 
     return OK;
 }
+#endif

@@ -84,6 +84,7 @@ struct ToolConf : public JSONConfiguration {
                     return sdata.url;
                 } else if (param == Configuration::KEYSERVER_FETCH_URL) {
                     return sdata.url;
+#ifdef HAS_KEYSHARES
                 } else if (param == Configuration::SHARE_SERVER_URLS) {
                     // Return JSON
                     std::stringstream ss;
@@ -97,6 +98,7 @@ struct ToolConf : public JSONConfiguration {
                     }
                     ss << "]";
                     return ss.str();
+#endif
                 }
             }
         }

@@ -21,7 +21,7 @@ set(PUBLIC_HEADERS
 add_library(cdoc_ver INTERFACE)
 target_compile_definitions(cdoc_ver INTERFACE
     VERSION_STR="${VERSION}"
-    $<$<PLATFORM_ID:Windows>:VERSION=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${BUILD_NUMBER}>
+    $<$<PLATFORM_ID:Windows>:VERSION_NUMBER=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${BUILD_NUMBER}>
     $<$<PLATFORM_ID:Windows>:TARGET_NAME="$<TARGET_PROPERTY:NAME>">
     $<$<PLATFORM_ID:Windows>:$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:APP>>
 )
@@ -50,7 +50,7 @@ add_library(cdoc
     CDoc2Writer.cpp CDoc2Writer.h
     DDocReader.cpp DDocReader.h
     DDocWriter.cpp DDocWriter.h
-    KeyShares.cpp KeyShares.h
+    # KeyShares.cpp KeyShares.h
     XmlReader.cpp XmlReader.h
     XmlWriter.cpp XmlWriter.h
     RcptInfo.h
@@ -67,6 +67,8 @@ set_target_properties(cdoc PROPERTIES
     FRAMEWORK_VERSION 1
     FRAMEWORK "${FRAMEWORK}"
     MACOSX_FRAMEWORK_IDENTIFIER "ee.ria.cdoc"
+    MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    MACOSX_FRAMEWORK_BUNDLE_VERSION ${BUILD_NUMBER}
     MACOSX_RPATH YES
     POSITION_INDEPENDENT_CODE YES
 )
@@ -93,6 +95,9 @@ if(BUILD_TOOLS)
     add_executable(cdoc-tool cdoc-tool.cpp)
     target_include_directories(cdoc-tool PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_link_libraries(cdoc-tool cdoc_ver cdoc)
+    target_link_options(cdoc-tool PRIVATE
+        $<$<PLATFORM_ID:Windows>: /MANIFEST:NO /MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/cdoc-tool.manifest>
+    )
     set_target_properties(cdoc-tool PROPERTIES
         INSTALL_RPATH $<$<PLATFORM_ID:Darwin>:@executable_path/../lib>
     )

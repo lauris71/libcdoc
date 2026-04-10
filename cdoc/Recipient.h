@@ -52,10 +52,12 @@ struct CDOC_EXPORT Recipient {
          * @brief Public key
          */
         PUBLIC_KEY,
+#ifdef HAS_KEYSHARES
         /**
          * @brief n of n shared symmetric key
          */
         KEYSHARE
+#endif
 	};
 
 	Recipient() = default;
@@ -84,10 +86,12 @@ struct CDOC_EXPORT Recipient {
      * @brief The recipient's certificate (if present)
      */
     std::vector<uint8_t> cert;
+#ifdef HAS_KEYSHARES
     /**
      * @brief The recipient id for share server (PNOEE-XXXXXXXXXXX)
      */
     std::string id;
+#endif
     /**
      * @brief The keyserver or share server list id (if present)
      */
@@ -123,11 +127,13 @@ struct CDOC_EXPORT Recipient {
      * @return true if type is SERVER
      */
     bool isKeyServer() const { return (type == Type::PUBLIC_KEY) && !server_id.empty(); }
+#ifdef HAS_KEYSHARES
     /**
      * @brief check whether Recipient is keyshare
      * @return true if type is KEYSHARE
      */
     bool isKeyShare() const { return type == Type::KEYSHARE; }
+#endif
 
     /**
      * @brief Clear all values and set type to NONE
@@ -208,6 +214,7 @@ struct CDOC_EXPORT Recipient {
      */
     static Recipient makeServer(const Lock &lock, std::string server_id);
 
+#ifdef HAS_KEYSHARES
     /**
      * @brief Create new keyshare recipient
      * 
@@ -217,6 +224,7 @@ struct CDOC_EXPORT Recipient {
      * @return Recipient a new Recipient structure
      */
     static Recipient makeShare(std::string label, std::string server_id, std::string recipient_id);
+#endif
 
     /**
      * @brief Get the label for this recipient

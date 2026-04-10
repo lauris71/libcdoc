@@ -104,7 +104,7 @@ int64_t CDoc1Writer::Private::writeDocument(bool use_ddoc, const std::vector<Rec
             });
         }));
         return writeElement(DENC, "EncryptionProperties", [&] -> int64_t {
-            RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "LibraryVersion"}}, "cdoc|0.0.1"));
+            RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "LibraryVersion"}}, VERSION_STR));
             RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "DocumentFormat"}}, documentFormat));
             RET_ERROR(writeTextElement(DENC, "EncryptionProperty", {{"Name", "Filename"}}, use_ddoc ? "tmp.ddoc" : files.at(0).name));
             for(const FileEntry &file: files)

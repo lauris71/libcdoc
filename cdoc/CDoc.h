@@ -31,7 +31,6 @@ namespace libcdoc {
  */
 using result_t = int64_t;
 
-
 /**
  * @brief The public key type
  */
@@ -140,8 +139,19 @@ enum {
     UNSPECIFIED_ERROR = -199,
 };
 
+/**
+ * @brief Get the standard text description of error code
+ * 
+ * @param code the error code
+ * @return the text description
+ */
 CDOC_EXPORT std::string getErrorStr(int64_t code);
 
+/**
+ * @brief Get the library version
+ * 
+ * @return The version string
+ */
 CDOC_EXPORT std::string getVersion();
 
 // Logging interface
@@ -177,15 +187,33 @@ enum LogLevel : uint8_t
     LEVEL_DEBUG,
 
     /**
-     * @brief Most verbose level. Used for development, NOP in production code.
+     * @brief The most verbose level. Present only in development builds, ignored in production code.
      */
     LEVEL_TRACE
 };
 
 class Logger;
 
+/**
+ * @brief Set the Logger object for library
+ * 
+ * @param logger the Logger implementation
+ */
 CDOC_EXPORT void setLogger(Logger *logger);
+/**
+ * @brief Set logging level
+ * 
+ * @param level the requested logging level
+ */
 CDOC_EXPORT void setLogLevel(LogLevel level);
+/**
+ * @brief Log a message to the library logging system
+ * 
+ * @param level logging level
+ * @param file the source file name
+ * @param line the line in source file
+ * @param msg the message
+ */
 CDOC_EXPORT void log(LogLevel level, std::string_view file, int line, std::string_view msg);
 
 /**
@@ -197,10 +225,6 @@ struct FileInfo {
     std::string name;
     int64_t size;
 };
-
-#ifdef VERSION
-#undef VERSION
-#endif
 
 namespace CDoc2 {
 namespace Label {

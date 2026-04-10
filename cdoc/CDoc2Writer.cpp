@@ -305,6 +305,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             } else {
                 fb_rcpts.push_back(createSymmetricKeyCapsule(builder, rcpt, salt, xor_key));
             }
+#ifdef HAS_KEYSHARES
         } else if (rcpt.isKeyShare()) {
             std::string url_list = conf->getValue(rcpt.server_id, libcdoc::Configuration::SHARE_SERVER_URLS);
             if (url_list.empty())
@@ -388,6 +389,7 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                                                          builder.CreateVector(xor_key),
                                                          cdoc20::header::FMKEncryptionMethod::XOR);
             fb_rcpts.push_back(offset);
+#endif
         } else {
             FAIL("Invalid recipient type", libcdoc::UNSPECIFIED_ERROR);
         }
