@@ -16,13 +16,9 @@
  *
  */
 
-#ifndef __LOGGER_H__INCLUDED__
-#define __LOGGER_H__INCLUDED__
+#pragma once
 
-#include <cdoc/Exports.h>
 #include <cdoc/CDoc.h>
-
-#include <string>
 
 namespace libcdoc
 {
@@ -33,6 +29,8 @@ namespace libcdoc
 class CDOC_EXPORT Logger
 {
 public:
+    virtual ~Logger() noexcept = default;
+
     /**
      * @brief Logs given message with given severity, file name and line number.
      * 
@@ -55,7 +53,7 @@ public:
      * to LEVEL_INFO (default), then LEVEL_FATAL, LEVEL_ERROR, LEVEL_WARNING and LEVEL_INFO
      * messages are logged, but not LEVEL_DEBUG or LEVEL_TRACE messages.
      */
-    void setMinLogLevel(LogLevel level) noexcept { min_level = level; }
+    constexpr void setMinLogLevel(LogLevel level) noexcept { min_level = level; }
 
 protected:
     /**
@@ -79,5 +77,3 @@ protected:
 };
 
 }
-
-#endif
