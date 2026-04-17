@@ -103,9 +103,7 @@ struct CDoc2Reader::Private {
     static void buildLock(Lock& lock, const cdoc20::header::RecipientRecord& recipient);
 };
 
-CDoc2Reader::~CDoc2Reader()
-{
-}
+CDoc2Reader::~CDoc2Reader() = default;
 
 const std::vector<Lock>&
 CDoc2Reader::getLocks()
@@ -385,7 +383,6 @@ CDoc2Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer
         result = nextFile(name, size);
     }
     if (result != libcdoc::END_OF_STREAM) {
-        setLastError(priv->tar->getLastErrorStr(result));
         LOG_ERROR("{}", last_error);
         return result;
     }
@@ -594,7 +591,7 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
             for (auto cshare : *capsule->shares()) {
                 std::string id = cshare->share_id()->str();
                 std::string url = cshare->server_base_url()->str();
-                std::string str = url + "," + id;
+                std::string str = url + ',' + id;
                 LOG_DBG("Keyshare: {}", str);
                 strs.push_back(std::move(str));
             }
@@ -624,7 +621,7 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
     setLastError(t_("Invalid CDoc 2.0 header"));
 
     uint8_t in[libcdoc::CDoc2::LABEL.size()];
-    if (priv->_src->read(in, libcdoc::CDoc2::LABEL.size()) != libcdoc::CDoc2::LABEL.size()) {
+    if (std::cmp_not_equal(priv->_src->read(in, libcdoc::CDoc2::LABEL.size()) , libcdoc::CDoc2::LABEL.size())) {
         LOG_ERROR("{}", last_error);
         return;
     }
@@ -634,8 +631,8 @@ CDoc2Reader::CDoc2Reader(libcdoc::DataSource *src, bool take_ownership)
     }
 
     // Read 32-bit header length in big endian order
-    uint8_t c[4];
-    if (priv->_src->read(c, 4) != 4) {
+    std::array<uint8_t, 4> c{};
+    if (std::cmp_not_equal(priv->_src->read(c.data(), c.size()) , c.size())) {
         LOG_ERROR("{}", last_error);
         return;
     }
@@ -689,7 +686,7 @@ bool
 CDoc2Reader::isCDoc2File(libcdoc::DataSource *src)
 {
     std::array<uint8_t,libcdoc::CDoc2::LABEL.size()> in {};
-    if (src->read(in.data(), in.size()) != in.size()) {
+    if (std::cmp_not_equal(src->read(in.data(), in.size()) , in.size())) {
         LOG_DBG("CDoc2Reader::isCDoc2File: Cannot read tag");
         return false;
     }
