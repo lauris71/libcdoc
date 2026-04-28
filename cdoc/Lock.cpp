@@ -30,18 +30,23 @@ namespace libcdoc {
 std::string
 Lock::getString(Params key) const
 {
-    const std::vector<uint8_t>& bytes = params.at(key);
-    return {(const char *) bytes.data(), bytes.size()};
+    if (params.contains(key)) {
+        const std::vector<uint8_t>& bytes = params.at(key);
+        return {(const char *) bytes.data(), bytes.size()};
+    }
+    return {};
 }
 
 int32_t
 Lock::getInt(Params key) const
 {
-	const std::vector<uint8_t>& bytes = params.at(key);
 	int32_t val = 0;
-	for (int i = 0; (i < bytes.size()) && (i < 4); i++) {
-		val = (val << 8) | bytes.at(i);
-	}
+    if (params.contains(key)) {
+        const std::vector<uint8_t>& bytes = params.at(key);
+        for (int i = 0; (i < bytes.size()) && (i < 4); i++) {
+            val = (val << 8) | bytes.at(i);
+        }
+    }
 	return val;
 }
 
@@ -87,6 +92,8 @@ Lock::parseLabel(const std::string& label)
     }
 
     auto range_to_sv = [](auto range) constexpr {
+        if (range.empty())
+            return std::string_view();
         return std::string_view(&*range.begin(), std::ranges::distance(range));
     };
     for (const auto &part : std::ranges::split_view(label_to_prcss, '&'))

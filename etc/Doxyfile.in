@@ -955,8 +955,7 @@ INPUT = @PROJECT_SOURCE_DIR@/cdoc/CDoc.h \
     @PROJECT_SOURCE_DIR@/cdoc/NetworkBackend.h \
     @PROJECT_SOURCE_DIR@/cdoc/PKCS11Backend.h \
     @PROJECT_SOURCE_DIR@/cdoc/WinBackend.h \
-    @PROJECT_SOURCE_DIR@/cdoc/ILogger.h \
-    @PROJECT_SOURCE_DIR@/cdoc/ConsoleLogger.h \
+    @PROJECT_SOURCE_DIR@/cdoc/Logger.h \
     @PROJECT_SOURCE_DIR@/doc/intro.md \
     @PROJECT_SOURCE_DIR@/doc/overview.md \
     @PROJECT_SOURCE_DIR@/doc/usage.md \
