@@ -217,7 +217,6 @@ struct ToolNetwork : public libcdoc::NetworkBackend {
 
     libcdoc::result_t signTLS(std::vector<uint8_t>& dst, libcdoc::CryptoBackend::HashAlgorithm algorithm, const std::vector<uint8_t> &digest) override final {
         if (rcpt_idx >= crypto->rcpts.size()) rcpt_idx = 0;
-        const libcdoc::RcptInfo& rcpt = crypto->rcpts[rcpt_idx];
         return crypto->p11->sign(dst, algorithm, digest, rcpt_idx);
     }
 
