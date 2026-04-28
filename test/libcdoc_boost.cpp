@@ -73,6 +73,12 @@ const map<string, string> ExpectedParsedLabel {
     {"cn", "JÕEORG,JAAK-KRISTJAN,38001085718"}
 };
 
+static string decodeName(fs::path path)
+{
+    auto name = path.u8string();
+    return {reinterpret_cast<const char*>(name.data()), name.size()};
+}
+
 /**
  * @brief The base class for Test Fixtures.
  */
@@ -529,7 +535,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithPasswordAndLabel, DecryptFixture,
         * utf::description("Decrypting a file with password and given label"))
 {
     libcdoc::RcptInfo rcpt {.type=libcdoc::RcptInfo::LOCK, .label=Label, .secret=std::vector<uint8_t>(Password.cbegin(), Password.cend())};
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), tmpDataPath, rcpt);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), decodeName(tmpDataPath), rcpt);
 }
 BOOST_AUTO_TEST_SUITE_END()
 

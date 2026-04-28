@@ -147,7 +147,7 @@ operator<<(std::ostream& escaped, urlEncode src)
             continue;
         }
         // Keep alphanumeric and other accepted characters intact
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+        if (isalnum(uint8_t(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
             escaped << c;
             continue;
         }

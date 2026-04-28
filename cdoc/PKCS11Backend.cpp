@@ -56,7 +56,7 @@ public:
 	bool load(const std::string &driver)
 	{
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
-		return (h = LoadLibraryW(std::filesystem::u8path(driver).c_str())) != 0;
+        return (h = LoadLibraryW(std::filesystem::path(encodeName(driver)).c_str())) != 0;
 #else
 		return false;
 #endif

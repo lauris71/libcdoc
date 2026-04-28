@@ -86,12 +86,12 @@ getVersion()
 class ConsoleLogger : public Logger
 {
 public:
-    virtual void logMessage(LogLevel level, std::string_view file, int line, std::string_view message) override
+    void logMessage(LogLevel level, std::string_view file, int line, std::string_view message) override
     {
         // We ignore by default the file name and line number, and call LogMessage with the level and message.
         std::ostream& ofs = (level == LEVEL_INFO) ? std::cout : std::cerr;
         if (!file.empty()) {
-            ofs << std::filesystem::path(file).filename().string() << ':' << line << " " << message << '\n';
+            ofs << std::filesystem::path(encodeName(file)).filename().string() << ':' << line << " " << message << '\n';
         } else {
             ofs << message << '\n';
         }

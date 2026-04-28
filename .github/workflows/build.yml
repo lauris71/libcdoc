@@ -23,6 +23,9 @@ jobs:
     steps:
     - name: Install dependencies
       run: |
+        for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          [ -f "$f" ] && sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' "$f"
+        done
         echo 'path-exclude=/usr/share/man/*'      >  /etc/dpkg/dpkg.cfg.d/99-nodocs
         echo 'path-exclude=/usr/share/doc/*'      >> /etc/dpkg/dpkg.cfg.d/99-nodocs
         echo 'path-exclude=/usr/share/doc-base/*' >> /etc/dpkg/dpkg.cfg.d/99-nodocs
@@ -136,7 +139,7 @@ jobs:
         key: vcpkg-${{ matrix.image }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json') }}
     - name: Install dependencies
       run: winget install --silent --accept-source-agreements --accept-package-agreements swig doxygen
-    - uses: actions/setup-java@v4
+    - uses: actions/setup-java@v5
       with:
         distribution: 'temurin'
         java-version: '17'

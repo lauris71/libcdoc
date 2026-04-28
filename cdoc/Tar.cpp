@@ -231,7 +231,7 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
             paxData += toPaxRecord("path", name);
 		if(size > 07777777)
 			paxData += toPaxRecord("size", std::to_string(size));
-		std::filesystem::path path(name);
+        std::filesystem::path path(encodeName(name));
 		if (path.has_parent_path()) {
 			path = path.parent_path() / "PaxHeaders.X" / path.filename();
 		} else {

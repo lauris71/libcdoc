@@ -92,6 +92,8 @@ Lock::parseLabel(const std::string& label)
     }
 
     auto range_to_sv = [](auto range) constexpr {
+        if (range.empty())
+            return std::string_view();
         return std::string_view(&*range.begin(), std::ranges::distance(range));
     };
     for (const auto &part : std::ranges::split_view(label_to_prcss, '&'))
