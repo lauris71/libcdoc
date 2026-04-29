@@ -212,7 +212,7 @@ Recipient::validate() const
     switch(type) {
         case SYMMETRIC_KEY:
             // Either user-defined label or LABEL property is required
-            return !label.empty() || lbl_parts.contains("CDoc2::Label::LABEL");
+            return !label.empty() || lbl_parts.contains(std::string(CDoc2::Label::LABEL));
         case PUBLIC_KEY:
             // Public key should not be empty
             return !rcpt_key.empty();
