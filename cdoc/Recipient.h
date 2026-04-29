@@ -293,6 +293,20 @@ struct CDOC_EXPORT Recipient {
      */
     bool validate() const;
 
+    /**
+     * @brief Set a property for automatic label generation
+     * 
+     * @param key the property name
+     * @param value the property value
+     */
+    void setLabelValue(std::string_view key, std::string_view value) {
+        if (!value.empty()) {
+            lbl_parts[std::string(key)] = value;
+        } else {
+            lbl_parts.erase(std::string(key));
+        }
+    }
+
     bool operator== (const Recipient& other) const = default;
 protected:
 	Recipient(Type _type) : type(_type) {};
