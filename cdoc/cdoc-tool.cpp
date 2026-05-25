@@ -36,7 +36,6 @@ print_version(ostream& ofs)
 {
     ofs << "cdoc-tool version: " << VERSION_STR << endl;
     ofs << "libcdoc version: " << libcdoc::getVersion() << endl;
-    ofs.flush();
 }
 
 static void
