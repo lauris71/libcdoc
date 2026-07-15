@@ -466,6 +466,43 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
 libcdoc::result_t
 libcdoc::NetworkBackend::authenticateForShares(std::vector<uint8_t>& dst)
 {
+    static const std::string url = "https://cdoc2-auth.test.riaint.ee";
+    // Start authentication
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    LOG_DBG("Starting client: {} {}", host, port);
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    result = setPeerCertificates(cli, this, buildURL(host, port));
+    if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    picojson::object obj = {
+        {"identifier", picojson::value("etsi/PNOEE-37104082710")},
+    };
+    picojson::value req_json(obj);
+    std::string req_str = req_json.serialize();
+    LOG_DBG("POST authentication request to: {}", url);
+    LOG_DBG("{}", req_str);
+
+    std::string full = path + "/auth/start";
+    httplib::Headers hdrs;
+    httplib::Response rsp;
+    result = post(cli, full, hdrs, req_str, rsp);
+    if (result != libcdoc::OK) return result;
+
+    LOG_DBG("Response: {}", rsp.body);
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+
     return NOT_IMPLEMENTED;
 }
 

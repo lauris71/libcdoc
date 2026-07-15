@@ -254,6 +254,16 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_ERROR("{}", last_error);
             return libcdoc::DATA_FORMAT_ERROR;
         }
+
+        // Get authentication token
+        std::vector<uint8_t> auth_token;
+        if (auto rv = network->authenticateForShares(auth_token); rv != OK) {
+            setLastError(network->getLastErrorStr(rv));
+            LOG_ERROR("{}", last_error);
+            return rv;
+        }
+        return NOT_IMPLEMENTED;
+
         std::vector<ShareData> shares;
         for (auto& str : strs) {
             std::vector<std::string> parts = split(str, ',');
