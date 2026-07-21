@@ -9,17 +9,14 @@
       "default-features": false,
       "platform": "!osx"
     },
-    {
-      "name": "flatbuffers",
-      "platform": "!osx"
-    },
-    {
-      "name": "openssl",
-      "platform": "!osx"
-    }
+    "flatbuffers",
+    "openssl"
   ],
   "features": {
-    "tests": { "description": "Build tests", "dependencies": ["boost-test"] }
+    "tests": {
+      "description": "Build tests",
+      "dependencies": [{ "name": "boost-test", "platform": "!ios & !android" }]
+    }
   },
   "builtin-baseline": "67b5ee32c608c87971eed243d4bff140568ebe53",
   "vcpkg-configuration": {
