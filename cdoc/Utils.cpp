@@ -45,6 +45,14 @@ fromBase64(std::string_view data)
     return std::vector<uint8_t>(str.cbegin(), str.cend());
 }
 
+std::vector<uint8_t>
+fromBase64URL(std::string_view data)
+{
+	auto padded = jwt::base::pad<jwt::alphabet::base64url>(std::string(data));
+	auto str = jwt::base::decode<jwt::alphabet::base64url>(padded);
+    return std::vector<uint8_t>(str.cbegin(), str.cend());
+}
+
 double
 getTime()
 {

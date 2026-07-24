@@ -22,6 +22,7 @@
 #include "Crypto.h"
 #include "CryptoBackend.h"
 #include "Utils.h"
+#include "KeyShares.h"
 
 #define OPENSSL_SUPPRESS_DEPRECATED
 
@@ -156,18 +157,18 @@ static constexpr std::string_view
 hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
 {
     switch (algo) {
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_224: return "SHA224";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: return "SHA256";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: return "SHA384";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: return "SHA512";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: return "SHA-256";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: return "SHA-384";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: return "SHA-512";
+    default:
+        break;
     }
     return {};
 }
 
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_224) == "SHA224");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_256) == "SHA256");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_384) == "SHA384");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_512) == "SHA512");
+static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_256) == "SHA-256");
+static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_384) == "SHA-384");
+static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_512) == "SHA-512");
 // Out-of-range value (e.g. coming from a SWIG-generated foreign caller)
 // must produce an empty result rather than reading past the array.
 static_assert(hashAlgorithmToSidMidName(static_cast<libcdoc::CryptoBackend::HashAlgorithm>(99)).empty());
@@ -274,13 +275,22 @@ static libcdoc::result_t
 post(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, const std::string& req, httplib::Response& rsp)
 {
     // Capture TLS and HTTP errors
-    libcdoc::LOG_DBG("POST: {} {}", path, req);
+    LOG_DBG("POST: {}", path);
+    LOG_TRACE("  Body: {}", req);
+    for (auto h : hdrs) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     httplib::Result res = cli.Post(path, hdrs, req, "application/json");
     if (!res) {
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
     int status = res->status;
+    LOG_DBG("Status: {}", status);
+    LOG_TRACE("  Body: {}", res->body);
+    for (auto h : res->headers) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     if ((status < 200) || (status >= 300)) {
         error = FORMAT("Http status {}", status);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
@@ -374,56 +384,6 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     return OK;
 }
 
-#ifdef HAS_KEYSHARES
-libcdoc::result_t
-libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
-{
-    // Create KeyShare container
-    picojson::object obj = {
-        {"share", picojson::value(libcdoc::toBase64(share))},
-        {"recipient", picojson::value(recipient)}
-    };
-    picojson::value req_json(obj);
-    std::string req_str = req_json.serialize();
-    LOG_DBG("POST keyshare to: {}", url);
-    LOG_DBG("{}", req_str);
-
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
-
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
-
-    std::string full = path + "/key-shares";
-    httplib::Headers hdrs;
-    httplib::Response rsp;
-    result = post(cli, full, hdrs, req_str, rsp);
-    if (result != libcdoc::OK) return result;
-
-    std::string location = rsp.get_header_value("Location");
-    if (location.empty()) {
-        error = FORMAT("No Location header in response");
-        return NETWORK_ERROR;
-    }
-    constexpr std::string_view prefix = "/key-shares/";
-    if (location.compare(0, prefix.size(), prefix) != 0) {
-        error = FORMAT("Unexpected Location header value");
-        return NETWORK_ERROR;
-    }
-    error = {};
-
-    dst.assign(location.cbegin() + prefix.size(), location.cend());
-    LOG_DBG("Share: {}", std::string((const char *) dst.data(), dst.size()));
-
-    return OK;
-}
-#endif
-
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id)
 {
@@ -464,8 +424,146 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
 
 #ifdef HAS_KEYSHARES
 libcdoc::result_t
-libcdoc::NetworkBackend::authenticateForShares(std::vector<uint8_t>& dst)
+libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
 {
+    // Create KeyShare container
+    LOG_DBG("Creating keyshare for recipient: {}", recipient);
+    picojson::object obj = {
+        {"share", picojson::value(libcdoc::toBase64(share))},
+        {"recipient", picojson::value(recipient)}
+    };
+    picojson::value req_json(obj);
+    std::string req_str = req_json.serialize();
+    LOG_DBG("POST keyshare to: {}", url);
+    LOG_TRACE_KEY("{}", req_str);
+
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    result = setPeerCertificates(cli, this, buildURL(host, port));
+    if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    std::string full = path + "/key-shares";
+    httplib::Headers hdrs;
+    httplib::Response rsp;
+    result = post(cli, full, hdrs, req_str, rsp);
+    if (result != libcdoc::OK) return result;
+
+    std::string location = rsp.get_header_value("Location");
+    if (location.empty()) {
+        error = FORMAT("No Location header in response");
+        return NETWORK_ERROR;
+    }
+    constexpr std::string_view prefix = "/key-shares/";
+    if (location.compare(0, prefix.size(), prefix) != 0) {
+        error = FORMAT("Unexpected Location header value");
+        return NETWORK_ERROR;
+    }
+    error = {};
+
+    dst.assign(location.cbegin() + prefix.size(), location.cend());
+    LOG_DBG("Share: {}", std::string((const char *) dst.data(), dst.size()));
+
+    return OK;
+}
+
+namespace libcdoc {
+
+struct AuthResponse {
+    std::string status;
+    std::string endResult;
+    std::string sessionToken;
+    std::string cert;
+};
+
+static result_t
+waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_proc_uuid, double seconds)
+{
+    httplib::Headers hdrs;
+
+    double end = getTime() + seconds;
+    std::string full = path + auth_proc_uuid;
+    LOG_DBG("SID/MID authentication query path: {}", full);
+    while (getTime() < end) {
+        picojson::value rsp;
+        result_t result = get(cli, hdrs, full, rsp);
+        if (result != OK) return result;
+        if (!rsp.is<picojson::object>()) {
+            error = "Response is not a JSON object";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        // State
+        picojson::value v = rsp.get("status");
+        if (!v.is<std::string>()) {
+            error = "Status is not a string";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        dst.status = v.get<std::string>();
+        LOG_DBG("Status: {}", dst.status);
+        if (dst.status == "RUNNING") {
+            // Pause for 0.5 seconds and repeat
+            std::chrono::milliseconds duration(500);
+            std::this_thread::sleep_for(duration);
+            continue;
+        } else if (dst.status != "COMPLETE") {
+            error = FORMAT("Invalid SmartID state: {}", dst.status);
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        // State is complete, check for end result
+        v = rsp.get("endResult");
+        if (!v.is<std::string>()) {
+            error = "endResult is not a JSON object";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        dst.endResult = v.get<std::string>();
+        LOG_DBG("EndResult: {}", dst.endResult);
+        if (dst.endResult != "OK") {
+            LOG_WARN("EndResult is not OK: {}", dst.endResult);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        // Signature
+        v = rsp.get("sessionToken");
+        if (!v.is<std::string>()) {
+            error = "sessionToken is not a string";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        dst.sessionToken = v.get<std::string>();
+        LOG_DBG("Session token: {}", dst.sessionToken);
+
+        // Certificate
+        v = rsp.get("signingCertificate");
+        if (!v.is<std::string>()) {
+            error = "signingCertificate is not a string";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        dst.cert = v.get<std::string>();
+        LOG_DBG("Certificate: {}", dst.cert);
+        error = {};
+        return OK;
+    }
+    // Timeout
+    error = "Timeout waiting SID/MID result";
+    LOG_WARN("{}", error);
+    return UNSPECIFIED_ERROR;
+}
+
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::authenticateForShares(std::string& token, std::string& cert)
+{
+#if 1
     static const std::string url = "https://cdoc2-auth.test.riaint.ee";
     // Start authentication
     std::string host, path;
@@ -493,8 +591,22 @@ libcdoc::NetworkBackend::authenticateForShares(std::vector<uint8_t>& dst)
     httplib::Response rsp;
     result = post(cli, full, hdrs, req_str, rsp);
     if (result != libcdoc::OK) return result;
-
+    LOG_DBG("Status: {}", rsp.status);
     LOG_DBG("Response: {}", rsp.body);
+
+    std::string location = rsp.get_header_value("Location");
+    LOG_DBG("Location: {}", location);
+    if (location.empty()) {
+        error = FORMAT("No Location header in response");
+        return NETWORK_ERROR;
+    }
+    constexpr std::string_view prefix = "/auth/status/";
+    if (location.compare(0, prefix.size(), prefix) != 0) {
+        error = FORMAT("Unexpected Location header value");
+        return NETWORK_ERROR;
+    }
+    location.erase(0, prefix.size());
+
     picojson::value rsp_json;
     std::string parse_err = picojson::parse(rsp_json, rsp.body);
     if (!parse_err.empty()) {
@@ -502,12 +614,79 @@ libcdoc::NetworkBackend::authenticateForShares(std::vector<uint8_t>& dst)
         LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    picojson::value w = rsp_json.get("vc");
+    if (!w.is<std::string>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    std::string ver_code  = w.get<std::string>();
+    LOG_DBG("Verification code: {}", ver_code);
+    SIDMIDFeedback fb = {
+        .code = (int) std::strtold(ver_code.c_str(), nullptr),
+    };
+    result = showFeedback(fb);
+    if (result != OK) return result;
 
-    return NOT_IMPLEMENTED;
+    AuthResponse auth_rsp;
+    result = waitForAuthResult(auth_rsp, cli, path + "/auth/status/", location, 60);
+    if (result != OK) return result;
+
+    cert = auth_rsp.cert;
+
+    auto parts = split(auth_rsp.sessionToken, '~');
+#else
+    token = "eyJraWQiOiJEN3Y5aF8wb1RuQUxxNmx6aVJPYUNGRzBVbFRCYmdPQTVMSGpfYkoteVo4IiwidHlwIjoidm5kLmNkb2MyLnNlc3Npb24tdG9rZW4udjIrc2Qtand0IiwiYWxnIjoiRVMyNTYifQ.eyJycENoYWxsZW5nZSI6ImhSV1hodWhueDJ6RDgrQ0NvSk1sZERRMkNyOW8yRmFhNStmU1ZVSkVSTVQ5YW1mVlFPUEp0UGRsaW9yU01PbWNaY2tNdWt3OHZwR3FhQVdGY0JvcDhRPT0iLCJzdWIiOiJldHNpL1BOT0VFLTM3MTA0MDgyNzEwIiwic2lnbmF0dXJlIjp7InZhbHVlIjoiQXlUd3JhOW10VGt6SUxodi9iQ0NhaUI5QWtNcktTRnVKT0FkKzZTZVhjeFJTTTVvSVFxWDlyZlVHNTB6UFpqZlYrQ3RQUHlnc3paZVpBODVFNm1NMzU5SjFIOGJVZDZiVHBCdGNTcWtLTzVtWFNzbXJmT2NYdDdjZWJTdW1MZ0liQ1VJckxISDA2QjVXeldiWjVYcmMzVkhscVBqVjVGbkhOejVtMUdyb3lKNkoyWHpNTkNmMVZNU1JtcC9meU16dWd5VXcxS1pqUlhTcnh3Wk5TRGhyMzVRL1l2NmVFMVdLdnZudnBjTTBMQWJobGxOZDhBSmdXMUhFZThrNGZYWTlKemxYN0YyWk5mdXM5a1MzQmNLMzhZZ0FKRlk4d0JYQzc5ODZQL0xOcjYxK1pOSkxUVUlGWU0vZHRudTcxdzhkWEo4TXVGYm5tbEdGVERuVlBjQXlSZmw5ZHdnS1Yvdmg3SFBWTlJ6d21TVjBCU1cwL1p4RVlFcmdMQ0lXaVJaSEFzYzBZVHppN0UycjVTV1A1b05KVVNtbnRHM0RpRmpWNUMwUERRa2hFUHpQYlhaYWg4MHhMQ21yT1dUelp2dVdXYnFRcHUwalR6SDRLOTc1bStlMlpRMEZMZEpsU3RYa0FlSTAwcE5va25LQW1MTkRkREh4Q2xVYVlJbzN5aDlFVkc0RlhGaTlqTnBiOWdKMGNEWEJmR3hpbENXUmVUZkF2TkE3c0lST0lhNjA0YmhjWmcyaTRybWxxYjdJNS9jYVQ1Y3lDb1pHSlZxa0lyVmtGa3ZDL1hjYzBzTy9Cdmpaa0doTWNWNnZEMU01eFVjcXNKK1d3ZHlXMjhyOURQTUZjdXRoRTl6QVVLbHY4OE9aRlFkc2xBeFJ6UEJSNHhDTnkvUm5WWVRSL1FmS0wrV1l3MTcyMU0zZ1d2WURMbXoyZ3VrWlBqNHBncklDTXU2cFV3SW9kUDNROTRROW5IeGtLNE5aWFY1eStMVjJNckNXVWZTWWh6dHNuVlJXWlhCMmplNFd5Yyt0b1IvcjNoQlpZL3FRa3BxTEhQcnExcDBjY2hnMEhtM2RzQm5RYzJPL3FKYUUyTGdYQVBYVVZ3cmJiVkFzb2NZc2tHeEF6UjdpWmlRQ2FVSkE0Um5zTGNkaitLT20zc0lHMVJ5azE3czNoeG5CYkZocGRHQnp5WWxSR25ncm5heW1CU3J3bDRBeVhoQTE1M09YbEp5b01EQkU0SmkxYlJwSXpwT1ZpSm45T2M0MHhQK1hpbU5MM0tnMm9LcS9EZEk3Z1Evdmd0WkFOMFFsU0pNcHo1TlJlRWRuTGgyUUt3V2duSGtYdGJ3ZUFXNFJIdml2M1lrNmtRYiIsInNlcnZlclJhbmRvbSI6IkVsMFVSWW5vdUNWWEcrVFpDS0lTNko4SyIsInVzZXJDaGFsbGVuZ2UiOiJNcEFrOTN3YTJFUEhGMW9wSmFQRVRHbTNjZDNNX29VYlBnNHRuVFZwZVRJIiwic2lnbmF0dXJlQWxnb3JpdGhtIjoicnNhc3NhLXBzcyIsImZsb3dUeXBlIjoiTm90aWZpY2F0aW9uIiwic2lnbmF0dXJlQWxnb3JpdGhtUGFyYW1ldGVycyI6eyJoYXNoQWxnb3JpdGhtIjoiU0hBLTI1NiIsIm1hc2tHZW5BbGdvcml0aG0iOnsiYWxnb3JpdGhtIjoiaWQtbWdmMSIsInBhcmFtZXRlcnMiOnsiaGFzaEFsZ29yaXRobSI6IlNIQS0yNTYifX0sInNhbHRMZW5ndGgiOjMyLCJ0cmFpbGVyRmllbGQiOiIweGJjIn19LCJpc3MiOiJodHRwczovL2Nkb2MyLWF1dGgudGVzdC5yaWFpbnQuZWUiLCJzY2hlbWVOYW1lIjoic21hcnQtaWQtZGVtbyIsInNpZ25hdHVyZVByb3RvY29sIjoiUlNBU1NBLVBTUytBQ1NQX1YyIiwiX3NkIjpbIlZhb3ZCN0RYSm44Q21aOEFSd2dvODJNR2pPSkc2VTA4Zm9VVXl3UlJzaVkiXSwiaW50ZXJhY3Rpb25zRGlnZXN0IjoiWG9pN1F1eDB0NmxFaXN6MU9Gc1dIUGdhM1l6Q2QzQ2ROQ0t1VE91UHZBWT0iLCJfc2RfYWxnIjoic2hhLTI1NiIsImV4cCI6MTc4NDcwMjI2OCwiaWF0IjoxNzg0NjE1ODY4LCJpbnRlcmFjdGlvblR5cGVVc2VkIjoiY29uZmlybWF0aW9uTWVzc2FnZUFuZFZlcmlmaWNhdGlvbkNvZGVDaG9pY2UiLCJycE5hbWUiOiJERU1PIn0.ekJ-J--6wuLhvsmxwEOpOLqjYCV1QMiYaUjwbAsq6Nt6qNdvMy81ArUCyN5l3CENfUKcgcQdw3HtQxuPEk0_PQ~WyJMdlRKN3VaNF9ValBJU3JFc3h3Wmp3IiwiYXVkIixbeyIuLi4iOiJYTnR2amNRZEhTbkhNNWdPWDhwcXpHWHUzMzY4VE0xNExjS2h5Z0dzZWM0In0seyIuLi4iOiJzX1d1aDFqenVFbmo3ZVZVdldtcXIzaURVSmNMcGlkQ1BpZDVYOXFuWi0wIn0seyIuLi4iOiIyVmRsWGpaMU9DcndwbGpGYURMMFJ2N3VZNEtvZ1hoQWdobjBTM1VRZ2dnIn1dXQ~WyI3RmxpMXhPd3hhQXdBWVZkR1ZJVkVBIiwiaHR0cHM6Ly9jZG9jMi1ycC50ZXN0LnJpYWludC5lZS9zZXNzaW9uX25vbmNlL3EyaUxJS2VveXpEQ1RyeGRJbVk0aUEiXQ~WyJfVUpmQ1hDbXJyMml1N3N4NXo3QWZ3IiwiaHR0cHM6Ly9jZG9jMi1zaGFyZXMudGVzdC5yaWFpbnQuZWUvc2Vzc2lvbl9ub25jZS9GTGw2b3dramlJZVMwVzBqUHlLNll3Il0~WyJQMURtczZFbmk3LU4yS0Y0OXl2SUZBIiwiaHR0cHM6Ly9jZG9jMi1zaGFyZXNleHRlcm5hbC50ZXN0LnJpYWludC5lZS9zZXNzaW9uX25vbmNlL3hHdzVxR1g1alFLOUlFVi1CbVZKZWciXQ~";
+    cert = "MIIGuzCCBkCgAwIBAgIQDV-hZUN9xS5yEzxpvHOPejAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkGA1UEBhMCRUUwHhcNMjUxMDI5MDcwOTEwWhcNMjgxMDI4MDYwOTEwWjBpMQswCQYDVQQGEwJFRTEZMBcGA1UEAwwQS0FQTElOU0tJLExBVVJJUzESMBAGA1UEBAwJS0FQTElOU0tJMQ8wDQYDVQQqDAZMQVVSSVMxGjAYBgNVBAUTEVBOT0VFLTM3MTA0MDgyNzEwMIIDIjANBgkqhkiG9w0BAQEFAAOCAw8AMIIDCgKCAwEAkOP8-thy1C0eG_CuqA5stRrjUaD5T07Q7-JZcZcWPnRTBROZizhehHozd-Kqxs_PH4I2lFCmGx8QgoeIba4VO7NeZ-DacaQtfGHlX85pYpzJH3l31e-xs_oQsW9CIp07MpkfcbuB16T2X88S2_YCFC2pbgxJg3CpF4ejL-zjT18SeRfXmHwPEP9kuLYFSZ6yALDIRLf-_r0SucwARNDSG0MVu-riE0xDZjok0SqCfscaa027sco43T4l2OSd1G8yGHwoIhZuTepWpkfgwUR3RUhAFZdPUEBvtLbeLaQ_J5BG6gHWcZtHD_wEXjcf7HPygxVk8XPlmndUPNmt-gtWLh5LuGqjgL1o8P2M9SXkNHPy0mD9s3noMS2agluVRA3dJoitn3hG_nBS3ADOtwUwGtb11KMZJMJaEePATv5iNLEXEiFBDcST4F2QEjs96QBLGwJEpToOxHDbfVe1p9OpRWjsSrf9IJAXxjsm37uP1QgaqRMAUaF8LZaSyWQ9OIKVfMQZ8DR-kl4BYyAMyxTNewL7Ht4f4qYV2WUvrD3U0puhVWXH5dAzgDXVmzYHgsRj_gCTGNoQBCop3X2ZQ-lbQZvMto6xtL-tHl9oG8b_hcTvv-UCIIhj2Sokb7RljG0UAyn4rsEUya_pBreaFKBsufTIVt-oNbjAReqzdNXT_gtmHm8P920Yq7i0qpnEAouigpvNcB_04o11ZGpLf4sOoJb-IvOoWnf0f52PFOTDxroP9N9LM8umNFT7WPbL9JLev9huURRBobp2D6Rf47Ktgiq4KzuOMLUMRRDUTAYrKftwGwye6nlV2fONX7PLRqlqzhLDe5ljEwchJ7asiC0FPN5IG-j4wl1RBMjlNcaGfgnhalMsDIiBRlTg4qIkQwwz4y4GRJXjfgz2J4CymQDEdha-pMePRCKttVDPAsTS5y4ACQphyWjVxfEvGC7z4XkDbr7kPhOuAkkfhdhsdOM5oFGz2KeJQmeZtEi5gMZ6BHjbYoYJPJKXa5B_yYu1d6dbAgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5kZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQDDBhQTk9FRS0zNzEwNDA4MjcxMC1OWEhTLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAoBgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5NzEwNDA4MTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUJRKanMsHUMXf5zhIfK51Qn_n6lAwDgYDVR0PAQH_BAQDAgeAMAoGCCqGSM49BAMDA2kAMGYCMQC8hVUFpywnFWTqUB6Rw-CADvHrQBft9H9pyM5IIUanrS2O-KFsc0TsMojORxcg_xkCMQDE71vvGtizs-sEk23jam_2pi76C1e5rDjfPDn6qFBuvvEtpcQlmX7e9JDCfGcKJtc=";
+    auto parts = split(token, '~');
+#endif
+    if (parts.size() < 3) {
+        error = "Invalid JWT-SD token";
+        LOG_WARN("Invalid JWT-SD token");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    std::string jwt = parts[0];
+    std::string aud = parts[1];
+    for (size_t i = 2; i < parts.size(); i++) {
+        auto v = parts[i];
+        LOG_DBG("Session token part {} ({}) : {}", i, v.size(), v);
+        if (i > 0) {
+            std::vector<uint8_t> decoded_part = fromBase64URL(v);
+            LOG_DBG("Decoded part {} ({}): {}", i, decoded_part.size(), std::string(decoded_part.begin(), decoded_part.end()));
+        }
+    }
+
+    token = auth_rsp.sessionToken;
+
+    auto decoded = decodeTicket(parts[0]);
+    //auto st_json = decoded.get_header_json();
+    LOG_DBG("Session token: {}", decoded);
+    picojson::value dec_json;
+    auto p_err = picojson::parse(dec_json, decoded);
+    if (!p_err.empty()) {
+        error = FORMAT("JSON parse error: {}", p_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!dec_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    for (auto a : dec_json.get<picojson::object>()) {
+        LOG_DBG("Payload JSON {}: {}", a.first, a.second.to_str());
+    }
+
+    return OK;
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id)
+libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const std::string& auth_token, const std::string& auth_cert)
 {
     LOG_DBG("Get nonce from: {}", url);
 
@@ -523,8 +702,13 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
+    SessionToken stoken(auth_token);
+
     std::string full = path + "/key-shares/" + share_id + "/nonce";
     httplib::Headers hdrs;
+    hdrs.insert({"x-cdoc2-session-token", stoken.discloseForUrl(url)});
+    hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
+    LOG_DBG("POST nonce request to: {}", full);
     httplib::Response rsp;
     result = post(cli, full, hdrs, "", rsp);
     if (result != libcdoc::OK) return result;
@@ -596,60 +780,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }
-#endif
 
-ECDSA_SIG *
-ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
-{
-    auto *backend = (libcdoc::NetworkBackend *) EC_KEY_get_ex_data(eckey, 0);
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(dgst, dgst + dgst_len);
-    int result = backend->signTLS(dst, libcdoc::CryptoBackend::SHA_512, digest);
-    if (result != libcdoc::OK) {
-        return nullptr;
-    }
-    int size_2 = (int) dst.size() / 2;
-    ECDSA_SIG *sig = ECDSA_SIG_new();
-    ECDSA_SIG_set0(sig,
-                   BN_bin2bn(dst.data(), size_2, nullptr),
-                   BN_bin2bn(dst.data() + size_2, size_2, nullptr));
-    return sig;
-}
-
-int
-rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const RSA *rsa)
-{
-    auto *backend = (libcdoc::NetworkBackend *) RSA_get_ex_data(rsa, 0);
-    auto algo = libcdoc::CryptoBackend::SHA_512;
-    switch (type) {
-    case NID_sha224:
-        algo = libcdoc::CryptoBackend::SHA_224;
-        break;
-    case NID_sha256:
-        algo = libcdoc::CryptoBackend::SHA_256;
-        break;
-    case NID_sha384:
-        algo = libcdoc::CryptoBackend::SHA_384;
-        break;
-    case NID_sha512:
-        break;
-    default:
-        return 0;
-    }
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(m, m + m_len);
-    int result = backend->signTLS(dst, algo, digest);
-    if (result != libcdoc::OK) {
-        return 0;
-    }
-    if (sigret && (*siglen >= dst.size())) {
-        memcpy(sigret, dst.data(), dst.size());
-    }
-    *siglen = (unsigned int) dst.size();
-    return 1;
-}
-
-#ifdef HAS_KEYSHARES
 libcdoc::result_t
 libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 {
@@ -787,7 +918,7 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
 
 libcdoc::result_t
 libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-    const std::string& url, const std::string& rp_uuid, const std::string& rp_name,
+    const std::string& url, const std::string& auth_token, const std::string& auth_cert,
     const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
     std::string certificateLevel = "QUALIFIED";
@@ -796,11 +927,29 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         return libcdoc::CRYPTO_ERROR;
     std::string nonce = libcdoc::toBase64(nonce_bytes);
 
+    picojson::object sap = {
+        {"hashAlgorithm", picojson::value("SHA-256")}
+    };
+    picojson::object spp = {
+        {"rpChallenge", picojson::value(toBase64(digest))},
+        {"signatureAlgorithm", picojson::value("rsassa-pss")},
+        {"signatureAlgorithmParameters", picojson::value(sap)}
+    };
+    picojson::object inter = {
+        {"type", picojson::value("confirmationMessageAndVerificationCodeChoice")},
+        {"displayText200", picojson::value("Do you want to decrypt the document")}
+    };
+    picojson::array inter_arr = {
+        picojson::value(inter)
+    };
+    std::string inter_str = picojson::value(inter_arr).serialize();
     picojson::object obj = {
-        {"relyingPartyUUID", picojson::value(rp_uuid)},
-        {"relyingPartyName", picojson::value(rp_name)},
+        {"semanticsIdentifier", picojson::value(rcpt_id)},
         {"certificateLevel", picojson::value(certificateLevel)},
-        {"nonce", picojson::value(nonce)}
+        {"signatureProtocol", picojson::value("ACSP_V2")},
+        {"signatureProtocolParameters", picojson::value(spp)},
+        {"interactions", picojson::value(toBase64((const uint8_t *) inter_str.data(), inter_str.size()))},
+        {"vcType", picojson::value("numeric4")}
     };
     picojson::value query(obj);
     LOG_DBG("JSON:{}", query.serialize());
@@ -814,6 +963,8 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     LOG_DBG("PORT:{}", port);
     LOG_DBG("PATH:{}", path);
 
+    SessionToken stoken(auth_token);
+
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
@@ -824,14 +975,17 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     //
     // Let user choose certificate (if multiple)
     //
-    std::string full = path + "/certificatechoice/" + rcpt_id;
+    std::string full = path + "/sid/authenticate";
     LOG_DBG("SmartID path: {}", full);
     httplib::Headers hdrs;
+    hdrs.insert({"x-cdoc2-session-token", stoken.discloseForUrl(url)});
+    hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
     httplib::Response rsp;
     result = post(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
 
-
+    return NOT_IMPLEMENTED;
+#if 0
     LOG_DBG("Response: {}", rsp.body);
     picojson::value v;
     std::string parse_err = picojson::parse(v, rsp.body);
@@ -877,9 +1031,9 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     }
 
     // Generate code
-    uint8_t b[32];
-    SHA256(digest.data(), digest.size(), b);
     SIDMIDFeedback fb;
+    std::array<uint8_t, 32> b;
+    SHA256(digest.data(), digest.size(), b.data());
     fb.code = ((b[30] << 8) | b[31]) % 10000;
     result = showFeedback(fb);
     if (result != OK) return result;
@@ -940,6 +1094,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     cert = fromBase64(sidrsp.cert);
 
     return OK;
+#endif
 }
 
 libcdoc::result_t
@@ -1069,3 +1224,54 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     return OK;
 }
 #endif
+
+ECDSA_SIG *
+ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
+{
+    auto *backend = (libcdoc::NetworkBackend *) EC_KEY_get_ex_data(eckey, 0);
+    std::vector<uint8_t> dst;
+    std::vector<uint8_t> digest(dgst, dgst + dgst_len);
+    int result = backend->signTLS(dst, libcdoc::CryptoBackend::SHA_512, digest);
+    if (result != libcdoc::OK) {
+        return nullptr;
+    }
+    int size_2 = (int) dst.size() / 2;
+    ECDSA_SIG *sig = ECDSA_SIG_new();
+    ECDSA_SIG_set0(sig,
+                   BN_bin2bn(dst.data(), size_2, nullptr),
+                   BN_bin2bn(dst.data() + size_2, size_2, nullptr));
+    return sig;
+}
+
+int
+rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const RSA *rsa)
+{
+    auto *backend = (libcdoc::NetworkBackend *) RSA_get_ex_data(rsa, 0);
+    auto algo = libcdoc::CryptoBackend::SHA_512;
+    switch (type) {
+    case NID_sha224:
+        algo = libcdoc::CryptoBackend::SHA_224;
+        break;
+    case NID_sha256:
+        algo = libcdoc::CryptoBackend::SHA_256;
+        break;
+    case NID_sha384:
+        algo = libcdoc::CryptoBackend::SHA_384;
+        break;
+    case NID_sha512:
+        break;
+    default:
+        return 0;
+    }
+    std::vector<uint8_t> dst;
+    std::vector<uint8_t> digest(m, m + m_len);
+    int result = backend->signTLS(dst, algo, digest);
+    if (result != libcdoc::OK) {
+        return 0;
+    }
+    if (sigret && (*siglen >= dst.size())) {
+        memcpy(sigret, dst.data(), dst.size());
+    }
+    *siglen = (unsigned int) dst.size();
+    return 1;
+}

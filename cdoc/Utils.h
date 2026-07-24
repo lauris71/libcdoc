@@ -55,6 +55,7 @@ static std::string toBase64(const std::vector<uint8_t> &data) {
 }
 
 std::vector<uint8_t> fromBase64(std::string_view data);
+std::vector<uint8_t> fromBase64URL(std::string_view data);
 
 template <typename F>
 static std::string toHex(const F &data)
@@ -86,12 +87,17 @@ fromHex(std::string_view hex) {
 }
 
 static std::vector<std::string>
-split(const std::string &s, char delim = ':') {
+split(std::string_view s, char delim = ':') {
     std::vector<std::string> result;
-    std::stringstream ss(s);
-    std::string item;
-    while (getline (ss, item, delim)) {
-        result.push_back (item);
+    auto start = s.cbegin();
+    for (auto end = s.cbegin(); end != s.cend(); ++end) {
+        if (*end == delim) {
+            result.push_back(std::string(start, end));
+            start = end + 1;
+        }
+    }
+    if (start != s.cend()) {
+        result.push_back(std::string(start, s.cend()));
     }
     return result;
 }
@@ -309,15 +315,11 @@ static inline void LogFormat(LogLevel level, std::string_view file, int line, st
 #define LOG_INFO(...) LogFormat(libcdoc::LEVEL_INFO, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_DBG(...) LogFormat(libcdoc::LEVEL_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 
-#ifdef NDEBUG
-#define LOG_TRACE(...)
-#else
-#define LOG_TRACE(...) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, __VA_ARGS__)
-#endif
-
 #ifdef LIBCDOC_CRYPTO_TRACE
+#define LOG_TRACE(...) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_TRACE_KEY(MSG, KEY) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, MSG, toHex(KEY))
 #else
+#define LOG_TRACE(...)
 #define LOG_TRACE_KEY(MSG, KEY)
 #endif
 

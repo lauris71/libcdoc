@@ -248,25 +248,26 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         /* SHARE_URLS */
         /* url,share_id;url,share_id... */
         std::string all = lock.getString(Lock::SHARE_URLS);
-        std::vector<std::string> strs = split(all, ';');
-        if (strs.empty()){
+        std::vector<std::string> servers = split(all, ';');
+        if (servers.empty()){
             setLastError("Lock does not contain server info");
             LOG_ERROR("{}", last_error);
             return libcdoc::DATA_FORMAT_ERROR;
         }
 
         // Get authentication token
-        std::vector<uint8_t> auth_token;
-        if (auto rv = network->authenticateForShares(auth_token); rv != OK) {
+        std::string auth_token;
+        std::string auth_cert;
+        if (auto rv = network->authenticateForShares(auth_token, auth_cert); rv != OK) {
             setLastError(network->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
         }
-        return NOT_IMPLEMENTED;
 
+        // Get nonces and initialize share array
         std::vector<ShareData> shares;
-        for (auto& str : strs) {
-            std::vector<std::string> parts = split(str, ',');
+        for (auto& server : servers) {
+            std::vector<std::string> parts = split(server, ',');
             if (parts.size() != 2) {
                 setLastError("Invalid server info in lock");
                 LOG_ERROR("{}", last_error);
@@ -277,7 +278,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_DBG("Share {} url {}", id, url);
 
             std::vector<uint8_t> nonce;
-            result_t result = network->fetchNonce(nonce, url, id);
+            result_t result = network->fetchNonce(nonce, url, id, auth_token, auth_cert);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
                 LOG_ERROR("Cannot fetch nonce from server {}", url);
@@ -287,20 +288,23 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             ShareData acc(url, id, std::string(nonce.cbegin(), nonce.cend()));
             shares.push_back(std::move(acc));
         }
+
         /* Create tickets from shares */
         std::vector<std::string> tickets;
         std::vector<uint8_t> cert;
         result_t result = NOT_IMPLEMENTED;
-        std::string signer = conf->getValue(Configuration::SHARE_SIGNER);
+        // fixme:
+        std::string signer = "SMART_ID";// conf->getValue(Configuration::SHARE_SIGNER);
         LOG_DBG("Signer: {}", signer);
         if (signer == "SMART_ID") {
             // "https://sid.demo.sk.ee/smart-id-rp/v2"
-            std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
+            // std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
+            std::string url = "https://cdoc2-rp.test.riaint.ee";
             // "00000000-0000-0000-0000-000000000000"
-            std::string relyingPartyUUID = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_UUID);
+            //std::string relyingPartyUUID = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_UUID);
             // "DEMO"
-            std::string relyingPartyName = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_NAME);
-            SIDSigner signer(url, relyingPartyUUID, relyingPartyName, rcpt_id, network);
+            //std::string relyingPartyName = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_NAME);
+            SIDSigner signer(url, auth_token, auth_cert, rcpt_id, network);
             result = signer.generateTickets(tickets, shares);
             if (result != OK) {
                 setLastError(signer.error);

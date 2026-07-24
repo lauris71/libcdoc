@@ -210,7 +210,7 @@ SIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
 {
     LOG_TRACE_KEY("SID signing: {}", digest);
 
-    result_t result = network->signSID(dst, cert, url, rp_uuid, rp_name, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
+    result_t result = network->signSID(dst, cert, url, session_token, auth_cert, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
     if (result != OK) {
         error = network->getLastErrorStr(result);
     }
@@ -238,6 +238,64 @@ libcdoc::MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint
     LOG_DBG("MID certificateB64:{}", toBase64(cert));
     
     return result;
+}
+
+SessionToken::SessionToken(std::string_view str)
+{
+    auto parts = split(str, '~');
+    if (parts.size() > 2) {
+        jwt = parts[0];
+        aud = parts[1];
+        for (size_t i = 2; i < parts.size(); i++) {
+            disclosures.push_back(parts[i]);
+        }
+    }
+}
+
+std::string
+SessionToken::discloseForUrl(std::string_view url)
+{
+    LOG_DBG("Building token for: {}", url);
+    for (auto& d : disclosures) {
+        std::vector<uint8_t> decoded_part = fromBase64URL(d);
+        std::string json_str(decoded_part.begin(), decoded_part.end());
+        picojson::value json;
+        if (!picojson::parse(json, json_str).empty()) {
+            return {};
+        }
+        if (!json.is<picojson::array>()) {
+            return {};
+        }
+        picojson::array arr = json.get<picojson::array>();
+        if (arr.size() < 2) continue;
+        if (!arr[1].is<std::string>()) {
+            return {};
+        }
+        std::string target_url = arr[1].get<std::string>();
+        if (target_url.find(url) != std::string::npos) {
+            std::string token = jwt + "~" + aud + "~" + d + "~";
+            LOG_DBG("Disclosed token: {}", token);
+            return token;
+        }
+    }
+    return {};
+}
+
+std::string
+decodeTicket(const std::string& ticket)
+{
+    auto decoded = jwt::decode(ticket);
+    auto a = decoded.get_header_json();
+    for (auto t : a) {
+        LOG_DBG("Header {}: {}", t.first, t.second.to_str());
+    }
+    a = decoded.get_payload_json();
+    for (auto t : a) {
+        LOG_DBG("Payload {}: {}", t.first, t.second.to_str());
+    }
+    auto b = decoded.get_signature();
+    LOG_DBG("Signature: {}", b);
+    return picojson::value(decoded.get_payload_json()).serialize();
 }
 
 } // namespace libcdoc

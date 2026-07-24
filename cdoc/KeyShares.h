@@ -121,15 +121,13 @@ struct SIDSigner : public Signer {
      */
     const std::string url;
     /**
-     * @brief Relying party UUID
+     * @brief Full session token
      * 
      */
-    const std::string rp_uuid;
-    /**
-     * @brief Relying party name
-     * 
-     */
-    const std::string rp_name;
+    // fixme: parsed?
+    const std::string session_token;
+    // fixme:
+    const std::string auth_cert;
     /**
      * @brief Construct a new SIDSigner object
      * 
@@ -138,8 +136,8 @@ struct SIDSigner : public Signer {
      * @param _rp_name Relying party name
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
-    SIDSigner(const std::string& _url, const std::string& _rp_uuid, const std::string& _rp_name, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_rcpt_id, "RS256", network), url(_url), rp_uuid(_rp_uuid), rp_name(_rp_name) {}
+    SIDSigner(const std::string& _url, const std::string& _session_token, const std::string& _cert, const std::string& _rcpt_id, NetworkBackend *network)
+    : Signer(_rcpt_id, "RS256", network), url(_url), session_token(_session_token), auth_cert(_cert) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
@@ -183,6 +181,18 @@ struct MIDSigner : public Signer {
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
 
+struct SessionToken {
+    std::string jwt;
+    std::string aud;
+    std::vector<std::string> disclosures;
+    // fixme: Keep parsed data?
+
+    SessionToken(std::string_view str);
+    std::string discloseForUrl(std::string_view url);
+};
+
+std::string decodeTicket(const std::string& ticket);
+
 } // namespace libcdoc
 
-#endif // LOCK_H
+#endif // KEYSHARES_H

@@ -180,8 +180,10 @@ struct CDOC_EXPORT NetworkBackend {
 	 * @return error code or OK
 	 */
     virtual result_t fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id);
+
 #ifdef HAS_KEYSHARES
-    virtual result_t authenticateForShares(std::vector<uint8_t>& dst);
+    virtual result_t authenticateForShares(std::string& token, std::string& cert);
+
     /**
      * @brief fetch authentication nonce from share server
      * @param dst a destination container for nonce
@@ -189,7 +191,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param share_id share id (transaction id)
      * @return error code or OK
      */
-    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id);
+    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const std::string& auth_token, const std::string& auth_cert);
     /**
      * @brief fetch key share from share server
      * @param share a container for result
@@ -274,7 +276,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @return error code or OK
      */
     result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-        const std::string& url, const std::string& rp_uuid, const std::string& rp_name,
+        const std::string& url, const std::string& auth_token, const std::string& auth_cert,
         const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 
     /**
