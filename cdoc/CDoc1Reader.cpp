@@ -164,8 +164,8 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         // The downstream AES decrypt at the body level is what tells
         // success from failure.
     } else {
-        std::vector<uint8_t> key;
-        int result = crypto->deriveConcatKDF(key,
+        SecureTarget key;
+        int result = crypto->deriveConcatKDF(key.getTarget(),
             lock.getBytes(Lock::Params::KEY_MATERIAL),
             lock.getString(Lock::Params::CONCAT_DIGEST),
             lock.getBytes(Lock::Params::ALGORITHM_ID),
@@ -173,13 +173,12 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             lock.getBytes(Lock::Params::PARTY_VINFO),
             lock_idx);
         if (result < 0) {
-            libcdoc::cleanse(key);
             setLastError(FAIL_MSG);
             LOG_ERROR("{}", last_error);
             return libcdoc::CRYPTO_ERROR;
         }
         fmk = libcdoc::Crypto::AESWrap(key, lock.encrypted_fmk, false);
-        libcdoc::cleanse(key);
+        key.cleanse();
         // AESWrap returns {} on failure. Pad the candidate to expected
         // length so the failure shape matches the RSA path; the bytes
         // are arbitrary because the body decrypt is going to reject
