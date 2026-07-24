@@ -95,9 +95,8 @@ jobs:
     - name: Install dependencies
       run: |
         brew update
-        brew install --formula flatbuffers swig doxygen boost
+        brew install --formula swig doxygen
     - name: Cache vcpkg
-      if: matrix.target != 'macos'
       uses: actions/cache@v5
       with:
         path: ${{ github.workspace }}/vcpkg_cache
@@ -129,6 +128,7 @@ jobs:
     env:
       CXXFLAGS: '/D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR' # https://github.com/actions/runner-images/issues/10004
       DEST: ${{ github.workspace }}/${{ matrix.image }}_${{ matrix.platform }}
+      VCPKG_ROOT: C:/vcpkg
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -148,15 +148,10 @@ jobs:
         VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg_cache,readwrite
       run: |
         $swig = (Get-Item "$env:LOCALAPPDATA\Microsoft\WinGet\Links\swig.exe").Target
-        cmake -A ${{ matrix.platform }} -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-          "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          "-DSWIG_EXECUTABLE=$swig" `
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.platform }}-windows-static-md `
-          ${{ matrix.platform == 'x64' && '-DVCPKG_MANIFEST_FEATURES=tests' || '' }} `
-          -DCMAKE_INSTALL_LIBDIR=bin
-        cmake --build build --config RelWithDebInfo
-        ctest -V -C RelWithDebInfo --test-dir build
-        cmake --install build --config RelWithDebInfo --prefix ${{ env.DEST }}
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        & "$vsPath\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.platform == 'arm64' && 'amd64_arm64' || 'amd64' }} "&&" pwsh build.ps1 `
+          -swig $swig -installdir ${{ env.DEST }} -buildType RelWithDebInfo `
+          ${{ matrix.platform == 'x64' && '-RunTests' || '' }}
     - name: Archive artifacts
       uses: actions/upload-artifact@v7
       with:

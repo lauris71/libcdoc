@@ -93,12 +93,6 @@ const map<string, string> ExpectedParsedLabel {
     {"cn", "JÕEORG,JAAK-KRISTJAN,38001085718"}
 };
 
-static string decodeName(fs::path path)
-{
-    auto name = path.u8string();
-    return {reinterpret_cast<const char*>(name.data()), name.size()};
-}
-
 /**
  * @brief The base class for Test Fixtures.
  */
@@ -557,7 +551,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithPasswordAndLabel, DecryptFixture,
         * utf::description("Decrypting a file with password and given label"))
 {
     libcdoc::RcptInfo rcpt {.type=libcdoc::RcptInfo::LOCK, .label=Label, .secret=Password};
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), decodeName(tmpDataPath), rcpt);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), libcdoc::decodeName(tmpDataPath), rcpt);
 }
 BOOST_AUTO_TEST_SUITE_END()
 
@@ -828,7 +822,7 @@ struct PaxFixture : public FixtureBase
         std::vector<libcdoc::RcptInfo> rcpts {
             {libcdoc::RcptInfo::PASSWORD, "label", {}, Password}
         };
-        encrypt(2, {srcFile.string()}, cdocFile.string(), rcpts);
+        encrypt(2, {libcdoc::decodeName(srcFile)}, libcdoc::decodeName(cdocFile), rcpts);
 
         libcdoc::RcptInfo rcpt {
             .type=libcdoc::RcptInfo::LOCK,
@@ -836,8 +830,8 @@ struct PaxFixture : public FixtureBase
             .secret=Password
         };
         libcdoc::ToolConf conf;
-        conf.input_files.push_back(cdocFile.string());
-        conf.out = outDir.string();
+        conf.input_files.push_back(libcdoc::decodeName(cdocFile));
+        conf.out = libcdoc::decodeName(outDir);
         libcdoc::CDocCipher cipher;
         BOOST_CHECK_EQUAL(cipher.Decrypt(conf, rcpt), 0);
     }
@@ -860,8 +854,8 @@ BOOST_FIXTURE_TEST_CASE(LongFilename, PaxFixture)
 
 BOOST_FIXTURE_TEST_CASE(NonAsciiFilename, PaxFixture)
 {
-    // õäöü in UTF-8
-    const fs::path namePath(u8"\u00f5\u00e4\u00f6\u00fc.txt");
+    // Include characters outside Windows-1252 to catch accidental ACP conversions.
+    const fs::path namePath(u8"\u00f5\u00e4\u00f6\u00fc-\u03b4-\u0436.txt");
     const fs::path src = tmpDataPath / namePath;
     std::ofstream(src) << "hello";
     BOOST_TEST_REQUIRE(fs::exists(src));
