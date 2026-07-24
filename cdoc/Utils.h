@@ -48,6 +48,12 @@ static auto encodeName(std::string_view path)
     return std::u8string_view(reinterpret_cast<const char8_t*>(path.data()), path.size());
 }
 
+static std::string decodeName(const std::filesystem::path& path)
+{
+    auto name = path.u8string();
+    return {reinterpret_cast<const char*>(name.data()), name.size()};
+}
+
 std::string toBase64(const uint8_t *data, size_t len);
 
 static std::string toBase64(const std::vector<uint8_t> &data) {

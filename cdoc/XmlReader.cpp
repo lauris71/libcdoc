@@ -96,13 +96,24 @@ bool XMLReader::isElement(const char *elem) const
 bool XMLReader::read()
 {
     if (!d) return false;
-    return xmlTextReaderRead(d) == 1;
+    if (xmlTextReaderRead(d) != 1)
+        return false;
+    switch(xmlTextReaderNodeType(d))
+    {
+    case XML_READER_TYPE_DOCUMENT_TYPE:
+    case XML_READER_TYPE_ENTITY_REFERENCE:
+        return false;
+    default:
+        return true;
+    }
 }
 
 std::vector<uint8_t> XMLReader::readBase64()
 {
     if (!d) return {};
     xmlTextReaderRead(d);
+    if (xmlTextReaderNodeType(d) == XML_READER_TYPE_ENTITY_REFERENCE)
+        return {};
     return libcdoc::Crypto::decodeBase64(xmlTextReaderConstValue(d));
 }
 
@@ -110,5 +121,7 @@ std::string XMLReader::readText()
 {
     if (!d) return {};
     xmlTextReaderRead(d);
+    if (xmlTextReaderNodeType(d) == XML_READER_TYPE_ENTITY_REFERENCE)
+        return {};
     return tostring(xmlTextReaderConstValue(d));
 }

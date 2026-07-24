@@ -27,7 +27,10 @@
 #include <Recipient.h>
 #include <Tar.h>
 #include <Utils.h>
+#include <XmlReader.h>
 #include <cdoc/Crypto.h>
+
+#include <libxml/parser.h>
 
 #include "pipe.h"
 
@@ -73,18 +76,22 @@ constexpr string_view AESKey = "E165475C6D8B9DD0B696EE2A37D7176DFDF4D7B510406648
 
 constexpr string_view CDOC2HEADER = "CDOC\x02"sv;
 
+struct XMLSource {
+    explicit XMLSource(std::string_view xml)
+        : data(xml.cbegin(), xml.cend())
+        , source(data)
+    {}
+
+    std::vector<uint8_t> data;
+    libcdoc::VectorSource source;
+};
+
 const map<string, string> ExpectedParsedLabel {
     {"v", "1"},
     {"type", "ID-card"},
     {"serial_number", "PNOEE-38001085718"},
     {"cn", "JÕEORG,JAAK-KRISTJAN,38001085718"}
 };
-
-static string decodeName(fs::path path)
-{
-    auto name = path.u8string();
-    return {reinterpret_cast<const char*>(name.data()), name.size()};
-}
 
 /**
  * @brief The base class for Test Fixtures.
@@ -544,7 +551,7 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(DecryptWithPasswordAndLabel, DecryptFixture,
         * utf::description("Decrypting a file with password and given label"))
 {
     libcdoc::RcptInfo rcpt {.type=libcdoc::RcptInfo::LOCK, .label=Label, .secret=Password};
-    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), decodeName(tmpDataPath), rcpt);
+    decrypt({checkDataFile(sources[0])}, checkTargetFile("PasswordUsageWithoutLabel.cdoc"), libcdoc::decodeName(tmpDataPath), rcpt);
 }
 BOOST_AUTO_TEST_SUITE_END()
 
@@ -815,7 +822,7 @@ struct PaxFixture : public FixtureBase
         std::vector<libcdoc::RcptInfo> rcpts {
             {libcdoc::RcptInfo::PASSWORD, "label", {}, Password}
         };
-        encrypt(2, {srcFile.string()}, cdocFile.string(), rcpts);
+        encrypt(2, {libcdoc::decodeName(srcFile)}, libcdoc::decodeName(cdocFile), rcpts);
 
         libcdoc::RcptInfo rcpt {
             .type=libcdoc::RcptInfo::LOCK,
@@ -823,8 +830,8 @@ struct PaxFixture : public FixtureBase
             .secret=Password
         };
         libcdoc::ToolConf conf;
-        conf.input_files.push_back(cdocFile.string());
-        conf.out = outDir.string();
+        conf.input_files.push_back(libcdoc::decodeName(cdocFile));
+        conf.out = libcdoc::decodeName(outDir);
         libcdoc::CDocCipher cipher;
         BOOST_CHECK_EQUAL(cipher.Decrypt(conf, rcpt), 0);
     }
@@ -847,8 +854,8 @@ BOOST_FIXTURE_TEST_CASE(LongFilename, PaxFixture)
 
 BOOST_FIXTURE_TEST_CASE(NonAsciiFilename, PaxFixture)
 {
-    // õäöü in UTF-8
-    const fs::path namePath(u8"\u00f5\u00e4\u00f6\u00fc.txt");
+    // Include characters outside Windows-1252 to catch accidental ACP conversions.
+    const fs::path namePath(u8"\u00f5\u00e4\u00f6\u00fc-\u03b4-\u0436.txt");
     const fs::path src = tmpDataPath / namePath;
     std::ofstream(src) << "hello";
     BOOST_TEST_REQUIRE(fs::exists(src));
@@ -1131,6 +1138,66 @@ BOOST_AUTO_TEST_CASE(TruncatesOverlongNames)
     // No-extension version simply truncates.
     auto truncated = libcdoc::sanitiseExtractedFilename(std::string(400, 'b'));
     BOOST_CHECK_EQUAL(truncated.size(), 255u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(XMLReaderEntityHandling)
+
+BOOST_AUTO_TEST_CASE(ReadsPlainXml)
+{
+    XMLSource input("<root a=\"value\"><child>text</child></root>");
+    libcdoc::XMLReader reader(input.source);
+
+    BOOST_REQUIRE(reader.read());
+    BOOST_TEST(reader.isElement("root"));
+    BOOST_TEST(reader.attribute("a") == "value");
+
+    BOOST_REQUIRE(reader.read());
+    BOOST_TEST(reader.isElement("child"));
+    BOOST_TEST(reader.readText() == "text");
+}
+
+static void rejectsUnsupportedXml(std::string_view xml)
+{
+    XMLSource input(xml);
+    libcdoc::XMLReader reader(input.source);
+    BOOST_CHECK(!reader.read());
+}
+
+BOOST_AUTO_TEST_CASE(RejectsDoctype)
+{
+    rejectsUnsupportedXml("<!DOCTYPE root><root/>");
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInternalEntityInAttribute)
+{
+    rejectsUnsupportedXml("<!DOCTYPE root [<!ENTITY xxe 'SECRET'>]><root a='&xxe;'/>");
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInternalEntityInText)
+{
+    rejectsUnsupportedXml("<!DOCTYPE root [<!ENTITY xxe 'SECRET'>]><root>&xxe;</root>");
+}
+
+BOOST_AUTO_TEST_CASE(RejectsExternalEntityInAttribute)
+{
+    rejectsUnsupportedXml("<!DOCTYPE root [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><root a='&xxe;'/>");
+}
+
+BOOST_AUTO_TEST_CASE(RejectsExternalEntityInText)
+{
+    rejectsUnsupportedXml("<!DOCTYPE root [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><root>&xxe;</root>");
+}
+
+BOOST_AUTO_TEST_CASE(DoesNotChangeGlobalExternalEntityLoader)
+{
+    auto loader = xmlGetExternalEntityLoader();
+    XMLSource input("<root/>");
+    libcdoc::XMLReader reader(input.source);
+
+    BOOST_REQUIRE(reader.read());
+    BOOST_TEST(xmlGetExternalEntityLoader() == loader);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

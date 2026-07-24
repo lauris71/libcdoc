@@ -26,6 +26,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <locale>
 
 namespace libcdoc {
 
@@ -145,6 +146,7 @@ buildURL(const std::string& host, int port)
 std::ostream&
 operator<<(std::ostream& escaped, urlEncode src)
 {
+    static const std::locale locC("C");
     restoreFlags rf(escaped);
     escaped.fill('0');
     escaped << std::hex;
@@ -155,7 +157,7 @@ operator<<(std::ostream& escaped, urlEncode src)
             continue;
         }
         // Keep alphanumeric and other accepted characters intact
-        if (isalnum(uint8_t(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+        if (std::isalnum(c, locC) || c == '-' || c == '_' || c == '.' || c == '~') {
             escaped << c;
             continue;
         }
