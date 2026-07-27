@@ -3,6 +3,7 @@ add_executable(unittests
     ../cdoc/Crypto.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
+    ../cdoc/Utils.cpp
 )
 
 target_link_libraries(unittests
