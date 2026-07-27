@@ -814,6 +814,51 @@ BOOST_AUTO_TEST_CASE(LabelParsingEmptyLabel)
     }
 }
 
+// N3 regression: the base64 decoder (jwt::base::decode) throws
+// std::runtime_error on malformed input. A crafted container label must
+// not crash the process; the label is reported as unparseable instead.
+BOOST_AUTO_TEST_CASE(Base64LabelParsingInvalidBase64)
+{
+    // Characters outside the base64 alphabet.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,###").empty());
+    // Valid alphabet but impossible length (single character).
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,A").empty());
+    // Too much padding.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,QQ===").empty());
+    // Same, with a media type part in front.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:application/x-www-form-urlencoded;base64,###").empty());
+    // Trailing garbage after otherwise valid base64.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,dj0x###").empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// N3 regression: libcdoc::fromBase64 decodes untrusted data (key server
+// and share server responses). Malformed input must yield an empty vector,
+// not an exception.
+BOOST_AUTO_TEST_SUITE(FromBase64)
+
+BOOST_AUTO_TEST_CASE(ValidInput)
+{
+    // "hello world"
+    std::vector<uint8_t> expected {'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'};
+    BOOST_CHECK(libcdoc::fromBase64("aGVsbG8gd29ybGQ=") == expected);
+    BOOST_CHECK(libcdoc::fromBase64("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(InvalidInputReturnsEmpty)
+{
+    // Characters outside the alphabet.
+    BOOST_CHECK(libcdoc::fromBase64("###").empty());
+    BOOST_CHECK(libcdoc::fromBase64("aGVsbG8###").empty());
+    // Impossible lengths (not a multiple of 4 after padding rules).
+    BOOST_CHECK(libcdoc::fromBase64("A").empty());
+    // Excess padding.
+    BOOST_CHECK(libcdoc::fromBase64("QQ===").empty());
+    // Padding in the middle.
+    BOOST_CHECK(libcdoc::fromBase64("QQ==QQ==").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(TarPaxHeader)

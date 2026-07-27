@@ -42,8 +42,18 @@ toBase64(const uint8_t *data, size_t len)
 std::vector<uint8_t>
 fromBase64(std::string_view data)
 {
-    std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
-    return std::vector<uint8_t>(str.cbegin(), str.cend());
+    // jwt::base::details::decode throws std::runtime_error on malformed
+    // input (characters outside the alphabet, bad padding, bad length).
+    // The decoded data comes from remote servers and containers, i.e. it
+    // is untrusted, so a decode failure must not crash the process. An
+    // empty result signals a format error to the callers.
+    try {
+        std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
+        return std::vector<uint8_t>(str.cbegin(), str.cend());
+    } catch (const std::exception &e) {
+        LOG_WARN("fromBase64: invalid base64 input: {}", e.what());
+        return {};
+    }
 }
 
 double

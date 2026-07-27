@@ -458,6 +458,10 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     error = {};
     std::string ks = v.get<std::string>();
     dst = fromBase64(ks);
+    if (dst.empty()) {
+        error = FORMAT("Invalid base64 in 'ephemeral_key_material'");
+        return NETWORK_ERROR;
+    }
 
     return libcdoc::OK;
 }
