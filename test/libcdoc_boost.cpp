@@ -720,6 +720,9 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithPasswordAndLabel, FixtureBase, * u
     }
     BOOST_TEST(reader->nextFile(fi) == libcdoc::END_OF_STREAM);
     BOOST_TEST(reader->finishDecryption() == libcdoc::OK);
+
+    delete writer;
+    delete reader;
 }
 
 BOOST_AUTO_TEST_SUITE_END()
