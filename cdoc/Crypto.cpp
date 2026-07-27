@@ -628,8 +628,15 @@ void unpadPKCS1v15CT(const std::vector<uint8_t> &em,
         // range since em.size() >= 11+expected_len > 0). The clamped value
         // is replaced by synth[i] below when good == 0, so the actual
         // bytes read here never reach the caller.
-        size_t in_range = size_t(ge_size(em.size() - 1, src_idx));   // 0 or 0xFF
-        size_t mask = in_range & ~size_t(0);
+        // ge_size() returns a single-byte mask (0x00 or 0xFF). It must be
+        // widened to a full-width size_t mask before splicing indices;
+        // using the byte mask directly would mix the low byte of src_idx
+        // with the high bits of (em.size() - 1) and index past the end of
+        // em for modulus lengths that are not a multiple of 256 bytes
+        // (e.g. 384-byte EM of a 3072-bit RSA key). The widening is
+        // branch-free arithmetic: 0x00 -> 0, 0xFF -> ~size_t(0).
+        size_t in_range = size_t(ge_size(em.size() - 1, src_idx));   // 0x00 or 0xFF
+        size_t mask = size_t(0) - (in_range & size_t(0x01));         // 0 or ~size_t(0)
         size_t safe_idx = (src_idx & mask) | ((em.size() - 1) & ~mask);
         uint8_t real = em[safe_idx];
         uint8_t synthetic = synth[i];

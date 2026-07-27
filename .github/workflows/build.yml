@@ -118,6 +118,20 @@ jobs:
       with:
         name: ${{ matrix.target }}
         path: ${{ env.DEST }}
+  sanitizers:
+    name: Run unit tests with ASan+UBSan
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install dependencies
+      run: sudo apt update -qq && sudo apt install --no-install-recommends -y ninja-build libboost-test-dev ${UBUNTU_DEPS}
+    - name: Configure
+      run: cmake --preset sanitize
+    - name: Build
+      run: cmake --build --preset sanitize --target unittests
+    - name: Test
+      run: ctest --test-dir build/sanitize --output-on-failure
   windows:
     name: Build on Windows
     runs-on: ${{ matrix.image }}

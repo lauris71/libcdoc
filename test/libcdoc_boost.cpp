@@ -1333,8 +1333,9 @@ BOOST_AUTO_TEST_CASE(RejectsNonDigitNationalId)
 {
     BOOST_CHECK(!libcdoc::parseEtsiRecipientId("etsi/PNOEE-30303039 14").valid());
     BOOST_CHECK(!libcdoc::parseEtsiRecipientId("etsi/PNOEE-3030303991a").valid());
-    // Embedded NUL.
-    BOOST_CHECK(!libcdoc::parseEtsiRecipientId(std::string("etsi/PNOEE-3030\0039914", 22)).valid());
+    // Embedded NUL. (sizeof - 1: the literal is 20 chars; a hard-coded
+    // length of 22 read 2 bytes past it - caught by ASan.)
+    BOOST_CHECK(!libcdoc::parseEtsiRecipientId(std::string("etsi/PNOEE-3030\0039914", sizeof("etsi/PNOEE-3030\0039914") - 1)).valid());
 }
 
 BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
@@ -1347,6 +1348,107 @@ BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
     BOOST_CHECK(!p33.valid());
     auto pHuge = libcdoc::parseEtsiRecipientId("etsi/PNOEE-" + std::string(1024, '1'));
     BOOST_CHECK(!pHuge.valid());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression coverage for the constant-time PKCS#1 v1.5 unpadding used by
+// the RSA implicit-rejection path (N1 in SecurityReview_Kilo_2026-07.md).
+// The index-clamping mask in unpadPKCS1v15CT was a single byte (0x00/0xFF)
+// instead of a full-width size_t mask, which spliced the low byte of the
+// source index with the high bits of (em.size() - 1) and read past the end
+// of the EM buffer for modulus lengths that are not a multiple of 256
+// bytes (e.g. the 384-byte EM of a 3072-bit RSA key, up to 128 bytes OOB).
+BOOST_AUTO_TEST_SUITE(RsaImplicitRejectUnpad)
+
+// Sweep the zero separator across the whole EM block: output must be the
+// real message exactly when the padding is valid (00 02 || PS>=8 || 00 ||
+// M of expected_len) and the synthetic plaintext in every other case.
+// Under ASAN this also fails on any out-of-bounds EM access.
+static void sweepSeparatorPositions(size_t em_len)
+{
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> synth(expected_len);
+    for (size_t i = 0; i < expected_len; i++)
+        synth[i] = uint8_t(0xA0 + i);
+
+    for (size_t sep = 2; sep < em_len; sep++) {
+        std::vector<uint8_t> em(em_len, 0x55);
+        em[0] = 0x00;
+        em[1] = 0x02;
+        em[sep] = 0x00;
+
+        std::vector<uint8_t> dst;
+        BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(dst.size(), expected_len);
+
+        const size_t msg_len = em_len - sep - 1;
+        const bool expect_real = (sep >= 10) && (msg_len == expected_len);
+        for (size_t i = 0; i < expected_len; i++) {
+            const uint8_t want = expect_real ? em[sep + 1 + i] : synth[i];
+            BOOST_CHECK_EQUAL(dst[i], want);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(SeparatorSweepAllModulusSizes)
+{
+    sweepSeparatorPositions(192);   // 1536-bit RSA
+    sweepSeparatorPositions(256);   // 2048-bit RSA
+    sweepSeparatorPositions(384);   // 3072-bit RSA (read up to +128 bytes OOB before the fix)
+    sweepSeparatorPositions(512);   // 4096-bit RSA
+}
+
+BOOST_AUTO_TEST_CASE(ValidPaddingReturnsMessage3072)
+{
+    // Valid-padding 3072-bit case (message at the end of the EM block);
+    // the old byte-wide mask happened to compute these indices correctly.
+    // The actual OOB reproducer is the separator sweep above: for 384-byte
+    // EMs, separator positions 127..254 made the old mask splice read past
+    // the buffer (padding is invalid there, so only ASAN observes it).
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    constexpr size_t sep = em_len - expected_len - 1;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x00;
+    em[1] = 0x02;
+    em[sep] = 0x00;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(dst.size(), expected_len);
+    for (size_t i = 0; i < expected_len; i++)
+        BOOST_CHECK_EQUAL(dst[i], em[sep + 1 + i]);
+}
+
+BOOST_AUTO_TEST_CASE(BadHeaderReturnsSynthetic)
+{
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x01;   // wrong leading byte
+    em[1] = 0x02;
+    em[em_len - expected_len - 1] = 0x00;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_CHECK(dst == synth);
+}
+
+BOOST_AUTO_TEST_CASE(NoSeparatorReturnsSynthetic)
+{
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x00;
+    em[1] = 0x02;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_CHECK(dst == synth);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
