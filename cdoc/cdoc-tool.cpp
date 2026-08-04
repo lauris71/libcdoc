@@ -84,6 +84,8 @@ print_usage(ostream& ofs)
     ofs << "    --pin PIN               - PKCS11 pin" << endl;
     ofs << "    --key-id                - PKCS11 key ID" << endl;
     ofs << "    --key-label             - PKCS11 key label" << endl;
+    ofs << "    --rp-server RP_SERVER   - RP server URL" << endl;
+    ofs << "    --auth-server AUTH_SERVER - Authentication server URL" << endl;
     ofs << endl;
     ofs << "cdoc-tool locks FILE" << endl;
     ofs << endl;
@@ -167,6 +169,14 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
         sdata.url = argv[arg_idx + 2];
         conf.servers.push_back(sdata);
         return 3;
+    } else if (arg == "--auth-server") {
+        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
+        conf.auth_server = argv[arg_idx + 1];
+        return 2;
+    } else if (arg == "--rp-server") {
+        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
+        conf.rp_server = argv[arg_idx + 1];
+        return 2;
     } else if (arg == "--accept") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
         load_certs(conf, argv[arg_idx + 1]);

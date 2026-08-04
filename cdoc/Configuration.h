@@ -42,6 +42,14 @@ struct CDOC_EXPORT Configuration {
      * @brief Fetch URL of keyserver (Domain is server id)
      */
     static constexpr char const *KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
+    /**
+     * @brief Authentication session server for SID/MID
+     */
+    static constexpr char const *AUTH_SERVER = "AUTH_SERVER";
+    /**
+     * @brief RP server for SID/MID
+     */
+    static constexpr char const *RP_SERVER = "RP_SERVER";
 #ifdef HAS_KEYSHARES
     /**
      * @brief JSON array of share server base urls (Domain is server id)
@@ -63,14 +71,6 @@ struct CDOC_EXPORT Configuration {
      * @brief MID/SID base url (domain is SMART_ID or MOBILE_ID)
      */
     static constexpr char const *BASE_URL = "BASE_URL";
-    /**
-     * @brief MID/SID relying party UUID (domain is SMART_ID or MOBILE_ID)
-     */
-    static constexpr char const *RP_UUID = "RP_UUID";
-    /**
-     * @brief MID/SID relying party name (domain is SMART_ID or MOBILE_ID)
-     */
-    static constexpr char const *RP_NAME = "RP_NAME";
     /**
      * @brief Mobile ID phone number (domain is MOBILE_ID)
      */

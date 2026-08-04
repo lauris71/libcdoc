@@ -188,7 +188,20 @@ struct CDOC_EXPORT NetworkBackend {
     virtual result_t fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id);
 
 #ifdef HAS_KEYSHARES
-    virtual result_t authenticateForShares(std::string& token, std::string& cert);
+    /**
+     * @brief Get a session token and certificate for share authentication
+     *
+     * Implementation may cache the session token and certificate if appropriate
+     *
+     * @param url The server URL
+     * @param rcpt_id The recipient id (etsi/PNOEE-...) the session is authenticated for.
+     *        Must match the identity that will sign the share tickets and the lock's
+     *        recipient id, so that session identity == signing identity == recipient.
+     * @param token Output parameter for session token
+     * @param cert Output parameter for session certificate
+     * @return Error code or OK
+     */
+    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, std::string& token, std::string& cert);
 
     /**
      * @brief fetch authentication nonce from share server

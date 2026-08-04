@@ -577,14 +577,22 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::authenticateForShares(std::string& token, std::string& cert)
+libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std::string& rcpt_id, std::string& token, std::string& cert)
 {
-    static const std::string url = "https://cdoc2-auth.dev.riaint.ee";
     // Start authentication
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
+
+    // The session is bound to the actual recipient identity from the lock.
+    // A hardcoded or malformed id would break the identity chain
+    // (session identity == signing identity == lock recipient).
+    if (!parseEtsiRecipientId(rcpt_id).valid()) {
+        error = FORMAT("Invalid recipient id: {}", rcpt_id);
+        LOG_WARN("{}", error);
+        return DATA_FORMAT_ERROR;
+    }
 
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
@@ -594,7 +602,7 @@ libcdoc::NetworkBackend::authenticateForShares(std::string& token, std::string& 
     if (result = setProxy(cli, this); result != OK) return result;
 
     picojson::object obj = {
-        {"identifier", picojson::value("etsi/PNOEE-37104082710")},
+        {"identifier", picojson::value(rcpt_id)},
     };
     picojson::value req_json(obj);
     std::string req_str = req_json.serialize();
@@ -802,6 +810,9 @@ libcdoc::result_t
 libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 {
     LOG_INFO("Verification code: {:04d} url: {}", feedback.code, feedback.url);
+    std::cout << "###########################" << "\n";
+    std::cout << "# Verification code: " << feedback.code << " #" << "\n";
+    std::cout << "###########################" << "\n";
     return OK;
 }
 

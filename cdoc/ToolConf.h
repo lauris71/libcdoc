@@ -56,6 +56,8 @@ struct ToolConf : public JSONConfiguration {
     std::string library;
 
     std::vector<ServerData> servers;
+    std::string auth_server;
+    std::string rp_server;
 
     /**
      * @brief Files to be encrypted, or file to be decrypted.
@@ -78,6 +80,13 @@ struct ToolConf : public JSONConfiguration {
     std::vector<std::vector<uint8_t>> accept_certs;
 
     std::string getValue(std::string_view domain, std::string_view param) const final {
+        if (domain.empty()) {
+            if (param == Configuration::AUTH_SERVER) {
+                return auth_server;
+            } else if (param == Configuration::RP_SERVER) {
+                return rp_server;
+            }
+        }
         for (auto& sdata : servers) {
             if (sdata.ID == domain) {
                 if (param == Configuration::KEYSERVER_SEND_URL) {

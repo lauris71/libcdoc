@@ -267,8 +267,15 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         }
 
         // Get authentication token
+        std::string auth_url = conf->getValue({}, Configuration::AUTH_SERVER);
+        if (auth_url.empty()) {
+            setLastError(FORMAT("No AUTH_SERVER found"));
+            LOG_ERROR("{}", last_error);
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        // auth_url = "https://cdoc2-auth.dev.riaint.ee";
         SessionData session;
-        if (auto rv = network->authenticateForShares(session.token, session.cert); rv != OK) {
+        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, session.token, session.cert); rv != OK) {
             setLastError(network->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
@@ -287,6 +294,13 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             share.nonce = std::string(nonce.cbegin(), nonce.cend());
         }
 
+        std::string rp_url = conf->getValue({}, Configuration::RP_SERVER);
+        if (rp_url.empty()) {
+            setLastError(FORMAT("No RP_SERVER found"));
+            LOG_ERROR("{}", last_error);
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        // rp_url = "https://cdoc2-rp.dev.riaint.ee/"
         /* Create tickets from shares */
         std::vector<std::string> auth_tokens;
         AuthenticationData auth;
@@ -295,10 +309,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         std::string signer = "SMART_ID";// conf->getValue(Configuration::SHARE_SIGNER);
         LOG_DBG("Signer: {}", signer);
         if (signer == "SMART_ID") {
-            // "https://sid.demo.sk.ee/smart-id-rp/v2"
-            // std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
-            std::string url = "https://cdoc2-rp.dev.riaint.ee/";
-            SIDSigner signer(url, session, rcpt_id, network);
+            SIDSigner signer(rp_url, session, rcpt_id, network);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
@@ -309,13 +320,9 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         } else if (signer == "MOBILE_ID") {
             // "https://sid.demo.sk.ee/smart-id-rp/v2"
             std::string url = conf->getValue(Configuration::MID_DOMAIN, Configuration::BASE_URL);
-            // "00000000-0000-0000-0000-000000000000"
-            std::string relyingPartyUUID = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_UUID);
-            // "DEMO"
-            std::string relyingPartyName = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_NAME);
             // "37200000566"
             std::string phone = conf->getValue(Configuration::MID_DOMAIN, Configuration::PHONE_NUMBER);
-            MIDSigner signer(url, relyingPartyUUID, relyingPartyName, phone, rcpt_id, network);
+            MIDSigner signer(url, {}, {}, phone, rcpt_id, network);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
