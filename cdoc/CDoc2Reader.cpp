@@ -254,17 +254,6 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_ERROR("{}", last_error);
             return libcdoc::DATA_FORMAT_ERROR;
         }
-
-        // Get authentication token
-        std::string auth_token;
-        std::string auth_cert;
-        if (auto rv = network->authenticateForShares(auth_token, auth_cert); rv != OK) {
-            setLastError(network->getLastErrorStr(rv));
-            LOG_ERROR("{}", last_error);
-            return rv;
-        }
-
-        // Get nonces and initialize share array
         std::vector<ShareData> shares;
         for (auto& server : servers) {
             std::vector<std::string> parts = split(server, ',');
@@ -273,25 +262,34 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 LOG_ERROR("{}", last_error);
                 return libcdoc::DATA_FORMAT_ERROR;
             }
-            std::string url = parts[0];
-            std::string id = parts[1];
-            LOG_DBG("Share {} url {}", id, url);
+            LOG_DBG("Share {} url {}", parts[1], parts[0]);
+            shares.emplace_back(parts[0], parts[1]);
+        }
 
+        // Get authentication token
+        SessionData session;
+        if (auto rv = network->authenticateForShares(session.token, session.cert); rv != OK) {
+            setLastError(network->getLastErrorStr(rv));
+            LOG_ERROR("{}", last_error);
+            return rv;
+        }
+
+        // Get nonces
+        for (auto& share : shares) {
             std::vector<uint8_t> nonce;
-            result_t result = network->fetchNonce(nonce, url, id, auth_token, auth_cert);
+            result_t result = network->fetchNonce(nonce, share.base_url, share.share_id, session.token, session.cert);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
-                LOG_ERROR("Cannot fetch nonce from server {}", url);
+                LOG_ERROR("Cannot fetch nonce {} from server {}", share.share_id, share.base_url);
                 return result;
             }
             LOG_DBG("Nonce: {}", std::string(nonce.cbegin(), nonce.cend()));
-            ShareData acc(url, id, std::string(nonce.cbegin(), nonce.cend()));
-            shares.push_back(std::move(acc));
+            share.nonce = std::string(nonce.cbegin(), nonce.cend());
         }
 
         /* Create tickets from shares */
-        std::vector<std::string> tickets;
-        std::vector<uint8_t> cert;
+        std::vector<std::string> auth_tokens;
+        AuthenticationData auth;
         result_t result = NOT_IMPLEMENTED;
         // fixme:
         std::string signer = "SMART_ID";// conf->getValue(Configuration::SHARE_SIGNER);
@@ -299,17 +297,14 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         if (signer == "SMART_ID") {
             // "https://sid.demo.sk.ee/smart-id-rp/v2"
             // std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
-            std::string url = "https://cdoc2-rp.test.riaint.ee";
-            // "00000000-0000-0000-0000-000000000000"
-            //std::string relyingPartyUUID = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_UUID);
-            // "DEMO"
-            //std::string relyingPartyName = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_NAME);
-            SIDSigner signer(url, auth_token, auth_cert, rcpt_id, network);
-            result = signer.generateTickets(tickets, shares);
+            std::string url = "https://cdoc2-rp.dev.riaint.ee/";
+            SIDSigner signer(url, session, rcpt_id, network);
+            result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
             } else {
-                cert = std::move(signer.cert);
+                auth.cert = std::move(signer.cert);
+                auth.params = std::move(signer.params);
             }
         } else if (signer == "MOBILE_ID") {
             // "https://sid.demo.sk.ee/smart-id-rp/v2"
@@ -321,11 +316,11 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             // "37200000566"
             std::string phone = conf->getValue(Configuration::MID_DOMAIN, Configuration::PHONE_NUMBER);
             MIDSigner signer(url, relyingPartyUUID, relyingPartyName, phone, rcpt_id, network);
-            result = signer.generateTickets(tickets, shares);
+            result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
             } else {
-                cert = std::move(signer.cert);
+                auth.cert = std::move(signer.cert);
             }
         } else {
             setLastError(t_("Unknown or missing signer type"));
@@ -338,9 +333,9 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         }
         kek.resize(32);
         std::fill(kek.begin(), kek.end(), 0);
-        for (unsigned int i = 0; i < tickets.size(); i++) {
+        for (unsigned int i = 0; i < auth_tokens.size(); i++) {
             NetworkBackend::ShareInfo share;
-            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, tickets[i], cert);
+            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, session.token, session.cert, auth_tokens[i], auth.cert, auth.params);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
                 LOG_ERROR("Cannot fetch share {}", i);

@@ -38,6 +38,18 @@ toBase64(const uint8_t *data, size_t len)
     return result;
 }
 
+std::string
+toBase64URL(const std::string& data)
+{
+    return jwt::base::details::encode(data, jwt::alphabet::base64url::data(), "");
+}
+
+std::string
+toBase64URL(const uint8_t *data, size_t len)
+{
+    return toBase64URL(std::string(reinterpret_cast<const char *>(data), len));
+}
+
 std::vector<uint8_t>
 fromBase64(std::string_view data)
 {

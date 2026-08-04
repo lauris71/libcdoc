@@ -105,18 +105,25 @@ struct MIDSIDResultData {
 static constexpr auto midsid_results = std::to_array<MIDSIDResultData>({
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED, "USER_REFUSED", "User refused the session"},
     {libcdoc::NetworkBackend::MIDSID_TIMEOUT, "TIMEOUT", "User did not confirm action within the timeframe"},
-    {libcdoc::NetworkBackend::MIDSID_DOCUMENT_UNUSABLE, "DOCUMENT_UNUSABLE", "Smart document unusable, please contact Smart ID customer support"},
+    {libcdoc::NetworkBackend::MIDSID_DOCUMENT_UNUSABLE, "DOCUMENT_UNUSABLE", "Document unusable, please contact Smart ID customer support"},
     {libcdoc::NetworkBackend::MIDSID_WRONG_VC, "WRONG_VC", "User chose a wrong Smart ID verification code"},
     {libcdoc::NetworkBackend::MIDSID_REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP, "REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP", "Smart ID app does not support current protocol"},
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CERT_CHOICE, "USER_REFUSED_CERT_CHOICE", "User refused certificate choice"},
+    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_INTERACTION, "USER_REFUSED_INTERACTION", "User refused the interaction"},
+    {libcdoc::NetworkBackend::MIDSID_PROTOCOL_FAILURE, "PROTOCOL_FAILURE", "There was a logical error in the signing protocol"},
+    {libcdoc::NetworkBackend::MIDSID_EXPECTED_LINKED_SESSION, "EXPECTED_LINKED_SESSION", "The app received a different transaction while waiting for the linked session"},
+    {libcdoc::NetworkBackend::MIDSID_SERVER_ERROR, "SERVER_ERROR", "The process was terminated due to server-side technical error"},
+    {libcdoc::NetworkBackend::ACCOUNT_UNUSABLE, "ACCOUNT_UNUSABLE", "The account is currently unusable"},
+    // Old
+    {libcdoc::NetworkBackend::MIDSID_NOT_MID_CLIENT, "NOT_MID_CLIENT", "user has no active Mobile-ID certificates"},
+    {libcdoc::NetworkBackend::MIDSID_USER_CANCELLED, "USER_CANCELLED", "user rejected the operation on the device"},
+    {libcdoc::NetworkBackend::MIDSID_SIGNATURE_HASH_MISMATCH, "SIGNATURE_HASH_MISMATCH", "mismatch between SIM and service provider configuration"},
+    {libcdoc::NetworkBackend::MIDSID_PHONE_ABSENT, "PHONE_ABSENT", "SIM card is not available"},
+
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_DISPLAYTEXTANDPIN, "USER_REFUSED_DISPLAYTEXTANDPIN", "User canceled the PIN choice"},
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_VC_CHOICE, "USER_REFUSED_VC_CHOICE", "User canceled the verification code choice"},
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE, "USER_REFUSED_CONFIRMATIONMESSAGE", "User refused the confirmation message"},
     {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE, "USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE", "User refused the confirmation message and verification code choice"},
-    {libcdoc::NetworkBackend::MIDSID_NOT_MID_CLIENT, "NOT_MID_CLIENT", "User is not a Mobile ID client"},
-    {libcdoc::NetworkBackend::MIDSID_USER_CANCELLED, "USER_CANCELLED", "User canceled the Mobile ID operation"},
-    {libcdoc::NetworkBackend::MIDSID_SIGNATURE_HASH_MISMATCH, "SIGNATURE_HASH_MISMATCH", "SIM card signature mismatch, please contact the mobile provider"},
-    {libcdoc::NetworkBackend::MIDSID_PHONE_ABSENT, "PHONE_ABSENT", "SIM card is not available"},
     {libcdoc::NetworkBackend::MIDSID_DELIVERY_ERROR, "DELIVERY_ERROR", "SMS sending error"},
     {libcdoc::NetworkBackend::MIDSID_SIM_ERROR, "SIM_ERROR", "Invalid response from SIM card"}
 });
@@ -307,17 +314,26 @@ static libcdoc::result_t
 get(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, picojson::value& rsp_json)
 {
     // Capture TLS and HTTP errors
+    LOG_DBG("GET: {}", path);
+    for (auto h : hdrs) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     httplib::Result res = cli.Get(path, hdrs);
     if (!res) {
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
-    httplib::Response rsp = res.value();
-    auto status = rsp.status;
+    int status = res->status;
+    LOG_DBG("Status: {}", status);
+    LOG_TRACE("  Body: {}", res->body);
+    for (auto h : res->headers) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     if ((status < 200) || (status >= 300)) {
         error = FORMAT("Http status {}", status);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
+    httplib::Response rsp = res.value();
     picojson::parse(rsp_json, rsp.body);
     error = {};
     return libcdoc::OK;
@@ -563,8 +579,7 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
 libcdoc::result_t
 libcdoc::NetworkBackend::authenticateForShares(std::string& token, std::string& cert)
 {
-#if 1
-    static const std::string url = "https://cdoc2-auth.test.riaint.ee";
+    static const std::string url = "https://cdoc2-auth.dev.riaint.ee";
     // Start authentication
     std::string host, path;
     int port;
@@ -640,11 +655,6 @@ libcdoc::NetworkBackend::authenticateForShares(std::string& token, std::string& 
     cert = auth_rsp.cert;
 
     auto parts = split(auth_rsp.sessionToken, '~');
-#else
-    token = "eyJraWQiOiJEN3Y5aF8wb1RuQUxxNmx6aVJPYUNGRzBVbFRCYmdPQTVMSGpfYkoteVo4IiwidHlwIjoidm5kLmNkb2MyLnNlc3Npb24tdG9rZW4udjIrc2Qtand0IiwiYWxnIjoiRVMyNTYifQ.eyJycENoYWxsZW5nZSI6ImhSV1hodWhueDJ6RDgrQ0NvSk1sZERRMkNyOW8yRmFhNStmU1ZVSkVSTVQ5YW1mVlFPUEp0UGRsaW9yU01PbWNaY2tNdWt3OHZwR3FhQVdGY0JvcDhRPT0iLCJzdWIiOiJldHNpL1BOT0VFLTM3MTA0MDgyNzEwIiwic2lnbmF0dXJlIjp7InZhbHVlIjoiQXlUd3JhOW10VGt6SUxodi9iQ0NhaUI5QWtNcktTRnVKT0FkKzZTZVhjeFJTTTVvSVFxWDlyZlVHNTB6UFpqZlYrQ3RQUHlnc3paZVpBODVFNm1NMzU5SjFIOGJVZDZiVHBCdGNTcWtLTzVtWFNzbXJmT2NYdDdjZWJTdW1MZ0liQ1VJckxISDA2QjVXeldiWjVYcmMzVkhscVBqVjVGbkhOejVtMUdyb3lKNkoyWHpNTkNmMVZNU1JtcC9meU16dWd5VXcxS1pqUlhTcnh3Wk5TRGhyMzVRL1l2NmVFMVdLdnZudnBjTTBMQWJobGxOZDhBSmdXMUhFZThrNGZYWTlKemxYN0YyWk5mdXM5a1MzQmNLMzhZZ0FKRlk4d0JYQzc5ODZQL0xOcjYxK1pOSkxUVUlGWU0vZHRudTcxdzhkWEo4TXVGYm5tbEdGVERuVlBjQXlSZmw5ZHdnS1Yvdmg3SFBWTlJ6d21TVjBCU1cwL1p4RVlFcmdMQ0lXaVJaSEFzYzBZVHppN0UycjVTV1A1b05KVVNtbnRHM0RpRmpWNUMwUERRa2hFUHpQYlhaYWg4MHhMQ21yT1dUelp2dVdXYnFRcHUwalR6SDRLOTc1bStlMlpRMEZMZEpsU3RYa0FlSTAwcE5va25LQW1MTkRkREh4Q2xVYVlJbzN5aDlFVkc0RlhGaTlqTnBiOWdKMGNEWEJmR3hpbENXUmVUZkF2TkE3c0lST0lhNjA0YmhjWmcyaTRybWxxYjdJNS9jYVQ1Y3lDb1pHSlZxa0lyVmtGa3ZDL1hjYzBzTy9Cdmpaa0doTWNWNnZEMU01eFVjcXNKK1d3ZHlXMjhyOURQTUZjdXRoRTl6QVVLbHY4OE9aRlFkc2xBeFJ6UEJSNHhDTnkvUm5WWVRSL1FmS0wrV1l3MTcyMU0zZ1d2WURMbXoyZ3VrWlBqNHBncklDTXU2cFV3SW9kUDNROTRROW5IeGtLNE5aWFY1eStMVjJNckNXVWZTWWh6dHNuVlJXWlhCMmplNFd5Yyt0b1IvcjNoQlpZL3FRa3BxTEhQcnExcDBjY2hnMEhtM2RzQm5RYzJPL3FKYUUyTGdYQVBYVVZ3cmJiVkFzb2NZc2tHeEF6UjdpWmlRQ2FVSkE0Um5zTGNkaitLT20zc0lHMVJ5azE3czNoeG5CYkZocGRHQnp5WWxSR25ncm5heW1CU3J3bDRBeVhoQTE1M09YbEp5b01EQkU0SmkxYlJwSXpwT1ZpSm45T2M0MHhQK1hpbU5MM0tnMm9LcS9EZEk3Z1Evdmd0WkFOMFFsU0pNcHo1TlJlRWRuTGgyUUt3V2duSGtYdGJ3ZUFXNFJIdml2M1lrNmtRYiIsInNlcnZlclJhbmRvbSI6IkVsMFVSWW5vdUNWWEcrVFpDS0lTNko4SyIsInVzZXJDaGFsbGVuZ2UiOiJNcEFrOTN3YTJFUEhGMW9wSmFQRVRHbTNjZDNNX29VYlBnNHRuVFZwZVRJIiwic2lnbmF0dXJlQWxnb3JpdGhtIjoicnNhc3NhLXBzcyIsImZsb3dUeXBlIjoiTm90aWZpY2F0aW9uIiwic2lnbmF0dXJlQWxnb3JpdGhtUGFyYW1ldGVycyI6eyJoYXNoQWxnb3JpdGhtIjoiU0hBLTI1NiIsIm1hc2tHZW5BbGdvcml0aG0iOnsiYWxnb3JpdGhtIjoiaWQtbWdmMSIsInBhcmFtZXRlcnMiOnsiaGFzaEFsZ29yaXRobSI6IlNIQS0yNTYifX0sInNhbHRMZW5ndGgiOjMyLCJ0cmFpbGVyRmllbGQiOiIweGJjIn19LCJpc3MiOiJodHRwczovL2Nkb2MyLWF1dGgudGVzdC5yaWFpbnQuZWUiLCJzY2hlbWVOYW1lIjoic21hcnQtaWQtZGVtbyIsInNpZ25hdHVyZVByb3RvY29sIjoiUlNBU1NBLVBTUytBQ1NQX1YyIiwiX3NkIjpbIlZhb3ZCN0RYSm44Q21aOEFSd2dvODJNR2pPSkc2VTA4Zm9VVXl3UlJzaVkiXSwiaW50ZXJhY3Rpb25zRGlnZXN0IjoiWG9pN1F1eDB0NmxFaXN6MU9Gc1dIUGdhM1l6Q2QzQ2ROQ0t1VE91UHZBWT0iLCJfc2RfYWxnIjoic2hhLTI1NiIsImV4cCI6MTc4NDcwMjI2OCwiaWF0IjoxNzg0NjE1ODY4LCJpbnRlcmFjdGlvblR5cGVVc2VkIjoiY29uZmlybWF0aW9uTWVzc2FnZUFuZFZlcmlmaWNhdGlvbkNvZGVDaG9pY2UiLCJycE5hbWUiOiJERU1PIn0.ekJ-J--6wuLhvsmxwEOpOLqjYCV1QMiYaUjwbAsq6Nt6qNdvMy81ArUCyN5l3CENfUKcgcQdw3HtQxuPEk0_PQ~WyJMdlRKN3VaNF9ValBJU3JFc3h3Wmp3IiwiYXVkIixbeyIuLi4iOiJYTnR2amNRZEhTbkhNNWdPWDhwcXpHWHUzMzY4VE0xNExjS2h5Z0dzZWM0In0seyIuLi4iOiJzX1d1aDFqenVFbmo3ZVZVdldtcXIzaURVSmNMcGlkQ1BpZDVYOXFuWi0wIn0seyIuLi4iOiIyVmRsWGpaMU9DcndwbGpGYURMMFJ2N3VZNEtvZ1hoQWdobjBTM1VRZ2dnIn1dXQ~WyI3RmxpMXhPd3hhQXdBWVZkR1ZJVkVBIiwiaHR0cHM6Ly9jZG9jMi1ycC50ZXN0LnJpYWludC5lZS9zZXNzaW9uX25vbmNlL3EyaUxJS2VveXpEQ1RyeGRJbVk0aUEiXQ~WyJfVUpmQ1hDbXJyMml1N3N4NXo3QWZ3IiwiaHR0cHM6Ly9jZG9jMi1zaGFyZXMudGVzdC5yaWFpbnQuZWUvc2Vzc2lvbl9ub25jZS9GTGw2b3dramlJZVMwVzBqUHlLNll3Il0~WyJQMURtczZFbmk3LU4yS0Y0OXl2SUZBIiwiaHR0cHM6Ly9jZG9jMi1zaGFyZXNleHRlcm5hbC50ZXN0LnJpYWludC5lZS9zZXNzaW9uX25vbmNlL3hHdzVxR1g1alFLOUlFVi1CbVZKZWciXQ~";
-    cert = "MIIGuzCCBkCgAwIBAgIQDV-hZUN9xS5yEzxpvHOPejAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkGA1UEBhMCRUUwHhcNMjUxMDI5MDcwOTEwWhcNMjgxMDI4MDYwOTEwWjBpMQswCQYDVQQGEwJFRTEZMBcGA1UEAwwQS0FQTElOU0tJLExBVVJJUzESMBAGA1UEBAwJS0FQTElOU0tJMQ8wDQYDVQQqDAZMQVVSSVMxGjAYBgNVBAUTEVBOT0VFLTM3MTA0MDgyNzEwMIIDIjANBgkqhkiG9w0BAQEFAAOCAw8AMIIDCgKCAwEAkOP8-thy1C0eG_CuqA5stRrjUaD5T07Q7-JZcZcWPnRTBROZizhehHozd-Kqxs_PH4I2lFCmGx8QgoeIba4VO7NeZ-DacaQtfGHlX85pYpzJH3l31e-xs_oQsW9CIp07MpkfcbuB16T2X88S2_YCFC2pbgxJg3CpF4ejL-zjT18SeRfXmHwPEP9kuLYFSZ6yALDIRLf-_r0SucwARNDSG0MVu-riE0xDZjok0SqCfscaa027sco43T4l2OSd1G8yGHwoIhZuTepWpkfgwUR3RUhAFZdPUEBvtLbeLaQ_J5BG6gHWcZtHD_wEXjcf7HPygxVk8XPlmndUPNmt-gtWLh5LuGqjgL1o8P2M9SXkNHPy0mD9s3noMS2agluVRA3dJoitn3hG_nBS3ADOtwUwGtb11KMZJMJaEePATv5iNLEXEiFBDcST4F2QEjs96QBLGwJEpToOxHDbfVe1p9OpRWjsSrf9IJAXxjsm37uP1QgaqRMAUaF8LZaSyWQ9OIKVfMQZ8DR-kl4BYyAMyxTNewL7Ht4f4qYV2WUvrD3U0puhVWXH5dAzgDXVmzYHgsRj_gCTGNoQBCop3X2ZQ-lbQZvMto6xtL-tHl9oG8b_hcTvv-UCIIhj2Sokb7RljG0UAyn4rsEUya_pBreaFKBsufTIVt-oNbjAReqzdNXT_gtmHm8P920Yq7i0qpnEAouigpvNcB_04o11ZGpLf4sOoJb-IvOoWnf0f52PFOTDxroP9N9LM8umNFT7WPbL9JLev9huURRBobp2D6Rf47Ktgiq4KzuOMLUMRRDUTAYrKftwGwye6nlV2fONX7PLRqlqzhLDe5ljEwchJ7asiC0FPN5IG-j4wl1RBMjlNcaGfgnhalMsDIiBRlTg4qIkQwwz4y4GRJXjfgz2J4CymQDEdha-pMePRCKttVDPAsTS5y4ACQphyWjVxfEvGC7z4XkDbr7kPhOuAkkfhdhsdOM5oFGz2KeJQmeZtEi5gMZ6BHjbYoYJPJKXa5B_yYu1d6dbAgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5kZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQDDBhQTk9FRS0zNzEwNDA4MjcxMC1OWEhTLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAoBgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5NzEwNDA4MTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUJRKanMsHUMXf5zhIfK51Qn_n6lAwDgYDVR0PAQH_BAQDAgeAMAoGCCqGSM49BAMDA2kAMGYCMQC8hVUFpywnFWTqUB6Rw-CADvHrQBft9H9pyM5IIUanrS2O-KFsc0TsMojORxcg_xkCMQDE71vvGtizs-sEk23jam_2pi76C1e5rDjfPDn6qFBuvvEtpcQlmX7e9JDCfGcKJtc=";
-    auto parts = split(token, '~');
-#endif
     if (parts.size() < 3) {
         error = "Invalid JWT-SD token";
         LOG_WARN("Invalid JWT-SD token");
@@ -703,10 +713,11 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     if (result = setProxy(cli, this); result != OK) return result;
 
     SessionToken stoken(auth_token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
 
     std::string full = path + "/key-shares/" + share_id + "/nonce";
     httplib::Headers hdrs;
-    hdrs.insert({"x-cdoc2-session-token", stoken.discloseForUrl(url)});
+    hdrs.insert({"x-cdoc2-session-token", session_token_disclosed});
     hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
     LOG_DBG("POST nonce request to: {}", full);
     httplib::Response rsp;
@@ -732,7 +743,7 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& ticket, const std::vector<uint8_t>& cert)
+libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::string& auth_params)
 {
     LOG_DBG("Get share from: {}", url);
 
@@ -749,11 +760,17 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
+    SessionToken stoken(session_token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
+
     std::string full = path + "/key-shares/" + share_id;
     LOG_DBG("Share url: {}", full);
     httplib::Headers hdrs;
-    hdrs.insert({"x-cdoc2-auth-ticket", ticket});
-    hdrs.insert({"x-cdoc2-auth-x5c", std::string("-----BEGIN CERTIFICATE-----") + toBase64(cert) + "-----END CERTIFICATE-----"});
+    hdrs.insert({"x-cdoc2-session-token", session_token_disclosed});
+    hdrs.insert({"x-cdoc2-session-x5c", session_cert});
+    hdrs.insert({"x-cdoc2-auth-token", auth_token});
+    hdrs.insert({"x-cdoc2-auth-x5c", toBase64URL(auth_cert)});
+    hdrs.insert({"x-cdoc2-sid-rpv3-signature-parameters", toBase64URL(auth_params)});
     picojson::value rsp_json;
     result = get(cli, hdrs, full, rsp_json);
     if (result != libcdoc::OK) return result;
@@ -795,24 +812,26 @@ libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 struct SIDResponse {
     // Signature value, base64 encoded
     std::string signature;
-    // Signature algorithm, in the form of sha256WithRSAEncryption
-    std::string algorithm;
     // Signer certificate, base64 encoded
     std::string cert;
+    // Full signature json to create verification info
+    picojson::object signature_json;
+    std::string inter_type_used;
 };
 
 namespace libcdoc {
 
 static result_t
-waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& session_id, double seconds, bool is_sid)
+waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_token_disclosed, const std::string& auth_cert, const std::string& session_id, double seconds)
 {
-    httplib::Headers hdrs;
-
     double end = libcdoc::getTime() + seconds;
-    std::string full = path + session_id + "?timeoutMs=" + std::to_string((int) (seconds * 1000));
+    std::string full = path + session_id;
     LOG_DBG("SID/MID session query path: {}", full);
     while (libcdoc::getTime() < end) {
         picojson::value rsp;
+        httplib::Headers hdrs;
+        hdrs.insert({"x-cdoc2-session-token", auth_token_disclosed});
+        hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
         result_t result = get(cli, hdrs, full, rsp);
         if (result != OK) return result;
         if (!rsp.is<picojson::object>()) {
@@ -834,25 +853,21 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
             std::this_thread::sleep_for(duration);
             continue;
         } else if (str != "COMPLETE") {
-            error = FORMAT("Invalid SmartID state: {}", str);
+            error = FORMAT("Invalid state value: {}", str);
             LOG_WARN("{}", error);
             return NetworkBackend::NETWORK_ERROR;
         }
+
         // State is complete, check for end result
         v = rsp.get("result");
-        picojson::value w;
-        if (is_sid) {
-            if (!v.is<picojson::object>()) {
-                error = "Result is not a JSON object";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            w = v.get("endResult");
-        } else {
-            w = v;
+        if (!v.is<picojson::object>()) {
+            error = "Result is not an object";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
         }
+        picojson::value w = v.get("endResult");
         if (!w.is<std::string>()) {
-            error = "EndResult is not a string";
+            error = "Result is not a string";
             LOG_WARN("{}", error);
             return NetworkBackend::NETWORK_ERROR;
         }
@@ -867,7 +882,10 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
             LOG_WARN("EndResult is not OK: {}", str);
             return result;
         }
+        // documentNumber
+        // details
 
+        // signatureProtocol
         // Signature
         v = rsp.get("signature");
         if (v.is<picojson::object>()) {
@@ -878,26 +896,25 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
                 return NetworkBackend::NETWORK_ERROR;
             }
             dst.signature = w.get<std::string>();
-            w = v.get("algorithm");
-            if (!w.is<std::string>()) {
-                error = "Algorithm is not a string";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            dst.algorithm = w.get<std::string>();
+            dst.signature_json = v.get<picojson::object>();
         }
+        // Interaction type
+        v = rsp.get("interactionTypeUsed");
+        if (!v.is<std::string>()) {
+            error = "InteractionTypeUsed is not a string";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+        dst.inter_type_used = v.get<std::string>();
+
         // Certificate
         v = rsp.get("cert");
-        if (is_sid) {
-            if (!v.is<picojson::object>()) {
-                error = "Certificate is not a JSON object";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            w = v.get("value");
-        } else {
-            w = rsp.get("cert");
+        if (!v.is<picojson::object>()) {
+            error = "Certificate is not a JSON object";
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
         }
+        w = v.get("value");
         if (!w.is<std::string>()) {
             error = "Certificate value is not a string";
             LOG_WARN("{}", error);
@@ -917,18 +934,38 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-    const std::string& url, const std::string& auth_token, const std::string& auth_cert,
+libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::string& params,
+    const std::string& url, const std::string& session_token, const std::string& session_cert,
     const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
+    // Start authentication:
+    //
+    // semanticsIdentifier: PNOEE-XYZ...
+    // certificateLevel: QUALIFIED
+    // signatureProtocol: ACSP_V2
+    // signatureProtocolParameters:
+    //   rpChallenge: S480uRoCX4pAb1tWqAy8WGl/AWE1RnqaP2y5iamCDhlCyQrMTVa5d8Dh34sZ+UePHXRNKTwz7QTvsIL1ls05AQ==
+    //   signatureAlgorithm: rsassa-pss
+    //   signatureAlgorithmParameters:
+    //     hashAlgorithm: SHA-512
+    // interactions: W3sidHlwZSI6ImNvbmZpcm1hdGlvbk1lc3NhZ2UiLCJkaXNwbGF5VGV4dDIwMCI6IkRlY3J5cHRpbmcgY29udGFpbmVyIGZpbGUgXCJ0ZXN0LnR4dFwiIn0seyJ0eXBlIjoiZGlzcGxheVRleHRBbmRQSU4iLCJkaXNwbGF5VGV4dDYwIjoiRGVjcnlwdGluZyBjb250YWluZXIgZmlsZSBcInRlc3QudHh0XCIifV0=
+    // vcType: numeric4
+    //
     std::string certificateLevel = "QUALIFIED";
+    std::string hashAlgorithm = "SHA-256";
+    if (!rcpt_id.starts_with("etsi/")) return libcdoc::INTERNAL_ERROR;
+    std::string semanticIdentifier = rcpt_id.substr(5);
+
     auto nonce_bytes = Crypto::random(16);
     if (nonce_bytes.empty())
         return libcdoc::CRYPTO_ERROR;
     std::string nonce = libcdoc::toBase64(nonce_bytes);
 
+    SessionToken stoken(session_token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
+
     picojson::object sap = {
-        {"hashAlgorithm", picojson::value("SHA-256")}
+        {"hashAlgorithm", picojson::value(hashAlgorithm)}
     };
     picojson::object spp = {
         {"rpChallenge", picojson::value(toBase64(digest))},
@@ -942,13 +979,17 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     picojson::array inter_arr = {
         picojson::value(inter)
     };
-    std::string inter_str = picojson::value(inter_arr).serialize();
+    //std::string inter_str = picojson::value(inter_arr).serialize();
+    std::string inter_str = "[{\"type\":\"confirmationMessageAndVerificationCodeChoice\",\"displayText200\":\"Do you want to decrypt the document\"}]";
+    LOG_DBG("Interactions: {}", inter_str);
+    inter_str = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
+    std::string inter_str_64 = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
     picojson::object obj = {
-        {"semanticsIdentifier", picojson::value(rcpt_id)},
+        {"semanticsIdentifier", picojson::value(semanticIdentifier)},
         {"certificateLevel", picojson::value(certificateLevel)},
         {"signatureProtocol", picojson::value("ACSP_V2")},
         {"signatureProtocolParameters", picojson::value(spp)},
-        {"interactions", picojson::value(toBase64((const uint8_t *) inter_str.data(), inter_str.size()))},
+        {"interactions", picojson::value(inter_str_64)},
         {"vcType", picojson::value("numeric4")}
     };
     picojson::value query(obj);
@@ -963,72 +1004,12 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     LOG_DBG("PORT:{}", port);
     LOG_DBG("PATH:{}", path);
 
-    SessionToken stoken(auth_token);
-
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
-
-    //
-    // Let user choose certificate (if multiple)
-    //
-    std::string full = path + "/sid/authenticate";
-    LOG_DBG("SmartID path: {}", full);
-    httplib::Headers hdrs;
-    hdrs.insert({"x-cdoc2-session-token", stoken.discloseForUrl(url)});
-    hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
-    httplib::Response rsp;
-    result = post(cli, full, hdrs, query.serialize(), rsp);
-    if (result != libcdoc::OK) return result;
-
-    return NOT_IMPLEMENTED;
-#if 0
-    LOG_DBG("Response: {}", rsp.body);
-    picojson::value v;
-    std::string parse_err = picojson::parse(v, rsp.body);
-    if (!parse_err.empty()) {
-        error = FORMAT("JSON parse error: {}", parse_err);
-        LOG_ERROR("{}", error);
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    if (!v.is<picojson::object>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    picojson::value w = v.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string sessionID  = w.get<std::string>();
-    LOG_DBG("SessionID: {}", sessionID);
-
-    SIDResponse sidrsp;
-    result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
-    if (result != OK) return result;
-    LOG_DBG("Certificate: {}", sidrsp.cert);
-
-    //
-    // Sign
-    //
-    std::string_view algo_name = hashAlgorithmToSidMidName(algo);
-    if (algo_name.empty()) {
-        error = "Unsupported hash algorithm for Smart-ID";
-        LOG_ERROR("Unsupported hash algorithm for Smart-ID: {}",
-                  static_cast<int>(algo));
-        return libcdoc::WRONG_ARGUMENTS;
-    }
-
-    if (digest.empty()) {
-        error = "Empty digest";
-        LOG_ERROR("Empty digest passed to signSID");
-        return libcdoc::WRONG_ARGUMENTS;
-    }
 
     // Generate code
     SIDMIDFeedback fb;
@@ -1038,63 +1019,65 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     result = showFeedback(fb);
     if (result != OK) return result;
 
-    picojson::object aio1 = {
-        {"type", picojson::value("confirmationMessageAndVerificationCodeChoice")},
-        {"displayText200", picojson::value("Do you want to decrypt the document")}
-    };
-    picojson::array aio = {
-        picojson::value(aio1)
-    };
-    picojson::object qobj = {
-        {"relyingPartyUUID", picojson::value(rp_uuid)},
-        {"relyingPartyName", picojson::value(rp_name)},
-        {"hash", picojson::value(toBase64(digest))},
-        {"hashType", picojson::value(std::string(algo_name))},
-        {"allowedInteractionsOrder",
-            picojson::value(aio)
-        }
-    };
-    query = picojson::value(qobj);
-    LOG_DBG("JSON:{}", query.serialize());
     //
-    // Sign digest
+    // Begin authentication session
     //
-    full = path + "/authentication/" + rcpt_id;
+    std::string full = path + "/sid/authenticate";
     LOG_DBG("SmartID path: {}", full);
+    httplib::Headers hdrs;
+    hdrs.insert({"x-cdoc2-session-token", session_token_disclosed});
+    hdrs.insert({"x-cdoc2-session-x5c", session_cert});
+    httplib::Response rsp;
     result = post(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
-    LOG_DBG("Response: {}", rsp.body);
-    parse_err = picojson::parse(v, rsp.body);
+
+    // Reply:
+    //
+    // {"sessionID":"xyz..."}
+    //
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    if (!v.is<picojson::object>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    w = v.get("sessionID");
+    picojson::value w = rsp_json.get("sessionID");
     if (!w.is<std::string>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    sessionID  = w.get<std::string>();
-    LOG_DBG("SessionID: {}", sessionID);
+    std::string sessionId = w.get<std::string>();
+    LOG_DBG("SessionID: {}", sessionId);
 
-    sidrsp = {};
-    result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
+    SIDResponse sidrsp;
+    result = waitForResult(sidrsp, cli, path + "/sid/session/", session_token_disclosed, session_cert, sessionId, 60);
     if (result != OK) return result;
+
     LOG_DBG("Certificate: {}", sidrsp.cert);
     LOG_DBG("Signature: {}", sidrsp.signature);
 
+    sidrsp.signature_json.erase("value");
+    SHA256((uint8_t *) inter_str.c_str(), inter_str.size(), b.data());
+    std::string inter_hash_64 = toBase64(b.data(), b.size());
+
+    picojson::object sig_parms = {
+        {"interactionsDigest", picojson::value(inter_hash_64)},
+        {"interactionTypeUsed", picojson::value(sidrsp.inter_type_used)},
+        {"signature", picojson::value(sidrsp.signature_json)},
+    };
+
     dst = fromBase64(sidrsp.signature);
     cert = fromBase64(sidrsp.cert);
+    params = picojson::value(sig_parms).serialize();
 
     return OK;
-#endif
 }
 
 libcdoc::result_t
@@ -1212,7 +1195,7 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     LOG_DBG("SessionID: {}", sessionID);
 
     SIDResponse sidrsp;
-    result = waitForResult(sidrsp, cli, path + "/authentication/session/", sessionID, 60, false);
+    result = waitForResult(sidrsp, cli, path + "/authentication/session/", {}, {}, sessionID, 60);
     if (result != OK) return result;
 
     LOG_DBG("Certificate: {}", sidrsp.cert);

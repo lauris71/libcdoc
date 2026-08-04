@@ -43,26 +43,32 @@ struct CDOC_EXPORT NetworkBackend {
     static constexpr int MIDSID_REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP = -354;
     // User has multiple accounts and pressed Cancel on device choice screen on any device
     static constexpr int MIDSID_USER_REFUSED_CERT_CHOICE = -355;
+    static constexpr int MIDSID_USER_REFUSED_INTERACTION = -356;
+    static constexpr int MIDSID_PROTOCOL_FAILURE = -357;
+    static constexpr int MIDSID_EXPECTED_LINKED_SESSION = -358;
+    static constexpr int MIDSID_SERVER_ERROR = -359;
+    static constexpr int ACCOUNT_UNUSABLE = -360;
+
     // User pressed Cancel on PIN screen. Can be from the most common displayTextAndPIN flow or from verificationCodeChoice flow when user chosen the right code and then pressed cancel on PIN screen
-    static constexpr int MIDSID_USER_REFUSED_DISPLAYTEXTANDPIN = -356;
+    static constexpr int MIDSID_USER_REFUSED_DISPLAYTEXTANDPIN = -361;
     // User cancelled verificationCodeChoice screen
-    static constexpr int MIDSID_USER_REFUSED_VC_CHOICE = -357;
+    static constexpr int MIDSID_USER_REFUSED_VC_CHOICE = -362;
     // User cancelled on confirmationMessage screen
-    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE = -358;
+    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE = -363;
     // User cancelled on confirmationMessageAndVerificationCodeChoice screen
-    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE = -359;
+    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE = -364;
     // Given user has no active certificates and is not MID client.
-    static constexpr int MIDSID_NOT_MID_CLIENT = -360;
+    static constexpr int MIDSID_NOT_MID_CLIENT = -365;
     // User cancelled the operation
-    static constexpr int MIDSID_USER_CANCELLED = -361;
+    static constexpr int MIDSID_USER_CANCELLED = -366;
     // Mobile-ID configuration on user's SIM card differs from what is configured on service provider's side. User needs to contact his/her mobile operator.
-    static constexpr int MIDSID_SIGNATURE_HASH_MISMATCH = -362;
+    static constexpr int MIDSID_SIGNATURE_HASH_MISMATCH = -367;
     // Sim not available
-    static constexpr int MIDSID_PHONE_ABSENT = -363;
+    static constexpr int MIDSID_PHONE_ABSENT = -368;
     // SMS sending error
-    static constexpr int MIDSID_DELIVERY_ERROR = -364;
+    static constexpr int MIDSID_DELIVERY_ERROR = -369;
     // Invalid response from card
-    static constexpr int MIDSID_SIM_ERROR = -365;
+    static constexpr int MIDSID_SIM_ERROR = -370;
 #endif
 
     /**
@@ -191,7 +197,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param share_id share id (transaction id)
      * @return error code or OK
      */
-    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const std::string& auth_token, const std::string& auth_cert);
+    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const std::string& session_token, const std::string& session_cert);
     /**
      * @brief fetch key share from share server
      * @param share a container for result
@@ -201,7 +207,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param cert a certificate of signing key (PEM without newlines)
      * @return error code or OK
      */
-    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& ticket, const std::vector<uint8_t>& cert);
+    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::string& auth_params);
 #endif
 
     /**
@@ -275,7 +281,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
-    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
+    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::string& params,
         const std::string& url, const std::string& auth_token, const std::string& auth_cert,
         const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 

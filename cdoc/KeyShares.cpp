@@ -36,27 +36,16 @@
 #include <thread>
 #include <iostream>
 
-static std::string
-toBase64URL(const std::string& data)
-{
-    return jwt::base::details::encode(data, jwt::alphabet::base64url::data(), "");
-}
-
-static std::string
-toBase64URL(const std::vector<uint8_t>& data)
-{
-    return toBase64URL(std::string((const char *) data.data(), data.size()));
-}
-
-libcdoc::ShareData::ShareData(const std::string& _base_url, const std::string& _share_id, const std::string& _nonce)
-: base_url(_base_url), share_id(_share_id), nonce(_nonce)
-{
-}
-
 std::string
 libcdoc::ShareData::getURL()
 {
-    return base_url + "key-shares/" + share_id + "?nonce=" + nonce;
+    // fixme: Understand where the trailing '/' is dropped
+    std::string url = base_url;
+    if (!base_url.ends_with('/'))
+        url = url + "/";
+    url = url +  + "key-shares/" + share_id + "?nonce=" + nonce;
+    LOG_DBG("Share URL: {}", url);
+    return url;
 }
 
 namespace libcdoc {
@@ -210,12 +199,12 @@ SIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
 {
     LOG_TRACE_KEY("SID signing: {}", digest);
 
-    result_t result = network->signSID(dst, cert, url, session_token, auth_cert, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
+    result_t result = network->signSID(dst, cert, params, url, session.token, session.cert, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
     if (result != OK) {
         error = network->getLastErrorStr(result);
     }
 
-    LOG_DBG("SID dignature:{}", toHex(dst));
+    LOG_DBG("SID signature:{}", toHex(dst));
     LOG_DBG("SID signatureB64:{}", toBase64URL(dst));
     LOG_DBG("SID certificateB64:{}", toBase64(cert));
     
@@ -223,7 +212,7 @@ SIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
 }
 
 result_t
-libcdoc::MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest)
+MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest)
 {
 
     LOG_TRACE_KEY("MID signing: {}", digest);

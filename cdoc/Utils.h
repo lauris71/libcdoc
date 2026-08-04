@@ -49,9 +49,14 @@ static auto encodeName(std::string_view path)
 }
 
 std::string toBase64(const uint8_t *data, size_t len);
-
 static std::string toBase64(const std::vector<uint8_t> &data) {
     return toBase64(data.data(), data.size());
+}
+
+std::string toBase64URL(const std::string& data);
+std::string toBase64URL(const uint8_t *data, size_t len);
+static std::string toBase64URL(const std::vector<uint8_t> &data) {
+    return toBase64URL(data.data(), data.size());
 }
 
 std::vector<uint8_t> fromBase64(std::string_view data);

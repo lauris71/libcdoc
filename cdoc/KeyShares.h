@@ -37,11 +37,11 @@ struct ShareData {
     /**
      * @brief Construct a new Share Data object for authentication
      * 
-     * @param base_url share server base url (e.g. https://cdoc2.my.domain/v1/)
-     * @param share_id share id from capsule
-     * @param nonce session nonce from server
+     * @param _base_url share server base url (e.g. https://cdoc2.my.domain/v1/)
+     * @param _share_id share id from capsule
      */
-    ShareData(const std::string& base_url, const std::string& share_id, const std::string& nonce);
+    ShareData(const std::string& _base_url, const std::string& _share_id) : base_url(_base_url), share_id(_share_id) {}
+
 
     /**
      * @brief Get share url
@@ -51,6 +51,27 @@ struct ShareData {
      * @return share url
      */
     std::string getURL();
+};
+
+/**
+ * @brief Session data
+ * 
+ * The session token and certificate provided by AUTH server
+ * 
+ */
+struct SessionData {
+    std::string token;
+    std::string cert;
+};
+
+/**
+ * @brief Authentication data for share tickets
+ * 
+ * The certificate and signature parameters from RP server
+ */
+struct AuthenticationData {
+    std::vector<uint8_t> cert;
+    std::string params;
 };
 
 /**
@@ -94,6 +115,7 @@ struct Signer {
      * 
      */
     std::vector<uint8_t> cert;
+    std::string params;
     /**
      * @brief The text of last error
      * 
@@ -124,20 +146,17 @@ struct SIDSigner : public Signer {
      * @brief Full session token
      * 
      */
-    // fixme: parsed?
-    const std::string session_token;
-    // fixme:
-    const std::string auth_cert;
+    const SessionData& session;
+
     /**
      * @brief Construct a new SIDSigner object
      * 
      * @param _url SmartID gateway url
-     * @param _rp_uuid Relying party UUID
-     * @param _rp_name Relying party name
+     * @param _session Full session data (token and certificate)
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
-    SIDSigner(const std::string& _url, const std::string& _session_token, const std::string& _cert, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_rcpt_id, "RS256", network), url(_url), session_token(_session_token), auth_cert(_cert) {}
+    SIDSigner(const std::string& _url, const SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
+    : Signer(_rcpt_id, "RSASSA-PSS+ACSP_V2", network), url(_url), session(_session) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
