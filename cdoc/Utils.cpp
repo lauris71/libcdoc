@@ -71,9 +71,18 @@ fromBase64(std::string_view data)
 std::vector<uint8_t>
 fromBase64URL(std::string_view data)
 {
-	auto padded = jwt::base::pad<jwt::alphabet::base64url>(std::string(data));
-	auto str = jwt::base::decode<jwt::alphabet::base64url>(padded);
-    return std::vector<uint8_t>(str.cbegin(), str.cend());
+    // Same contract as fromBase64: the input is untrusted (server-issued
+    // tokens and disclosures) and jwt::base::decode throws std::runtime_error
+    // on malformed input, so failures are signalled with an empty result
+    // instead of an exception escaping into the caller.
+    try {
+        auto padded = jwt::base::pad<jwt::alphabet::base64url>(std::string(data));
+        auto str = jwt::base::decode<jwt::alphabet::base64url>(padded);
+        return std::vector<uint8_t>(str.cbegin(), str.cend());
+    } catch (const std::exception &e) {
+        LOG_WARN("fromBase64URL: invalid base64url input: {}", e.what());
+        return {};
+    }
 }
 
 double

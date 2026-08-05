@@ -244,18 +244,13 @@ SessionToken::SessionToken(std::string_view str)
 }
 
 // Extract the target URL from a base64url-encoded SD-JWT disclosure.
-// Returns an empty string if the disclosure is malformed. Never throws:
-// fromBase64URL throws on malformed base64 until the S2 fix lands, and a
-// malformed (server-issued) disclosure must not crash the process.
+// Returns an empty string if the disclosure is malformed (fromBase64URL is
+// non-throwing; a malformed server-issued disclosure must not crash the
+// process).
 static std::string
 disclosureTargetUrl(const std::string& disclosure)
 {
-    std::vector<uint8_t> decoded_part;
-    try {
-        decoded_part = fromBase64URL(disclosure);
-    } catch (const std::exception &) {
-        return {};
-    }
+    std::vector<uint8_t> decoded_part = fromBase64URL(disclosure);
     std::string json_str(decoded_part.begin(), decoded_part.end());
     picojson::value json;
     if (!picojson::parse(json, json_str).empty())
@@ -268,6 +263,31 @@ disclosureTargetUrl(const std::string& disclosure)
     return arr[1].get<std::string>();
 }
 
+// Compare two URLs by origin (scheme, host, port). Used for SD-JWT
+// disclosure binding (S7): a disclosure authorizes exactly one server, so
+// substring matching is not acceptable - a disclosure for
+// share.example.com.evil.ee must not match share.example.com, and a short
+// query URL must not over-match many disclosures. Origin comparison is
+// robust against trailing-slash and path variations (session-token
+// disclosures carry the nonce on the path). parseURL enforces the https
+// scheme on both sides, so plain-http never matches. Host comparison is
+// case-insensitive.
+static bool
+urlsMatchByOrigin(std::string_view a, std::string_view b)
+{
+    std::string ahost, apath, bhost, bpath;
+    int aport = 0, bport = 0;
+    if (parseURL(std::string(a), ahost, aport, apath) != OK)
+        return false;
+    if (parseURL(std::string(b), bhost, bport, bpath) != OK)
+        return false;
+    std::transform(ahost.begin(), ahost.end(), ahost.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(bhost.begin(), bhost.end(), bhost.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return ahost == bhost && aport == bport;
+}
+
 std::string
 SessionToken::discloseForUrl(std::string_view url)
 {
@@ -275,7 +295,7 @@ SessionToken::discloseForUrl(std::string_view url)
     for (auto& d : disclosures) {
         std::string target_url = disclosureTargetUrl(d);
         if (target_url.empty()) continue;
-        if (target_url.find(url) != std::string::npos) {
+        if (urlsMatchByOrigin(target_url, url)) {
             std::string token = jwt + "~" + aud + "~" + d + "~";
             LOG_DBG("Disclosed token: {}", token);
             return token;
@@ -287,29 +307,9 @@ SessionToken::discloseForUrl(std::string_view url)
 bool
 SessionToken::hasDisclosureForUrl(std::string_view url)
 {
-    // Compare origins (scheme, host, port): the disclosure authorizes a
-    // share server, and the credential-theft risk (S1) is about the session
-    // token and user certificate being sent to a different host. Origin
-    // comparison is robust against trailing-slash and path variations.
-    // parseURL also rejects non-https URLs, so a disclosure or share URL
-    // with a plain-http scheme never matches.
-    std::string host, path;
-    int port = 0;
-    if (parseURL(std::string(url), host, port, path) != OK)
-        return false;
-    std::transform(host.begin(), host.end(), host.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
     for (const auto& d : disclosures) {
         std::string target = disclosureTargetUrl(d);
-        if (target.empty())
-            continue;
-        std::string dhost, dpath;
-        int dport = 0;
-        if (parseURL(target, dhost, dport, dpath) != OK)
-            continue;
-        std::transform(dhost.begin(), dhost.end(), dhost.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
-        if (host == dhost && port == dport) {
+        if (!target.empty() && urlsMatchByOrigin(target, url)) {
             LOG_DBG("Server {} is authorized by a session disclosure", url);
             return true;
         }
@@ -321,18 +321,26 @@ SessionToken::hasDisclosureForUrl(std::string_view url)
 std::string
 decodeTicket(const std::string& ticket)
 {
-    auto decoded = jwt::decode(ticket);
-    auto a = decoded.get_header_json();
-    for (auto t : a) {
-        LOG_DBG("Header {}: {}", t.first, t.second.to_str());
+    // jwt::decode throws on malformed input; the ticket comes from a remote
+    // server, so a decode failure must not crash the process. An empty result
+    // makes the caller's JSON parse step report the format error.
+    try {
+        auto decoded = jwt::decode(ticket);
+        auto a = decoded.get_header_json();
+        for (auto t : a) {
+            LOG_DBG("Header {}: {}", t.first, t.second.to_str());
+        }
+        a = decoded.get_payload_json();
+        for (auto t : a) {
+            LOG_DBG("Payload {}: {}", t.first, t.second.to_str());
+        }
+        auto b = decoded.get_signature();
+        LOG_DBG("Signature: {}", b);
+        return picojson::value(decoded.get_payload_json()).serialize();
+    } catch (const std::exception &e) {
+        LOG_WARN("decodeTicket: invalid JWT: {}", e.what());
+        return {};
     }
-    a = decoded.get_payload_json();
-    for (auto t : a) {
-        LOG_DBG("Payload {}: {}", t.first, t.second.to_str());
-    }
-    auto b = decoded.get_signature();
-    LOG_DBG("Signature: {}", b);
-    return picojson::value(decoded.get_payload_json()).serialize();
 }
 
 } // namespace libcdoc

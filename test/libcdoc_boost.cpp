@@ -29,7 +29,11 @@
 #include <Utils.h>
 #include <XmlReader.h>
 #include <cdoc/Crypto.h>
+#include <cdoc/Io.h>
 #include <cdoc/KeyShares.h>
+#include <cdoc/CDocWriter.h>
+#include <cdoc/Configuration.h>
+#include <cdoc/NetworkBackend.h>
 
 #include <libxml/parser.h>
 
@@ -860,6 +864,39 @@ BOOST_AUTO_TEST_CASE(InvalidInputReturnsEmpty)
     BOOST_CHECK(libcdoc::fromBase64("QQ==QQ==").empty());
 }
 
+// S2 regression: same non-throwing contract for fromBase64URL (session
+// token parts, SD-JWT disclosures - all server-controlled).
+BOOST_AUTO_TEST_CASE(UrlValidInput)
+{
+    // "hello world" in unpadded base64url (fromBase64URL pads it).
+    std::vector<uint8_t> expected {'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'};
+    BOOST_CHECK(libcdoc::fromBase64URL("aGVsbG8gd29ybGQ") == expected);
+    BOOST_CHECK(libcdoc::fromBase64URL("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(UrlInvalidInputReturnsEmpty)
+{
+    // Characters outside the base64url alphabet.
+    BOOST_CHECK(libcdoc::fromBase64URL("###").empty());
+    BOOST_CHECK(libcdoc::fromBase64URL("aGVsbG8+//").empty());
+    // Impossible length.
+    BOOST_CHECK(libcdoc::fromBase64URL("A").empty());
+    // Excess/embedded padding.
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ===").empty());
+}
+
+// S2 regression: decodeTicket parses server-issued JWTs; malformed input
+// must yield an empty string, not an exception.
+BOOST_AUTO_TEST_CASE(DecodeTicketInvalidReturnsEmpty)
+{
+    BOOST_CHECK(libcdoc::decodeTicket("").empty());
+    BOOST_CHECK(libcdoc::decodeTicket("not-a-jwt").empty());
+    // Three parts but payload is not valid base64url JSON.
+    BOOST_CHECK(libcdoc::decodeTicket("AAA.###.BBB").empty());
+    // Valid base64url parts but the payload is not JSON.
+    BOOST_CHECK(libcdoc::decodeTicket("dHlw.bm90LWpzb24.c2ln").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(TarPaxHeader)
@@ -1454,6 +1491,30 @@ BOOST_AUTO_TEST_CASE(UnauthorizedServers)
     BOOST_CHECK(!st.hasDisclosureForUrl(""));
 }
 
+// S7 regression: discloseForUrl binds a disclosure to its server by origin
+// (scheme, host, port) - not by substring. A disclosure for
+// share1.example.com must not be disclosed to share1.example.com.evil.com.
+BOOST_AUTO_TEST_CASE(DiscloseForUrlBindsByOrigin)
+{
+    auto st = makeToken();
+    // Exact origin -> the matching disclosure is appended.
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share1.example.com"),
+                      std::string("jwt~aud~") + DISC1 + "~");
+    // Sub-path of the same origin still matches (nonces live on the path).
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share1.example.com/key-shares"),
+                      std::string("jwt~aud~") + DISC1 + "~");
+    // Non-default port matches only with the same port.
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share2.example.com:8443"),
+                      std::string("jwt~aud~") + DISC2 + "~");
+    // Domain-suffix confusion -> no disclosure.
+    BOOST_CHECK(st.discloseForUrl("https://share1.example.com.evil.com").empty());
+    // Unknown host / subdomain / wrong port / plain http -> no disclosure.
+    BOOST_CHECK(st.discloseForUrl("https://evil.com").empty());
+    BOOST_CHECK(st.discloseForUrl("https://sub.share1.example.com").empty());
+    BOOST_CHECK(st.discloseForUrl("https://share2.example.com").empty());
+    BOOST_CHECK(st.discloseForUrl("http://share1.example.com").empty());
+}
+
 BOOST_AUTO_TEST_CASE(MalformedDisclosuresAreSkipped)
 {
     // Bad base64url and non-JSON disclosures must not throw or match.
@@ -1571,6 +1632,69 @@ BOOST_AUTO_TEST_CASE(NoSeparatorReturnsSynthetic)
     std::vector<uint8_t> dst;
     BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
     BOOST_CHECK(dst == synth);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S5 regression: a keyshare recipient with fewer than 2 share servers would
+// hand the complete KEK to a single server (the XOR split degenerates).
+// CDoc2Writer must refuse with CONFIGURATION_ERROR.
+BOOST_AUTO_TEST_SUITE(KeyShareWriter)
+
+namespace {
+
+struct ShareServerConf : public libcdoc::Configuration {
+    std::string urls;
+    explicit ShareServerConf(std::string u) : urls(std::move(u)) {}
+    std::string getValue(std::string_view domain, std::string_view param) const override {
+        if (param == libcdoc::Configuration::SHARE_SERVER_URLS)
+            return urls;
+        return {};
+    }
+};
+
+// Avoids real network connections for the two-server control case.
+struct StubNetworkBackend : public libcdoc::NetworkBackend {
+    libcdoc::result_t sendShare(std::vector<uint8_t>&, const std::string&, const std::string&, const std::vector<uint8_t>&) override {
+        return libcdoc::NOT_IMPLEMENTED;
+    }
+};
+
+libcdoc::result_t encryptWithShareServers(libcdoc::Configuration& conf, libcdoc::NetworkBackend& network)
+{
+    std::vector<uint8_t> out;
+    libcdoc::VectorConsumer consumer(out);
+    libcdoc::CryptoBackend crypto;
+    std::unique_ptr<libcdoc::CDocWriter> writer(libcdoc::CDocWriter::createWriter(2, &consumer, false, &conf, &crypto, &network));
+    libcdoc::Recipient rcpt = libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039914");
+    if (auto rv = writer->addRecipient(rcpt); rv != libcdoc::OK)
+        return rv;
+    return writer->beginEncryption();
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(MissingServerListIsConfigurationError)
+{
+    ShareServerConf conf({});
+    StubNetworkBackend network;
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::CONFIGURATION_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(SingleServerIsConfigurationError)
+{
+    ShareServerConf conf(R"(["https://share1.example.com"])");
+    StubNetworkBackend network;
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::CONFIGURATION_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(TwoServersPassTheCountCheck)
+{
+    ShareServerConf conf(R"(["https://share1.example.com", "https://share2.example.com"])");
+    StubNetworkBackend network;
+    // Gets past the URL-count check and fails later in the (stubbed) share
+    // upload - i.e. NOT with CONFIGURATION_ERROR.
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::NOT_IMPLEMENTED);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

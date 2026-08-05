@@ -346,8 +346,11 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 FAIL("Missing server list for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             LOG_DBG("Share servers: {}", url_list);
             std::vector<std::string> urls = libcdoc::JsonToStringArray(url_list);
-            if (urls.size() < 1)
-                FAIL("No server URLs in " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
+            // S5: with fewer than 2 servers the XOR "split" would hand the
+            // complete KEK to a single server, defeating the threshold
+            // protection - refuse to produce such a container.
+            if (urls.size() < 2)
+                FAIL("At least 2 share server URLs are required for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             int N_SHARES = urls.size();
             LOG_DBG("Number of shares: {}", N_SHARES);
 

@@ -394,6 +394,12 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
                 key.setLabelValue(CDoc2::Label::LABEL, rcpt.label);
 #ifdef HAS_KEYSHARES
         } else if (rcpt.type == RcptInfo::Type::SHARE) {
+            if (conf.servers.empty()) {
+                // S4: a share recipient without --server indexed servers[0]
+                // out of bounds.
+                LOG_ERROR("Keyshare recipient '{}' requires a share server (--server ID URL)", rcpt.label);
+                continue;
+            }
             LOG_DBG("Creating keyshare recipient:");
             key = libcdoc::Recipient::makeShare(std::move(label), conf.servers[0].ID, "PNOEE-" + rcpt.id);
 #endif
