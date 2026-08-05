@@ -281,6 +281,23 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             return rv;
         }
 
+        // S1: only contact share servers that the authentication server has
+        // authorized for this session. The session token carries one
+        // disclosure per authorized server; a container pointing to any other
+        // server would otherwise receive the session token and the user's
+        // credentials (SSRF / credential exfiltration). N-of-N reconstruction
+        // needs every share, so an unauthorized server rejects the container.
+        {
+            SessionToken stoken(session.token);
+            for (const auto& share : shares) {
+                if (!stoken.hasDisclosureForUrl(share.base_url)) {
+                    setLastError(FORMAT("Share server {} is not authorized by the authentication session", share.base_url));
+                    LOG_ERROR("{}", last_error);
+                    return libcdoc::DATA_FORMAT_ERROR;
+                }
+            }
+        }
+
         // Get nonces
         for (auto& share : shares) {
             std::vector<uint8_t> nonce;
