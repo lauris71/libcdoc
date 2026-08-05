@@ -128,7 +128,7 @@ static constexpr auto midsid_results = std::to_array<MIDSIDResultData>({
     {libcdoc::NetworkBackend::MIDSID_SIM_ERROR, "SIM_ERROR", "Invalid response from SIM card"}
 });
 
-static int
+static libcdoc::result_t
 parseMIDSIDResult(std::string_view str)
 {
     if (str == "OK") return libcdoc::OK;
@@ -497,6 +497,19 @@ struct AuthResponse {
     std::string cert;
 };
 
+static std::string
+getJsonString(const picojson::value& json, const std::string& key)
+{
+    error = {};
+    picojson::value v = json.get(key);
+    if (!v.is<std::string>()) {
+        error = FORMAT("{} is not a string", key);
+        LOG_WARN("{}", error);
+        return {};
+    }
+    return v.get<std::string>();
+}
+
 static result_t
 waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_proc_uuid, double seconds)
 {
@@ -521,8 +534,10 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
             LOG_WARN("{}", error);
             return NetworkBackend::NETWORK_ERROR;
         }
-        dst.status = v.get<std::string>();
+        dst.status = getJsonString(rsp, "status");
+        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
         LOG_DBG("Status: {}", dst.status);
+
         if (dst.status == "RUNNING") {
             // Pause for 0.5 seconds and repeat
             std::chrono::milliseconds duration(500);
@@ -533,38 +548,23 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
             LOG_WARN("{}", error);
             return NetworkBackend::NETWORK_ERROR;
         }
+
         // State is complete, check for end result
-        v = rsp.get("endResult");
-        if (!v.is<std::string>()) {
-            error = "endResult is not a JSON object";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.endResult = v.get<std::string>();
+        dst.endResult = getJsonString(rsp, "endResult");
+        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
         LOG_DBG("EndResult: {}", dst.endResult);
         if (dst.endResult != "OK") {
-            LOG_WARN("EndResult is not OK: {}", dst.endResult);
-            return NetworkBackend::NETWORK_ERROR;
+            LOG_WARN("Authentication endResult is {}", dst.endResult);
+            return parseMIDSIDResult(dst.endResult);
         }
-        // Signature
-        v = rsp.get("sessionToken");
-        if (!v.is<std::string>()) {
-            error = "sessionToken is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.sessionToken = v.get<std::string>();
-        LOG_DBG("Session token: {}", dst.sessionToken);
 
-        // Certificate
-        v = rsp.get("signingCertificate");
-        if (!v.is<std::string>()) {
-            error = "signingCertificate is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.cert = v.get<std::string>();
-        LOG_DBG("Certificate: {}", dst.cert);
+        // Fetch session token and certificate
+        dst.sessionToken = getJsonString(rsp, "sessionToken");
+        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        LOG_TRACE("Session token: {}", dst.sessionToken);
+        dst.cert = getJsonString(rsp, "signingCertificate");
+        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        LOG_TRACE("Certificate: {}", dst.cert);
         error = {};
         return OK;
     }
@@ -642,20 +642,22 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
         LOG_WARN("Invalid Authentication response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    picojson::value w = rsp_json.get("vc");
-    if (!w.is<std::string>()) {
-        error = "Invalid Authentication response";
-        LOG_WARN("Invalid Authentication response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string ver_code  = w.get<std::string>();
+    // Verification code
+    std::string ver_code = getJsonString(rsp_json, "vc");
+    if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
     LOG_DBG("Verification code: {}", ver_code);
+
     SIDMIDFeedback fb = {
         .code = (int) std::strtold(ver_code.c_str(), nullptr),
     };
     result = showFeedback(fb);
-    if (result != OK) return result;
+    if (result != OK) {
+        error = FORMAT("Failed to show verification code: {}", result);
+        LOG_ERROR("{}", error);
+        return result;
+    }
 
+    // Fetch authentication response
     AuthResponse auth_rsp;
     result = waitForAuthResult(auth_rsp, cli, path + "/auth/status/", location, 60);
     if (result != OK) return result;
@@ -663,7 +665,8 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
     cert = auth_rsp.cert;
 
     auto parts = split(auth_rsp.sessionToken, '~');
-    if (parts.size() < 3) {
+    // In minimum we need JWT, AUD, RP disclosure and 2 share disclosures
+    if (parts.size() < 5) {
         error = "Invalid JWT-SD token";
         LOG_WARN("Invalid JWT-SD token");
         return NetworkBackend::NETWORK_ERROR;
@@ -681,9 +684,8 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
 
     token = auth_rsp.sessionToken;
 
-    auto decoded = decodeTicket(parts[0]);
-    //auto st_json = decoded.get_header_json();
-    LOG_DBG("Session token: {}", decoded);
+    auto decoded = decodeTicket(jwt);
+    LOG_TRACE("Session token: {}", decoded);
     picojson::value dec_json;
     auto p_err = picojson::parse(dec_json, decoded);
     if (!p_err.empty()) {
@@ -695,9 +697,6 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
         error = "Invalid Authentication response";
         LOG_WARN("Invalid Authentication response");
         return NetworkBackend::NETWORK_ERROR;
-    }
-    for (auto a : dec_json.get<picojson::object>()) {
-        LOG_DBG("Payload JSON {}: {}", a.first, a.second.to_str());
     }
 
     return OK;

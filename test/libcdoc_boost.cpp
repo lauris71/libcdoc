@@ -28,6 +28,7 @@
 #include <Tar.h>
 #include <Utils.h>
 #include <cdoc/Crypto.h>
+#include <cdoc/KeyShares.h>
 
 #include "pipe.h"
 
@@ -1280,6 +1281,79 @@ BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
     BOOST_CHECK(!p33.valid());
     auto pHuge = libcdoc::parseEtsiRecipientId("etsi/PNOEE-" + std::string(1024, '1'));
     BOOST_CHECK(!pHuge.valid());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S1 regression: the session token's disclosures are the allowlist of share
+// servers authorized by the authentication server. The reader must refuse to
+// contact (and send credentials to) any container-supplied share server that
+// has no disclosure. Matching is by origin (scheme, host, port).
+BOOST_AUTO_TEST_SUITE(SessionTokenAuthorization)
+
+// ["salt","https://share1.example.com"]
+static const char *DISC1 = "WyJzYWx0IiwiaHR0cHM6Ly9zaGFyZTEuZXhhbXBsZS5jb20iXQ";
+// ["salt","https://share2.example.com:8443/v1"]
+static const char *DISC2 = "WyJzYWx0IiwiaHR0cHM6Ly9zaGFyZTIuZXhhbXBsZS5jb206ODQ0My92MSJd";
+
+static libcdoc::SessionToken makeToken()
+{
+    std::string str = std::string("jwt~aud~") + DISC1 + "~" + DISC2;
+    return libcdoc::SessionToken(str);
+}
+
+BOOST_AUTO_TEST_CASE(AuthorizedServers)
+{
+    auto st = makeToken();
+    // Exact origin.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com"));
+    // Trailing slash and sub-paths of the same origin.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com/"));
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com/key-shares"));
+    // Host names are case-insensitive.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://SHARE1.EXAMPLE.COM"));
+    // Explicit default port matches the implicit one.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com:443"));
+    // Disclosure with a non-default port and a path.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share2.example.com:8443"));
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share2.example.com:8443/other"));
+}
+
+BOOST_AUTO_TEST_CASE(UnauthorizedServers)
+{
+    auto st = makeToken();
+    // Unknown host.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://evil.com"));
+    // Domain-suffix confusion.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share1.example.com.evil.com"));
+    // Subdomain is a different origin.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://sub.share1.example.com"));
+    // Wrong port.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share2.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share2.example.com:8444"));
+    // Plain http is never authorized (parseURL enforces https).
+    BOOST_CHECK(!st.hasDisclosureForUrl("http://share1.example.com"));
+    // Not a URL at all.
+    BOOST_CHECK(!st.hasDisclosureForUrl("share1.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl(""));
+}
+
+BOOST_AUTO_TEST_CASE(MalformedDisclosuresAreSkipped)
+{
+    // Bad base64url and non-JSON disclosures must not throw or match.
+    std::string str = std::string("jwt~aud~###~bm90LWpzb24~") + DISC1;
+    libcdoc::SessionToken st(str);
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://evil.com"));
+}
+
+BOOST_AUTO_TEST_CASE(EmptyOrDisclosurelessTokenFailsClosed)
+{
+    libcdoc::SessionToken empty("");
+    BOOST_CHECK(!empty.hasDisclosureForUrl("https://share1.example.com"));
+    // jwt~aud with no disclosures.
+    libcdoc::SessionToken twopart("jwt~aud");
+    BOOST_CHECK(!twopart.hasDisclosureForUrl("https://share1.example.com"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

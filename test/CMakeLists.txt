@@ -1,8 +1,12 @@
 add_executable(unittests
     libcdoc_boost.cpp
     ../cdoc/Crypto.cpp
+    ../cdoc/KeyShares.cpp
     ../cdoc/Tar.cpp
+    ../cdoc/Utils.cpp
 )
+
+target_compile_definitions(unittests PRIVATE HAS_KEYSHARES)
 
 target_link_libraries(unittests
     OpenSSL::SSL

@@ -32,6 +32,8 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <thread>
 #include <iostream>
@@ -241,26 +243,38 @@ SessionToken::SessionToken(std::string_view str)
     }
 }
 
+// Extract the target URL from a base64url-encoded SD-JWT disclosure.
+// Returns an empty string if the disclosure is malformed. Never throws:
+// fromBase64URL throws on malformed base64 until the S2 fix lands, and a
+// malformed (server-issued) disclosure must not crash the process.
+static std::string
+disclosureTargetUrl(const std::string& disclosure)
+{
+    std::vector<uint8_t> decoded_part;
+    try {
+        decoded_part = fromBase64URL(disclosure);
+    } catch (const std::exception &) {
+        return {};
+    }
+    std::string json_str(decoded_part.begin(), decoded_part.end());
+    picojson::value json;
+    if (!picojson::parse(json, json_str).empty())
+        return {};
+    if (!json.is<picojson::array>())
+        return {};
+    picojson::array arr = json.get<picojson::array>();
+    if (arr.size() < 2 || !arr[1].is<std::string>())
+        return {};
+    return arr[1].get<std::string>();
+}
+
 std::string
 SessionToken::discloseForUrl(std::string_view url)
 {
     LOG_DBG("Building token for: {}", url);
     for (auto& d : disclosures) {
-        std::vector<uint8_t> decoded_part = fromBase64URL(d);
-        std::string json_str(decoded_part.begin(), decoded_part.end());
-        picojson::value json;
-        if (!picojson::parse(json, json_str).empty()) {
-            return {};
-        }
-        if (!json.is<picojson::array>()) {
-            return {};
-        }
-        picojson::array arr = json.get<picojson::array>();
-        if (arr.size() < 2) continue;
-        if (!arr[1].is<std::string>()) {
-            return {};
-        }
-        std::string target_url = arr[1].get<std::string>();
+        std::string target_url = disclosureTargetUrl(d);
+        if (target_url.empty()) continue;
         if (target_url.find(url) != std::string::npos) {
             std::string token = jwt + "~" + aud + "~" + d + "~";
             LOG_DBG("Disclosed token: {}", token);
@@ -268,6 +282,40 @@ SessionToken::discloseForUrl(std::string_view url)
         }
     }
     return {};
+}
+
+bool
+SessionToken::hasDisclosureForUrl(std::string_view url)
+{
+    // Compare origins (scheme, host, port): the disclosure authorizes a
+    // share server, and the credential-theft risk (S1) is about the session
+    // token and user certificate being sent to a different host. Origin
+    // comparison is robust against trailing-slash and path variations.
+    // parseURL also rejects non-https URLs, so a disclosure or share URL
+    // with a plain-http scheme never matches.
+    std::string host, path;
+    int port = 0;
+    if (parseURL(std::string(url), host, port, path) != OK)
+        return false;
+    std::transform(host.begin(), host.end(), host.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    for (const auto& d : disclosures) {
+        std::string target = disclosureTargetUrl(d);
+        if (target.empty())
+            continue;
+        std::string dhost, dpath;
+        int dport = 0;
+        if (parseURL(target, dhost, dport, dpath) != OK)
+            continue;
+        std::transform(dhost.begin(), dhost.end(), dhost.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (host == dhost && port == dport) {
+            LOG_DBG("Server {} is authorized by a session disclosure", url);
+            return true;
+        }
+    }
+    LOG_WARN("No session disclosure authorizes server {}", url);
+    return false;
 }
 
 std::string

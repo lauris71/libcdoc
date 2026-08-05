@@ -208,6 +208,17 @@ struct SessionToken {
 
     SessionToken(std::string_view str);
     std::string discloseForUrl(std::string_view url);
+    /**
+     * @brief Check whether the session token authorizes a share server
+     *
+     * Returns true if any disclosure in the session token refers to the same
+     * origin (scheme, host, port) as the given URL. The disclosures are issued
+     * by the authentication server, so they enumerate the share servers that
+     * are authorized for this session. Used to reject container-supplied share
+     * servers that the authentication server has not authorized - the session
+     * token and user credentials must never be sent to such servers.
+     */
+    bool hasDisclosureForUrl(std::string_view url);
 };
 
 std::string decodeTicket(const std::string& ticket);
