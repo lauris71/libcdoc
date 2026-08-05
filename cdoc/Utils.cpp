@@ -26,6 +26,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <locale>
 
 namespace libcdoc {
 
@@ -53,8 +54,18 @@ toBase64URL(const uint8_t *data, size_t len)
 std::vector<uint8_t>
 fromBase64(std::string_view data)
 {
-    std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
-    return std::vector<uint8_t>(str.cbegin(), str.cend());
+    // jwt::base::details::decode throws std::runtime_error on malformed
+    // input (characters outside the alphabet, bad padding, bad length).
+    // The decoded data comes from remote servers and containers, i.e. it
+    // is untrusted, so a decode failure must not crash the process. An
+    // empty result signals a format error to the callers.
+    try {
+        std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
+        return std::vector<uint8_t>(str.cbegin(), str.cend());
+    } catch (const std::exception &e) {
+        LOG_WARN("fromBase64: invalid base64 input: {}", e.what());
+        return {};
+    }
 }
 
 std::vector<uint8_t>
@@ -165,6 +176,7 @@ buildURL(const std::string& host, int port)
 std::ostream&
 operator<<(std::ostream& escaped, urlEncode src)
 {
+    static const std::locale locC("C");
     restoreFlags rf(escaped);
     escaped.fill('0');
     escaped << std::hex;
@@ -175,7 +187,7 @@ operator<<(std::ostream& escaped, urlEncode src)
             continue;
         }
         // Keep alphanumeric and other accepted characters intact
-        if (isalnum(uint8_t(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+        if (std::isalnum(c, locC) || c == '-' || c == '_' || c == '.' || c == '~') {
             escaped << c;
             continue;
         }

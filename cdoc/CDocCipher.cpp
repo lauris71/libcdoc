@@ -73,7 +73,7 @@ struct ToolPKCS11 : public libcdoc::PKCS11Backend {
     ToolPKCS11(const std::string& library, const CipherInfo& info) : PKCS11Backend(library), c_info(info) {}
 
     libcdoc::result_t connectToKey(int idx, bool priv) override final {
-       const libcdoc::RcptInfo *rcpt = c_info.getRcpt(idx);
+        const libcdoc::RcptInfo *rcpt = c_info.getRcpt(idx);
         if (!rcpt) return libcdoc::INTERNAL_ERROR;
         if (!priv) {
             return useSecretKey(long(rcpt->p11.slot), rcpt->secret, rcpt->p11.key_id, rcpt->p11.key_label);

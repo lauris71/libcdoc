@@ -14,7 +14,7 @@ jobs:
     container: ubuntu:${{ matrix.container }}
     strategy:
       matrix:
-        container: ['22.04', '24.04', '25.10', '26.04']
+        container: ['22.04', '24.04', '26.04']
         arch: ['amd64', 'arm64']
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -63,8 +63,6 @@ jobs:
         echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
         echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
         echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
-        git -C $VCPKG_INSTALLATION_ROOT fetch origin f77737496dabd44c63ecc599dc0f4d6cff30d0d5
-        git -C $VCPKG_INSTALLATION_ROOT reset --hard f77737496dabd44c63ecc599dc0f4d6cff30d0d5
     - name: Cache vcpkg
       uses: actions/cache@v5
       with:
@@ -97,9 +95,8 @@ jobs:
     - name: Install dependencies
       run: |
         brew update
-        brew install --formula flatbuffers swig doxygen boost
+        brew install --formula swig doxygen
     - name: Cache vcpkg
-      if: matrix.target != 'macos'
       uses: actions/cache@v5
       with:
         path: ${{ github.workspace }}/vcpkg_cache
@@ -121,6 +118,20 @@ jobs:
       with:
         name: ${{ matrix.target }}
         path: ${{ env.DEST }}
+  sanitizers:
+    name: Run unit tests with ASan+UBSan
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install dependencies
+      run: sudo apt update -qq && sudo apt install --no-install-recommends -y ninja-build libboost-test-dev ${UBUNTU_DEPS}
+    - name: Configure
+      run: cmake --preset sanitize
+    - name: Build
+      run: cmake --build --preset sanitize --target unittests
+    - name: Test
+      run: ctest --test-dir build/sanitize --output-on-failure
   windows:
     name: Build on Windows
     runs-on: ${{ matrix.image }}
@@ -131,6 +142,7 @@ jobs:
     env:
       CXXFLAGS: '/D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR' # https://github.com/actions/runner-images/issues/10004
       DEST: ${{ github.workspace }}/${{ matrix.image }}_${{ matrix.platform }}
+      VCPKG_ROOT: C:/vcpkg
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -150,15 +162,10 @@ jobs:
         VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg_cache,readwrite
       run: |
         $swig = (Get-Item "$env:LOCALAPPDATA\Microsoft\WinGet\Links\swig.exe").Target
-        cmake -A ${{ matrix.platform }} -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-          "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          "-DSWIG_EXECUTABLE=$swig" `
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.platform }}-windows-static-md `
-          ${{ matrix.platform == 'x64' && '-DVCPKG_MANIFEST_FEATURES=tests' || '' }} `
-          -DCMAKE_INSTALL_LIBDIR=bin
-        cmake --build build --config RelWithDebInfo
-        ctest -V -C RelWithDebInfo --test-dir build
-        cmake --install build --config RelWithDebInfo --prefix ${{ env.DEST }}
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        & "$vsPath\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.platform == 'arm64' && 'amd64_arm64' || 'amd64' }} "&&" pwsh build.ps1 `
+          -swig $swig -installdir ${{ env.DEST }} -buildType RelWithDebInfo `
+          ${{ matrix.platform == 'x64' && '-RunTests' || '' }}
     - name: Archive artifacts
       uses: actions/upload-artifact@v7
       with:

@@ -91,15 +91,12 @@ For more information refer [doc/intro.md](doc/intro.md) document.
 	* [Visual Studio Community 2022](https://www.visualstudio.com/downloads/)
 	* [CMake](http://www.cmake.org)
 	* [vcpkg](https://vcpkg.io/)
-	* [Swig](http://swig.org/download.html) - Optional, for C#, Python and Java bindings
+	* [Swig](http://swig.org/download.html) - Optional, for C# and Java bindings
 	* [Doxygen](https://www.doxygen.nl/download.html) - Optional, for generating documentation
-	* [Wix toolset](http://wixtoolset.org/releases/) - Optional, for creating Windows installation packages
-	* [Python](https://www.python.org/downloads/) - Optional, for Python bindings
 	* [Java](https://www.oracle.com/java/technologies/downloads/) - Optional, for Java bindings
 
 2. Open desired Visual Studio tools command prompt:
 	* x64 Native Tool Command Prompt
-	* x86 Native Tool Command Prompt
 	* ARM64 Native Tool Command Prompt
 	* Or some cross compile combination with target host type
 
@@ -108,6 +105,16 @@ For more information refer [doc/intro.md](doc/intro.md) document.
         git clone https://github.com/open-eid/libcdoc.git
         cd libcdoc
 
-4. Configure and Build
+4. Configure, build and install
 
         .\build.ps1
+
+    `build.ps1` drives the `windows` CMake preset with vcpkg. If neither the `-vcpkg`
+    parameter nor the `VCPKG_ROOT` environment variable points to a vcpkg checkout, one is
+    cloned automatically. By default it builds the x64 Debug and RelWithDebInfo
+    configurations. Common options:
+
+        .\build.ps1 -platform arm64          # target ARM64
+        .\build.ps1 -RunTests                # build and run the unit tests
+        .\build.ps1 -installdir C:\libcdoc   # install after building
+        .\build.ps1 -generator "Visual Studio 17 2022"   # use another CMake generator

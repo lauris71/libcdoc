@@ -103,8 +103,15 @@ print_usage(ostream& ofs)
 static std::vector<uint8_t>
 fromB64(const std::string& data)
 {
-    std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
-    return std::vector<uint8_t>(str.cbegin(), str.cend());
+    // jwt::base::details::decode throws std::runtime_error on malformed
+    // base64; an invalid --accept certificate file must not crash the tool.
+    try {
+        std::string str = jwt::base::details::decode(data, jwt::alphabet::base64::rdata(), "=");
+        return std::vector<uint8_t>(str.cbegin(), str.cend());
+    } catch (const std::exception &e) {
+        LOG_WARN("Invalid base64: {}", e.what());
+        return {};
+    }
 }
 
 static void
@@ -117,7 +124,11 @@ load_certs(ToolConf& conf, const std::string& filename)
         for (auto part : parts) {
             if (part.size() > 3) {
                 std::vector<uint8_t> v = fromB64(part);
-                conf.accept_certs.push_back(v);
+                if (v.empty()) {
+                    LOG_WARN("Skipping invalid base64 line in {}", filename);
+                    continue;
+                }
+                conf.accept_certs.push_back(std::move(v));
             }
         }
     } else {

@@ -6,13 +6,11 @@
       "displayName": "Ninja",
       "description": "Sets Ninja generator, build and install directory",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
-        "CMAKE_C_COMPILER": "cl.exe",
-        "CMAKE_CXX_COMPILER": "cl.exe",
         "VCPKG_MANIFEST_FEATURES": "tests"
       }
     },
@@ -30,6 +28,9 @@
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
         "CMAKE_FIND_ROOT_PATH": "$env{DEST};/opt/homebrew",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "arm64-x64-osx",
+        "VCPKG_MANIFEST_FEATURES": "tests",
         "FRAMEWORK_DESTINATION": "$env{DEST}/lib"
       },
       "installDir": "$env{DEST}"
@@ -54,6 +55,7 @@
       "inherits": ["mobile", "macos"],
       "cacheVariables": {
         "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_SYSROOT": "${presetName}",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "16.3",
         "CMAKE_DISABLE_FIND_PACKAGE_SWIG": "YES"
@@ -111,10 +113,40 @@
         "CMAKE_ANDROID_ARCH_ABI": "x86_64",
         "VCPKG_TARGET_TRIPLET": "x64-android"
       }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows",
+      "description": "This windows build is only available on Windows",
+      "binaryDir": "${sourceDir}/build/windows-$env{PLATFORM}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_LIBDIR": "bin",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "$env{PLATFORM}-windows-static-md"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Sanitizers (ASan+UBSan)",
+      "description": "Debug build with AddressSanitizer and UndefinedBehaviorSanitizer for running the unit tests (system dependencies, no vcpkg; requires boost-test, openssl, libxml2, zlib and flatbuffers development packages)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_DISABLE_FIND_PACKAGE_SWIG": "YES",
+        "CMAKE_DISABLE_FIND_PACKAGE_Doxygen": "YES"
+      }
     }
   ],
   "buildPresets":
   [
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize"
+    },
     {
       "name": "macos",
       "configurePreset": "macos"
@@ -138,6 +170,10 @@
     {
       "name": "androidx86_64",
       "configurePreset": "androidx86_64"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows"
     }
   ]
 }

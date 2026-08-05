@@ -147,17 +147,15 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     // exceptions). All early returns below previously had to remember to
     // call libcdoc::cleanse(kek) - which several of them did not. With the
     // guard the wipe is unconditional.
-    std::vector<uint8_t> kek;
-    libcdoc::Cleanser kek_guard(kek);
+    SecureTarget kek;
 
     if (lock.type == Lock::Type::PASSWORD) {
         // Password
         LOG_DBG("password");
         std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
         LOG_DBG("info: {}", toHex(info_str));
-        std::vector<uint8_t> kek_pm;
-        libcdoc::Cleanser kek_pm_guard(kek_pm);
-        if (auto rv = crypto->extractHKDF(kek_pm, lock.getBytes(Lock::SALT), lock.getBytes(Lock::PW_SALT), lock.getInt(Lock::KDF_ITER), lock_idx); rv != libcdoc::OK) {
+        SecureTarget kek_pm;
+        if (auto rv = crypto->extractHKDF(kek_pm.getTarget(), lock.getBytes(Lock::SALT), lock.getBytes(Lock::PW_SALT), lock.getInt(Lock::KDF_ITER), lock_idx); rv != libcdoc::OK) {
             setLastError(crypto->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
@@ -170,9 +168,8 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_DBG("symmetric");
         std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
         LOG_DBG("info: {}", toHex(info_str));
-        std::vector<uint8_t> kek_pm;
-        libcdoc::Cleanser kek_pm_guard(kek_pm);
-        if (auto rv = crypto->extractHKDF(kek_pm, lock.getBytes(Lock::SALT), {}, 0, lock_idx); rv != libcdoc::OK) {
+        SecureTarget kek_pm;
+        if (auto rv = crypto->extractHKDF(kek_pm.getTarget(), lock.getBytes(Lock::SALT), {}, 0, lock_idx); rv != libcdoc::OK) {
             setLastError(crypto->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
@@ -182,11 +179,10 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         kek = libcdoc::Crypto::expand(kek_pm, info_str, 32);
     } else if ((lock.type == Lock::Type::PUBLIC_KEY) || (lock.type == Lock::Type::SERVER)) {
         // Public/private key
-        std::vector<uint8_t> key_material;
+        SecureTarget key_material;
         // SERVER path fetches key_material over the network; PUBLIC_KEY
         // takes it from the lock. Either way it gets fed into ECDH or RSA
         // and is sensitive enough to wipe in-scope.
-        libcdoc::Cleanser key_material_guard(key_material);
         if(lock.type == Lock::Type::SERVER) {
             if(!conf) {
                 setLastError("Configuration is missing");
@@ -206,7 +202,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 return libcdoc::CONFIGURATION_ERROR;
             }
             std::string transaction_id = lock.getString(Lock::Params::TRANSACTION_ID);
-            int result = network->fetchKey(key_material, fetch_url, transaction_id);
+            int result = network->fetchKey(key_material.getTarget(), fetch_url, transaction_id);
             if (result < 0) {
                 setLastError(network->getLastErrorStr(result));
                 return result;
@@ -219,16 +215,15 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_TRACE_KEY("Key material: {}", key_material);
 
         if (lock.isRSA()) {
-            int result = crypto->decryptRSA(kek, key_material, true, lock_idx);
+            int result = crypto->decryptRSA(kek.getTarget(), key_material, true, lock_idx);
             if (result < 0) {
                 setLastError(crypto->getLastErrorStr(result));
                 LOG_ERROR("{}", last_error);
                 return result;
             }
         } else {
-            std::vector<uint8_t> kek_pm;
-            libcdoc::Cleanser kek_pm_guard(kek_pm);
-            int result = crypto->deriveHMACExtract(kek_pm, key_material, toUint8Vector(libcdoc::CDoc2::KEKPREMASTER), lock_idx);
+            SecureTarget kek_pm;
+            int result = crypto->deriveHMACExtract(kek_pm.getTarget(), key_material, toUint8Vector(libcdoc::CDoc2::KEKPREMASTER), lock_idx);
             if (result < 0) {
                 setLastError(crypto->getLastErrorStr(result));
                 LOG_ERROR("{}", last_error);
@@ -355,8 +350,8 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             LOG_ERROR("Cannot generate share tickets");
             return result;
         }
-        kek.resize(32);
-        std::fill(kek.begin(), kek.end(), 0);
+        std::vector<uint8_t>& kek_build = kek.getTarget(32);
+        std::fill(kek_build.begin(), kek_build.end(), 0);
         for (unsigned int i = 0; i < auth_tokens.size(); i++) {
             NetworkBackend::ShareInfo share;
             result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, session.token, session.cert, auth_tokens[i], auth.cert, auth.params);
@@ -369,7 +364,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             // remaining shares it reconstructs the KEK. Wipe it after
             // XOR-ing it into kek so it does not linger on the heap.
             libcdoc::Cleanser share_guard(share.share);
-            if (auto err = libcdoc::Crypto::xor_data(kek, kek, share.share); err != libcdoc::OK) {
+            if (auto err = libcdoc::Crypto::xor_data(kek_build, kek_build, share.share); err != libcdoc::OK) {
                 setLastError("Failed to derive kek");
                 LOG_ERROR("Failed to derive kek");
                 return err;
@@ -398,8 +393,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         fmk.clear();
         return err;
     }
-    std::vector<uint8_t> hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::HMAC);
-    libcdoc::Cleanser hhk_guard(hhk);
+    SecureTarget hhk = libcdoc::Crypto::expand(fmk, libcdoc::CDoc2::HMAC);
 
     LOG_TRACE_KEY("xor: {}", lock.encrypted_fmk);
     LOG_TRACE_KEY("fmk: {}", fmk);

@@ -1,52 +1,46 @@
 #powershell -ExecutionPolicy ByPass -File build.ps1
 param(
   [string]$libcdoc = $PSScriptRoot,
-  [string]$platform = "x64",
+  [string]$platform = $(if ($null -eq $env:PLATFORM) {"x64"} else {$env:PLATFORM}),
   [string]$build_number = $(if ($null -eq $env:BUILD_NUMBER) {"0"} else {$env:BUILD_NUMBER}),
   [string]$git = "git.exe",
   [string]$vcpkg = $env:VCPKG_ROOT,
-  [string]$vcpkg_installed = $null,
-  [string]$vcpkg_installed_platform = $(if($vcpkg_installed) { "$vcpkg_installed\vcpkg_installed_$platform" } else { "$libdigidocpp\build\windows-$platform\vcpkg_installed" }),
-  [string]$vcpkg_triplet = "$platform-windows",
   [string]$cmake = "cmake.exe",
-  [string]$generator = "Visual Studio 17 2022",
-  [switch]$RunTests = $false,
+  [string]$generator = "Ninja Multi-Config",
+  [string]$swig = $null,
+  [string]$installdir = $null,
+  [string[]]$buildType = @("Debug", "RelWithDebInfo"),
+  [switch]$RunTests = $false
 )
 
-if(!(Test-Path -Path $vcpkg)) {
-  $vcpkg = "$libdigidocpp\vcpkg"
+if(!$vcpkg -or !(Test-Path -Path $vcpkg)) {
+  $vcpkg = "$libcdoc\vcpkg"
   & $git clone https://github.com/microsoft/vcpkg $vcpkg
   & $vcpkg\bootstrap-vcpkg.bat
 }
 
 $cmakeext = @()
-if($platform -eq "arm64" -and $env:VSCMD_ARG_HOST_ARCH -ne "arm64") {
-  $cmakeext += "-DCMAKE_DISABLE_FIND_PACKAGE_Python3=yes"
-  $RunTests = $false
+if($swig) {
+  $cmakeext += "-DSWIG_EXECUTABLE=$swig"
 }
 if($RunTests) {
   $cmakeext += "-DVCPKG_MANIFEST_FEATURES=tests"
 }
+if($installdir) {
+  $cmakeext += "-DCMAKE_INSTALL_PREFIX=$installdir"
+}
 
-$buildpath = "build"
 $env:PLATFORM = $platform
 $env:VCPKG_ROOT = $vcpkg
 
-& $cmake --fresh -B $buildpath -S . "-G$generator" $cmakeext `
-    "--toolchain $vcpkg/scripts/buildsystems/vcpkg.cmake" `
-    "-DVCPKG_INSTALLED_DIR=$vcpkg_installed_platform" `
-    "-DVCPKG_TARGET_TRIPLET=$vcpkg_triplet"
+& $cmake --preset windows --fresh "-G$generator" $cmakeext
 
-foreach($type in @("Debug", "RelWithDebInfo")) {
-    "==================="
-    "Build Configuration: " + $type
-    "==================="
-    & $cmake --build $buildpath --config $type
-#    & $cmake --install $buildpath
-}
-
-if($RunTests) {
-    Push-Location "$libcdoc\$buildpath"
-    ctest -V -C Debug
-    Pop-Location
+foreach($type in $buildType) {
+    & $cmake --build --preset windows --config $type
+    if($RunTests) {
+        & $cmake --build --preset windows --config $type --target check
+    }
+    if($installdir) {
+        & $cmake --build --preset windows --config $type --target install
+    }
 }

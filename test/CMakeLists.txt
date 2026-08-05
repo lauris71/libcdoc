@@ -3,6 +3,7 @@ add_executable(unittests
     ../cdoc/Crypto.cpp
     ../cdoc/KeyShares.cpp
     ../cdoc/Tar.cpp
+    ../cdoc/XmlReader.cpp
     ../cdoc/Utils.cpp
 )
 
@@ -10,6 +11,7 @@ target_compile_definitions(unittests PRIVATE HAS_KEYSHARES)
 
 target_link_libraries(unittests
     OpenSSL::SSL
+    LibXml2::LibXml2
     cdoc
     Boost::unit_test_framework
 )
@@ -24,4 +26,4 @@ if(WIN32)
     )
 endif()
 
-add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} DEPENDS unittests)
+add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} -C $<CONFIG> --output-on-failure DEPENDS unittests)

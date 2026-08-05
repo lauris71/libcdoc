@@ -268,8 +268,9 @@ libcdoc::TarConsumer::open(const std::string& name, int64_t size)
 		} else {
 			path = std::filesystem::path("./PaxHeaders.X") / path.filename();
 		}
-		LOG_DBG("Pax path: {}", path.string());
-        if (auto rv = writeHeader(path.string(), paxData.size(), 'x'); rv != OK)
+		std::string paxPath = decodeName(path);
+		LOG_DBG("Pax path: {}", paxPath);
+        if (auto rv = writeHeader(paxPath, paxData.size(), 'x'); rv != OK)
             return rv;
         if (auto rv = _dst->write((const uint8_t *) paxData.data(), paxData.size()); rv != paxData.size())
             return rv < OK ? rv : OUTPUT_ERROR;

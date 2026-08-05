@@ -117,6 +117,7 @@ struct ZSource : public DataSource {
 				if (n_read > 0) {
 					buf.insert(buf.end(), in.begin(), in.begin() + n_read);
 				} else if (n_read != 0) {
+					inflateEnd(&_s);
 					_error = n_read;
 					return _error;
 				}
@@ -132,6 +133,7 @@ struct ZSource : public DataSource {
 					buf.clear();
 					break;
 				default:
+					inflateEnd(&_s);
 					_error = ZLIB_ERROR;
 					return _error;
 				}
