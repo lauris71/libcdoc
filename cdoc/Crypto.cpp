@@ -59,6 +59,43 @@ const std::string Crypto::RSA_MTH = "http://www.w3.org/2001/04/xmlenc#rsa-1_5";
 const std::string Crypto::CONCATKDF_MTH = "http://www.w3.org/2009/xmlenc11#ConcatKDF";
 const std::string Crypto::AGREEMENT_MTH = "http://www.w3.org/2009/xmlenc11#ECDH-ES";
 
+bool
+Crypto::validateSignature(const std::vector<uint8_t> &cert_der,
+                          const std::vector<uint8_t> &data,
+                          const std::vector<uint8_t> &signature,
+                          SignatureAlgorithm algo)
+{
+    const unsigned char *ptr = cert_der.data();
+    auto x509 = make_unique_ptr<X509_free>(d2i_X509(nullptr, &ptr, long(cert_der.size())));
+    if (!x509)
+        return false;
+    auto pkey = make_unique_ptr<EVP_PKEY_free>(X509_get_pubkey(x509.get()));
+    if (!pkey)
+        return false;
+    auto ctx = make_unique_ptr<EVP_PKEY_CTX_free>(EVP_PKEY_CTX_new(pkey.get(), nullptr));
+    if (!ctx)
+        return false;
+    switch (algo) {
+    case SignatureAlgorithm::RSASSA_PSS_SHA256: {
+        // The provider's one-shot EVP_PKEY_verify for RSA requires the
+        // input to be the message digest already, so hash `data` first.
+        uint8_t md_value[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+        if (EVP_Digest(data.data(), data.size(), md_value, &md_len, EVP_sha256(), nullptr) != 1)
+            return false;
+        if (EVP_PKEY_verify_init(ctx.get()) != 1)
+            return false;
+        if (EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_PSS_PADDING) <= 0 ||
+            EVP_PKEY_CTX_set_signature_md(ctx.get(), EVP_sha256()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.get(), EVP_sha256()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx.get(), RSA_PSS_SALTLEN_DIGEST) <= 0)
+            return false;
+        return EVP_PKEY_verify(ctx.get(), signature.data(), signature.size(), md_value, md_len) == 1;
+    }
+    }
+    return false;
+}
+
 std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data, bool encrypt)
 {
     // Note: AES_set_{encrypt,decrypt}_key return 0 on success and a negative

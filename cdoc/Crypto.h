@@ -192,6 +192,29 @@ public:
                                        const std::vector<uint8_t>& synth_seed,
                                        size_t expected_len);
 
+    /**
+     * @brief Signature algorithms supported by validateSignature
+     */
+    enum class SignatureAlgorithm {
+        RSASSA_PSS_SHA256,  /**< RSASSA-PSS, SHA-256, MGF1/SHA-256, salt length = digest length */
+    };
+
+    /**
+     * @brief Validate a signature over a message with a certificate's public key
+     *
+     * Used by the Smart-ID (ACSP_V2) client-side ticket validation (S8).
+     *
+     * @param cert_der X.509 certificate in DER encoding
+     * @param data the signed message (hashed internally as the algorithm requires)
+     * @param signature the signature value
+     * @param algo signature algorithm and parameters
+     * @return true if the signature verifies
+     */
+    static bool validateSignature(const std::vector<uint8_t> &cert_der,
+                                  const std::vector<uint8_t> &data,
+                                  const std::vector<uint8_t> &signature,
+                                  SignatureAlgorithm algo);
+
     static bool isError(int retval, const char* funcName, const char* file, int line)
     {
         if (retval < 1) {

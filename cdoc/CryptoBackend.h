@@ -172,6 +172,22 @@ struct CDOC_EXPORT CryptoBackend {
         return NOT_IMPLEMENTED;
     }
 
+    /**
+     * @brief Validate that a certificate belongs to the given user (S8)
+     *
+     * The default implementation checks only that the certificate subject
+     * serialNumber matches the identity part of user_id (etsi/PNOEE-...).
+     * It deliberately does NOT check expiry, revocation status or chain
+     * trust: users must be able to decrypt their documents even after the
+     * signing certificate has expired. Implementations may override this to
+     * enforce expiry dates, OCSP lookups, trust lists etc.
+     *
+     * @param user_id recipient id (etsi/PNOEE-...)
+     * @param cert_der certificate in DER encoding
+     * @return error code or OK
+     */
+    virtual result_t validateCertificate(const std::string& user_id, const std::vector<uint8_t>& cert_der);
+
     virtual int test(libcdoc::Lock& lock) { return NOT_IMPLEMENTED; }
 };
 

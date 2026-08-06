@@ -68,6 +68,16 @@ fromBase64(std::string_view data)
     }
 }
 
+static std::string
+strip(std::string input)
+{
+    // Remove trailing '=' padding characters (used in Base64URL encoding)
+    while (!input.empty() && input.back() == '=') {
+        input.pop_back();
+    }
+    return input;
+}
+
 std::vector<uint8_t>
 fromBase64URL(std::string_view data)
 {
@@ -76,7 +86,8 @@ fromBase64URL(std::string_view data)
     // on malformed input, so failures are signalled with an empty result
     // instead of an exception escaping into the caller.
     try {
-        auto padded = jwt::base::pad<jwt::alphabet::base64url>(std::string(data));
+        auto stripped = strip(std::string(data));
+        auto padded = jwt::base::pad<jwt::alphabet::base64url>(stripped);
         auto str = jwt::base::decode<jwt::alphabet::base64url>(padded);
         return std::vector<uint8_t>(str.cbegin(), str.cend());
     } catch (const std::exception &e) {

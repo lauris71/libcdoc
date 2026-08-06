@@ -879,10 +879,15 @@ BOOST_AUTO_TEST_CASE(UrlInvalidInputReturnsEmpty)
     // Characters outside the base64url alphabet.
     BOOST_CHECK(libcdoc::fromBase64URL("###").empty());
     BOOST_CHECK(libcdoc::fromBase64URL("aGVsbG8+//").empty());
+    // Padding character in the middle hits the alphabet check.
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ==QQ").empty());
     // Impossible length.
     BOOST_CHECK(libcdoc::fromBase64URL("A").empty());
-    // Excess/embedded padding.
-    BOOST_CHECK(libcdoc::fromBase64URL("QQ===").empty());
+    // Trailing padding is tolerated (RFC 4648 allows '=' in base64url):
+    // fromBase64URL strips it before decoding, so "QQ===" == "QQ" == {0x41}.
+    std::vector<uint8_t> expected {0x41};
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ===") == expected);
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ") == expected);
 }
 
 // S2 regression: decodeTicket parses server-issued JWTs; malformed input
@@ -1695,6 +1700,206 @@ BOOST_AUTO_TEST_CASE(TwoServersPassTheCountCheck)
     // Gets past the URL-count check and fails later in the (stubbed) share
     // upload - i.e. NOT with CONFIGURATION_ERROR.
     BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::NOT_IMPLEMENTED);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S8 regression: client-side validation of Smart-ID (ACSP_V2) auth tickets.
+// All vectors come from a cdoc-tool Smart-ID session log (2026-08-06) using a
+// Smart-ID TEST identity (serialNumber PNOEE-30303039903) - no real PII.
+// The signature was independently verified with OpenSSL.
+BOOST_AUTO_TEST_SUITE(SidTicketValidation)
+
+namespace {
+
+static const char *SID_CERT_B64 =
+        "MIIGqDCCBi6gAwIBAgIQfCl8dqrXBKOVGG0OTfMqTzAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0"
+        "aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkG"
+        "A1UEBhMCRUUwHhcNMjYwNTE4MTI0NTEzWhcNMjkwNTE3MTI0NTEyWjBXMQswCQYDVQQGEwJFRTEQMA4GA1UEAwwHVEVTVCxPSzEN"
+        "MAsGA1UEBAwEVEVTVDELMAkGA1UEKgwCT0sxGjAYBgNVBAUTEVBOT0VFLTMwMzAzMDM5OTAzMIIDIjANBgkqhkiG9w0BAQEFAAOC"
+        "Aw8AMIIDCgKCAwEAsbP7GwkiyLnVk4Xneq76DuDklgie/LurancUp5Mw13Pn7Sp/XTnie1PtWHIgZFsvKKHRWwHFB4H/XQisgZS7"
+        "yfRYVe2u3cfSuoH/W5oRpnAnojaltBQZRE6LM5WRhqI6+sdcoGM938AWEkr/gThU3DPSGglZ0mNEOR7SvVHtaKz4KAc1XQZtyHmo"
+        "iZ/eqNW7Nlj1s3A66jmEBTq4aiqlx0JXhfgmNV+1yw81vEwB0LHQLadp3Ca2G60bDMQItzWpe8pzd2gUv6smxjKq3MnVVsgYEAFw"
+        "kbeuDR3OLUbWbnSTAn9Y5DfDW30xRg4if1I+ruDWLicv5vJXsHCgjgUqLlk9/v+gIFuieJhczyZh9+FOSmCOREqrWOyGUNzCFruV"
+        "yg+Z6o8NRZkz9cNqFCUU7O3FnpIHC/1Vz08hJJZLzaF3Ao9qg7WkdNEz28wCuFeVSq/yp1gEEpvnMdYM6FUUUM+y+/b7N61pgk1M"
+        "P7ljTREJ0bHY5O8y0/YynP4NI36nKyNbGhsgtqhquHfLWCaCm/kLdgymQUNI1VCl1XcmYtCZkFFB9Ru7EtmTfuk2Lc7mdQYEHutH"
+        "qWIUywSJvm1P878PYXRtqNY2hu6MuyarN5uQIO887R1ho+IeN2BUGsEArUeN8RCuqr2J5DZj4GloReZ7GYFWFBXTNKaDRu+deLOj"
+        "/41Hztg4ITjOSUnh6/Z2kkRPkH7rhNT4+irtRfiXG2MMsV+kEVO4p/j+l7lofbL0NbkUlskd4Od6iox3YCXIicxY+5JSj63QLU1r"
+        "Gv6EbFHkPAseZ+MYys2J99KGToAtz+XOMyKr3VJp7vc4RWBhNcRygm/Oj60DgXQS/ph2y1ZMfl7NL3m2jAJQzADTqBahOuTuJj57"
+        "BObdI7xV8bwOI8sFSFG3xVfKpoPkvi4C+G+rxErims2CC5rezJBwwVJtLCQ2CA1e/+4kv1DBja8Z1jzBfFXypXQfT1fXN+jL54+0"
+        "85JNiBeCfXUnUPUW+gjl+ea+17m9Y0b5XTu4QyF5AgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4"
+        "zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5k"
+        "ZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQD"
+        "DBhQTk9FRS0zMDMwMzAzOTkwMy1ERU0xLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93"
+        "d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAo"
+        "BgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5MDMwMzAzMTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTAr"
+        "MCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUFxWovRQENDMS4BItkheOSBR1dPcw"
+        "DgYDVR0PAQH/BAQDAgeAMAoGCCqGSM49BAMDA2gAMGUCMQDcI/ZV6SPo13ZPwsjhLMS9n6ZN1czKd02I/eKj67RBOOD1HWkW0DJ6"
+        "QxDoUoeaTcACMFdNOAY2BotlUO6uZWlWdUFjoqVZOGEgZVHGJkIxPZ04+SrO4jMOukWuZQqJYM4WZQ==";
+
+static const char *SID_CERT_B64URL =
+        "MIIGqDCCBi6gAwIBAgIQfCl8dqrXBKOVGG0OTfMqTzAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0"
+        "aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkG"
+        "A1UEBhMCRUUwHhcNMjYwNTE4MTI0NTEzWhcNMjkwNTE3MTI0NTEyWjBXMQswCQYDVQQGEwJFRTEQMA4GA1UEAwwHVEVTVCxPSzEN"
+        "MAsGA1UEBAwEVEVTVDELMAkGA1UEKgwCT0sxGjAYBgNVBAUTEVBOT0VFLTMwMzAzMDM5OTAzMIIDIjANBgkqhkiG9w0BAQEFAAOC"
+        "Aw8AMIIDCgKCAwEAsbP7GwkiyLnVk4Xneq76DuDklgie_LurancUp5Mw13Pn7Sp_XTnie1PtWHIgZFsvKKHRWwHFB4H_XQisgZS7"
+        "yfRYVe2u3cfSuoH_W5oRpnAnojaltBQZRE6LM5WRhqI6-sdcoGM938AWEkr_gThU3DPSGglZ0mNEOR7SvVHtaKz4KAc1XQZtyHmo"
+        "iZ_eqNW7Nlj1s3A66jmEBTq4aiqlx0JXhfgmNV-1yw81vEwB0LHQLadp3Ca2G60bDMQItzWpe8pzd2gUv6smxjKq3MnVVsgYEAFw"
+        "kbeuDR3OLUbWbnSTAn9Y5DfDW30xRg4if1I-ruDWLicv5vJXsHCgjgUqLlk9_v-gIFuieJhczyZh9-FOSmCOREqrWOyGUNzCFruV"
+        "yg-Z6o8NRZkz9cNqFCUU7O3FnpIHC_1Vz08hJJZLzaF3Ao9qg7WkdNEz28wCuFeVSq_yp1gEEpvnMdYM6FUUUM-y-_b7N61pgk1M"
+        "P7ljTREJ0bHY5O8y0_YynP4NI36nKyNbGhsgtqhquHfLWCaCm_kLdgymQUNI1VCl1XcmYtCZkFFB9Ru7EtmTfuk2Lc7mdQYEHutH"
+        "qWIUywSJvm1P878PYXRtqNY2hu6MuyarN5uQIO887R1ho-IeN2BUGsEArUeN8RCuqr2J5DZj4GloReZ7GYFWFBXTNKaDRu-deLOj"
+        "_41Hztg4ITjOSUnh6_Z2kkRPkH7rhNT4-irtRfiXG2MMsV-kEVO4p_j-l7lofbL0NbkUlskd4Od6iox3YCXIicxY-5JSj63QLU1r"
+        "Gv6EbFHkPAseZ-MYys2J99KGToAtz-XOMyKr3VJp7vc4RWBhNcRygm_Oj60DgXQS_ph2y1ZMfl7NL3m2jAJQzADTqBahOuTuJj57"
+        "BObdI7xV8bwOI8sFSFG3xVfKpoPkvi4C-G-rxErims2CC5rezJBwwVJtLCQ2CA1e_-4kv1DBja8Z1jzBfFXypXQfT1fXN-jL54-0"
+        "85JNiBeCfXUnUPUW-gjl-ea-17m9Y0b5XTu4QyF5AgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4"
+        "zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5k"
+        "ZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQD"
+        "DBhQTk9FRS0zMDMwMzAzOTkwMy1ERU0xLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93"
+        "d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAo"
+        "BgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5MDMwMzAzMTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTAr"
+        "MCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUFxWovRQENDMS4BItkheOSBR1dPcw"
+        "DgYDVR0PAQH_BAQDAgeAMAoGCCqGSM49BAMDA2gAMGUCMQDcI_ZV6SPo13ZPwsjhLMS9n6ZN1czKd02I_eKj67RBOOD1HWkW0DJ6"
+        "QxDoUoeaTcACMFdNOAY2BotlUO6uZWlWdUFjoqVZOGEgZVHGJkIxPZ04-SrO4jMOukWuZQqJYM4WZQ";
+
+static const char *SID_SIG_B64 =
+        "XN6OijUhZvTQDMME7I2OLzYu84lNhWl9FjKG8sfHBNvpVhsmaz2LR/WzTrJJ+QyVpz9A+o0i+Dl4Zf0v1MR79cjAHIhpsbrQVhC3"
+        "vlWmoE1s3tKoqWNLxyr2ub46J8H3Aac8x/62RiELsxhBO0JrEA8Vf4N0gXTqoSXxFBK/vbH7ANxbCP+Nx/DsnK1dUPLUQO+44Srs"
+        "qTv6ZVCO5QFV0cnQIS7wITbx41qCukKwL4nglNV52dGfzoLQh9LP+OlSbFkj3+gYWyoVKniBXXPb4G5wBVVSnjsfWaT5RyELNpV5"
+        "9A6Ucp7Kj9MUVi/pZY3iDl79AZM71QMfx9VMiR/nBVcwxINDsqW56WQiVzKqLqeys6eI6J4udqSctdNybYUuYhQIq7qYc1Up8sLQ"
+        "RZcpVHvD13648aMgCheyf7TnamA2fmtOFj/0Lnu3TPMX2Nyg+TWpRLYVlIsYO1fyQTkquST0QlONn5ayhL9nPzbEOwuEea6kWEuM"
+        "aakt0jLOSvs2dwwFIvypmisv/ywjJhC7pbinpE8M3RK7u9AS915SKNnBAgJXURKCO2HQ91fnNuz0KlpUODTKKpU1DN8pjskRodos"
+        "SBdRjsUuzsegw1QJAO9o/OL7qV1p1mDf48GlrPwz9VNVxqjh0Y2OjcWkdzQBgnPZwzBNErWVPgm0YOx75D3Wpp4dkgWeZkEItlxW"
+        "im8DNyBsOwOahsn/EMrqm3MYpv1SPMAFZH0aIAdvIbzEfapacqIHgFX4U4HrXSHzpLGsjs8dNlIrJtHZoN8d5HfxCS1wHZnv8whP"
+        "h5+Us4jAbAGz+Z/mUBg45AQPB8cTSnqgOlpOHqDri7/XoK0S8wYwlNjwrVXSuZjj++vAIudh5Q4QBrxKuT7ASMeZwjVhw384kWhK"
+        "RDck7Y0wTHOBSG+pVY7VCiWNsbd8Kc1Jy8DGtvtUiIdCJv/KZNjjckvoBVKN/NDthwZMxj8iIfVtsf+GWx+D6CvytpxwXFR+RFtz"
+        "5efHmlxhyK2fnE3DLJ6J1NKK";
+
+static const char *SID_TICKET_JWT =
+        "eyJhbGciOiJSU0FTU0EtUFNTK0FDU1BfVjIiLCJ0eXAiOiJ2bmQuY2RvYzIuYXV0aC10b2tlbi52MStzZC1qd3QifQ.eyJfc2QiO"
+        "lsiX1NvQmRrZlVoeHJSbGpFRHhuazVrbkdkOWs4QVlKdUxya2s2NkZkVVI4byJdLCJfc2RfYWxnIjoic2hhLTI1NiIsImlzcyI6I"
+        "mV0c2lcL1BOT0VFLTMwMzAzMDM5OTAzIn0.XN6OijUhZvTQDMME7I2OLzYu84lNhWl9FjKG8sfHBNvpVhsmaz2LR_WzTrJJ-QyVp"
+        "z9A-o0i-Dl4Zf0v1MR79cjAHIhpsbrQVhC3vlWmoE1s3tKoqWNLxyr2ub46J8H3Aac8x_62RiELsxhBO0JrEA8Vf4N0gXTqoSXxF"
+        "BK_vbH7ANxbCP-Nx_DsnK1dUPLUQO-44SrsqTv6ZVCO5QFV0cnQIS7wITbx41qCukKwL4nglNV52dGfzoLQh9LP-OlSbFkj3-gYW"
+        "yoVKniBXXPb4G5wBVVSnjsfWaT5RyELNpV59A6Ucp7Kj9MUVi_pZY3iDl79AZM71QMfx9VMiR_nBVcwxINDsqW56WQiVzKqLqeys"
+        "6eI6J4udqSctdNybYUuYhQIq7qYc1Up8sLQRZcpVHvD13648aMgCheyf7TnamA2fmtOFj_0Lnu3TPMX2Nyg-TWpRLYVlIsYO1fyQ"
+        "TkquST0QlONn5ayhL9nPzbEOwuEea6kWEuMaakt0jLOSvs2dwwFIvypmisv_ywjJhC7pbinpE8M3RK7u9AS915SKNnBAgJXURKCO"
+        "2HQ91fnNuz0KlpUODTKKpU1DN8pjskRodosSBdRjsUuzsegw1QJAO9o_OL7qV1p1mDf48GlrPwz9VNVxqjh0Y2OjcWkdzQBgnPZw"
+        "zBNErWVPgm0YOx75D3Wpp4dkgWeZkEItlxWim8DNyBsOwOahsn_EMrqm3MYpv1SPMAFZH0aIAdvIbzEfapacqIHgFX4U4HrXSHzp"
+        "LGsjs8dNlIrJtHZoN8d5HfxCS1wHZnv8whPh5-Us4jAbAGz-Z_mUBg45AQPB8cTSnqgOlpOHqDri7_XoK0S8wYwlNjwrVXSuZjj-"
+        "-vAIudh5Q4QBrxKuT7ASMeZwjVhw384kWhKRDck7Y0wTHOBSG-pVY7VCiWNsbd8Kc1Jy8DGtvtUiIdCJv_KZNjjckvoBVKN_NDth"
+        "wZMxj8iIfVtsf-GWx-D6CvytpxwXFR-RFtz5efHmlxhyK2fnE3DLJ6J1NKK";
+
+static const char *SID_PARAMS_JSON = R"({"interactionTypeUsed":"confirmationMessageAndVerificationCodeChoice","interactionsDigest":"l3Fawq7fsklfb+ZkDsZcJICehrtVrMmhidQ4Ha+gTM0=","signature":{"flowType":"Notification","serverRandom":"tjB5sLBWR8OVEJDOgUPRKhk4","signatureAlgorithm":"rsassa-pss","signatureAlgorithmParameters":{"hashAlgorithm":"SHA-256","maskGenAlgorithm":{"algorithm":"id-mgf1","parameters":{"hashAlgorithm":"SHA-256"}},"saltLength":32,"trailerField":"0xbc"},"userChallenge":"_eegCn9XBOQSqQRUQPRflc7r1CDJcz0k4jBL1AqpPmk"}})";
+
+std::vector<uint8_t> sidCert() { return libcdoc::fromBase64(SID_CERT_B64); }
+std::vector<uint8_t> sidSig() { return libcdoc::fromBase64(SID_SIG_B64); }
+
+std::vector<uint8_t> sidPayload()
+{
+    std::string p = libcdoc::buildAcspV2Payload("smart-id-demo", "tjB5sLBWR8OVEJDOgUPRKhk4",
+        "p6jwyzPizfS8+DozeW4fytXf0OVDp4hCHqvJWIlKLfg=", "_eegCn9XBOQSqQRUQPRflc7r1CDJcz0k4jBL1AqpPmk",
+        "DEMO", "l3Fawq7fsklfb+ZkDsZcJICehrtVrMmhidQ4Ha+gTM0=",
+        "confirmationMessageAndVerificationCodeChoice", "Notification");
+    return {p.begin(), p.end()};
+}
+
+std::string sidTicket()
+{
+    // The disclosures are irrelevant for validation; any suffix works.
+    return std::string(SID_TICKET_JWT) + "~aud~ZGlzY2xvc3VyZQ";
+}
+
+std::string makeSessionToken(const std::string& payload_json)
+{
+    std::string h = libcdoc::toBase64URL(R"({"typ":"vnd.cdoc2.session-token.v2+sd-jwt","alg":"ES256"})");
+    std::string p = libcdoc::toBase64URL(payload_json);
+    // jwt~aud~disclosure (SessionToken needs >= 3 parts)
+    return h + "." + p + ".c2ln~aud~ZGlzYw";
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(ValidateSignatureReferenceVector)
+{
+    const auto algo = libcdoc::Crypto::SignatureAlgorithm::RSASSA_PSS_SHA256;
+    // The ACSP_V2 signature from the log verifies (verified independently with OpenSSL).
+    BOOST_CHECK(libcdoc::Crypto::validateSignature(sidCert(), sidPayload(), sidSig(), algo));
+    // Tampered payload must not verify.
+    auto bad = sidPayload();
+    bad[10] ^= 0x01;
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature(sidCert(), bad, sidSig(), algo));
+    // Garbage certificate must not verify (and must not crash).
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature({1, 2, 3}, sidPayload(), sidSig(), algo));
+}
+
+BOOST_AUTO_TEST_CASE(ValidateCertificateIdentity)
+{
+    libcdoc::CryptoBackend crypto;
+    // The test certificate's subject serialNumber is PNOEE-30303039903.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039903", sidCert()), libcdoc::OK);
+    // Also accepted without the etsi/ prefix.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("PNOEE-30303039903", sidCert()), libcdoc::OK);
+    // Different person (another Smart-ID test number).
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039914", sidCert()), libcdoc::CRYPTO_ERROR);
+    // Garbage DER.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039903", {1, 2, 3}), libcdoc::CRYPTO_ERROR);
+    // Empty id.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/", sidCert()), libcdoc::CryptoBackend::INVALID_PARAMS);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateAuthTicketReferenceVector)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err;
+    // Full ticket from the log validates.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "DEMO", err),
+                      libcdoc::OK);
+    // Wrong recipient: identity mismatch.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039914", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "DEMO", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Wrong rpName: ACSP_V2 payload mismatch -> signature failure.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "EVIL", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Tampered serverRandom: signature failure.
+    std::string badParams(SID_PARAMS_JSON);
+    badParams.replace(badParams.find("tjB5sLBWR8OVEJDOgUPRKhk4"), 24, "AAAAAAAAAAAAAAAAAAAAAA");
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), badParams, "smart-id-demo", "DEMO", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Missing params entirely.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), "{}", "smart-id-demo", "DEMO", err),
+                      libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateSessionDataChecks)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err, scheme, rp;
+    std::string good = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":2000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", good, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::OK);
+    BOOST_CHECK_EQUAL(scheme, "smart-id-demo");
+    BOOST_CHECK_EQUAL(rp, "DEMO");
+    // Expired session token.
+    std::string expired = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":1000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", expired, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::NetworkBackend::NETWORK_ERROR);
+    // Identity mismatch.
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039914", good, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::CRYPTO_ERROR);
+    // Missing scheme claims.
+    std::string noclaims = makeSessionToken(R"({"exp":2000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", noclaims, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::DATA_FORMAT_ERROR);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

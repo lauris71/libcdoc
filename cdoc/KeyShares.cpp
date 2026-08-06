@@ -343,6 +343,140 @@ decodeTicket(const std::string& ticket)
     }
 }
 
+
+std::string
+libcdoc::buildAcspV2Payload(const std::string& scheme_name, const std::string& server_random,
+                            const std::string& rp_challenge, const std::string& user_challenge,
+                            const std::string& rp_name, const std::string& interactions_digest,
+                            const std::string& interaction_type_used, const std::string& flow_type)
+{
+    // schemeName|ACSP_V2|serverRandom|rpChallenge|userChallenge|base64(rpName)||
+    // interactionsDigest|interactionTypeUsed||flowType
+    // (brokeredRpNameBase64 and initialCallbackUrl are always empty here)
+    std::string rp_name64 = toBase64((const uint8_t *) rp_name.data(), rp_name.size());
+    return scheme_name + "|ACSP_V2|" + server_random + "|" + rp_challenge + "|" + user_challenge
+        + "|" + rp_name64 + "||" + interactions_digest + "|" + interaction_type_used + "||" + flow_type;
+}
+
+libcdoc::result_t
+libcdoc::validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
+                             const std::string& session_token, const std::string& session_cert_b64,
+                             std::string& scheme_name, std::string& rp_name, std::string& error)
+{
+    if (!crypto) {
+        error = "No crypto backend";
+        return CryptoBackend::INVALID_PARAMS;
+    }
+    // The session certificate belongs to the person the session authenticated;
+    // it must match the container recipient (base64url per the auth server spec).
+    std::vector<uint8_t> cert_der = fromBase64URL(session_cert_b64);
+    if (cert_der.empty()) {
+        error = "Invalid session certificate";
+        return DATA_FORMAT_ERROR;
+    }
+    if (auto rv = crypto->validateCertificate(rcpt_id, cert_der); rv != OK) {
+        error = FORMAT("Session certificate does not match recipient {}", rcpt_id);
+        return rv;
+    }
+    // Session token claims: expiry (fail fast; servers are authoritative) and
+    // the schemeName/rpName needed to reconstruct the ACSP_V2 payload.
+    SessionToken stoken(session_token);
+    std::string payload = decodeTicket(stoken.jwt);
+    picojson::value json;
+    if (!picojson::parse(json, payload).empty() || !json.is<picojson::object>()) {
+        error = "Invalid session token";
+        return DATA_FORMAT_ERROR;
+    }
+    if (json.get("exp").is<double>() && json.get("exp").get<double>() < libcdoc::getTime()) {
+        error = "Session token is expired";
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    scheme_name = json.get("schemeName").is<std::string>() ? json.get("schemeName").get<std::string>() : std::string();
+    rp_name = json.get("rpName").is<std::string>() ? json.get("rpName").get<std::string>() : std::string();
+    if (scheme_name.empty() || rp_name.empty()) {
+        error = "Session token misses schemeName/rpName claims";
+        return DATA_FORMAT_ERROR;
+    }
+    return OK;
+}
+
+libcdoc::result_t
+libcdoc::validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
+                            const std::string& ticket, const std::vector<uint8_t>& cert_der,
+                            const std::string& signature_params_json,
+                            const std::string& scheme_name, const std::string& rp_name,
+                            std::string& error)
+{
+    if (!crypto) {
+        error = "No crypto backend";
+        return CryptoBackend::INVALID_PARAMS;
+    }
+    // Signing certificate identity must match the container recipient.
+    if (auto rv = crypto->validateCertificate(rcpt_id, cert_der); rv != OK) {
+        error = FORMAT("Signing certificate does not match recipient {}", rcpt_id);
+        return rv;
+    }
+
+    // The signed part of the ticket JWT is header64.payload64.sig64
+    auto parts = split(ticket, '~');
+    if (parts.empty()) {
+        error = "Invalid ticket";
+        return DATA_FORMAT_ERROR;
+    }
+    auto jwt_parts = split(parts[0], '.');
+    if (jwt_parts.size() != 3) {
+        error = "Invalid ticket JWT";
+        return DATA_FORMAT_ERROR;
+    }
+    std::string signing_input = jwt_parts[0] + "." + jwt_parts[1];
+    std::vector<uint8_t> signature = fromBase64URL(jwt_parts[2]);
+    if (signature.empty()) {
+        error = "Invalid ticket signature";
+        return DATA_FORMAT_ERROR;
+    }
+
+    // The rpChallenge sent to the RP server is base64(SHA256(signing input))
+    std::vector<uint8_t> digest(32);
+    SHA256(reinterpret_cast<uint8_t *>(signing_input.data()), signing_input.size(), digest.data());
+    std::string rp_challenge = toBase64(digest);
+
+    // ACSP_V2 parameters returned by the RP server
+    picojson::value json;
+    if (!picojson::parse(json, signature_params_json).empty() || !json.is<picojson::object>()) {
+        error = "Invalid signature parameters";
+        return DATA_FORMAT_ERROR;
+    }
+    auto getStr = [](const picojson::value& obj, const char *key) -> std::string {
+        picojson::value v = obj.get(key);
+        return v.is<std::string>() ? v.get<std::string>() : std::string();
+    };
+    picojson::value sig = json.get("signature");
+    if (!sig.is<picojson::object>()) {
+        error = "Missing ACSP_V2 signature parameters";
+        return DATA_FORMAT_ERROR;
+    }
+    std::string server_random = getStr(sig, "serverRandom");
+    std::string user_challenge = getStr(sig, "userChallenge");
+    std::string flow_type = getStr(sig, "flowType");
+    std::string interactions_digest = getStr(json, "interactionsDigest");
+    std::string interaction_type = getStr(json, "interactionTypeUsed");
+    if (server_random.empty() || user_challenge.empty() || flow_type.empty()
+        || interactions_digest.empty() || interaction_type.empty()) {
+        error = "Missing ACSP_V2 signature parameters";
+        return DATA_FORMAT_ERROR;
+    }
+
+    std::string payload = buildAcspV2Payload(scheme_name, server_random, rp_challenge, user_challenge,
+                                             rp_name, interactions_digest, interaction_type, flow_type);
+    if (!Crypto::validateSignature(cert_der, {payload.cbegin(), payload.cend()}, signature,
+                                   Crypto::SignatureAlgorithm::RSASSA_PSS_SHA256)) {
+        error = "Auth ticket signature verification failed";
+        return CRYPTO_ERROR;
+    }
+    return OK;
+}
+
 } // namespace libcdoc
+
 
 

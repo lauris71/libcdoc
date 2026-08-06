@@ -183,6 +183,52 @@ static_assert(hashAlgorithmToSidMidName(static_cast<libcdoc::CryptoBackend::Hash
 
 thread_local std::string error;
 
+static std::string
+getJsonString(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
+{
+    error = {};
+    // picojson::value::get(key) throws std::runtime_error if json is not an
+    // object - check first, the input comes from a remote server.
+    if (!json.is<picojson::object>()) {
+        error = FORMAT("{} is missing (the response is not a JSON object)", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    picojson::value v = json.get(key);
+    if (!v.is<std::string>()) {
+        error = FORMAT("{} is missing or is not a string", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    result = libcdoc::OK;
+    return v.get<std::string>();
+}
+
+static picojson::object
+getJsonObject(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
+{
+    error = {};
+    // picojson::value::get(key) throws std::runtime_error if json is not an
+    // object - check first, the input comes from a remote server.
+    if (!json.is<picojson::object>()) {
+        error = FORMAT("{} is missing (the response is not a JSON object)", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    picojson::value v = json.get(key);
+    if (!v.is<picojson::object>()) {
+        error = FORMAT("{} is missing or is not an object", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    result = libcdoc::OK;
+    return v.get<picojson::object>();
+}
+
 std::string
 libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 {
@@ -405,7 +451,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
 {
     std::string host, path;
     int port;
-    int result = libcdoc::parseURL(url, host, port, path);
+    result_t result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
     std::vector<uint8_t> cert;
@@ -426,13 +472,8 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     result = get(cli, hdrs, full, rsp_json);
     if (result != libcdoc::OK) return result;
 
-    picojson::value v = rsp_json.get("ephemeral_key_material");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'ephemeral_key_material' in response");
-        return NETWORK_ERROR;
-    }
-    error = {};
-    std::string ks = v.get<std::string>();
+    std::string ks = getJsonString(rsp_json, "ephemeral_key_material", result);
+    if (result != libcdoc::OK) return NETWORK_ERROR;
     dst = fromBase64(ks);
     if (dst.empty()) {
         error = FORMAT("Invalid base64 in 'ephemeral_key_material'");
@@ -501,19 +542,6 @@ struct AuthResponse {
     std::string cert;
 };
 
-static std::string
-getJsonString(const picojson::value& json, const std::string& key)
-{
-    error = {};
-    picojson::value v = json.get(key);
-    if (!v.is<std::string>()) {
-        error = FORMAT("{} is not a string", key);
-        LOG_WARN("{}", error);
-        return {};
-    }
-    return v.get<std::string>();
-}
-
 static result_t
 waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_proc_uuid, double seconds)
 {
@@ -531,15 +559,9 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
             LOG_WARN("{}", error);
             return NetworkBackend::NETWORK_ERROR;
         }
-        // State
-        picojson::value v = rsp.get("status");
-        if (!v.is<std::string>()) {
-            error = "Status is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.status = getJsonString(rsp, "status");
-        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        // Status
+        dst.status = getJsonString(rsp, "status", result);
+        if (result != OK) return NetworkBackend::NETWORK_ERROR;
         LOG_DBG("Status: {}", dst.status);
 
         if (dst.status == "RUNNING") {
@@ -554,8 +576,8 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
         }
 
         // State is complete, check for end result
-        dst.endResult = getJsonString(rsp, "endResult");
-        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        dst.endResult = getJsonString(rsp, "endResult", result);
+        if (result != OK) return NetworkBackend::NETWORK_ERROR;
         LOG_DBG("EndResult: {}", dst.endResult);
         if (dst.endResult != "OK") {
             LOG_WARN("Authentication endResult is {}", dst.endResult);
@@ -563,11 +585,11 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
         }
 
         // Fetch session token and certificate
-        dst.sessionToken = getJsonString(rsp, "sessionToken");
-        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        dst.sessionToken = getJsonString(rsp, "sessionToken", result);
+        if (result != OK) return NetworkBackend::NETWORK_ERROR;
         LOG_TRACE("Session token: {}", dst.sessionToken);
-        dst.cert = getJsonString(rsp, "signingCertificate");
-        if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+        dst.cert = getJsonString(rsp, "signingCertificate", result);
+        if (result != OK) return NetworkBackend::NETWORK_ERROR;
         LOG_TRACE("Certificate: {}", dst.cert);
         error = {};
         return OK;
@@ -586,7 +608,7 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
     // Start authentication
     std::string host, path;
     int port;
-    int result = libcdoc::parseURL(url, host, port, path);
+    result_t result = parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
     // The session is bound to the actual recipient identity from the lock.
@@ -647,8 +669,8 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
         return NetworkBackend::NETWORK_ERROR;
     }
     // Verification code
-    std::string ver_code = getJsonString(rsp_json, "vc");
-    if (!error.empty()) return NetworkBackend::NETWORK_ERROR;
+    std::string ver_code = getJsonString(rsp_json, "vc", result);
+    if (result != libcdoc::OK) return NETWORK_ERROR;
     LOG_DBG("Verification code: {}", ver_code);
 
     SIDMIDFeedback fb = {
@@ -743,12 +765,9 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
         LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
-    picojson::value v = rsp_json.get("nonce");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'nonce' in response");
-        return NETWORK_ERROR;
-    }
-    std::string nonce_str = v.get<std::string>();
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string nonce_str = getJsonString(rsp_json, "nonce", rv);
+    if (rv != libcdoc::OK) return rv;
     dst = toUint8Vector(nonce_str);
     return OK;
 }
@@ -786,19 +805,12 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     result = get(cli, hdrs, full, rsp_json);
     if (result != libcdoc::OK) return result;
 
-    picojson::value v = rsp_json.get("share");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'share' in response");
-        return NETWORK_ERROR;
-    }
-    std::string share64 = v.get<std::string>();
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string share64 = getJsonString(rsp_json, "share", rv);
+    if (rv != libcdoc::OK) return rv;
     LOG_DBG("Share64: {}", share64);
-    v = rsp_json.get("recipient");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'recipient' in response");
-        return NETWORK_ERROR;
-    }
-    std::string recipient = v.get<std::string>();
+    std::string recipient = getJsonString(rsp_json, "recipient", rv);
+    if (rv != libcdoc::OK) return rv;
     std::vector<uint8_t> shareval = fromBase64(share64);
     if (shareval.size() != 32) {
         error = FORMAT("Invalid share size: expected 32, got {}", shareval.size());
@@ -854,13 +866,8 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
             return NetworkBackend::NETWORK_ERROR;
         }
         // State
-        picojson::value v = rsp.get("state");
-        if (!v.is<std::string>()) {
-            error = "State is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        std::string str = v.get<std::string>();
+        std::string str = getJsonString(rsp, "state", result);
+        if (result != OK) return result;
         if (str == "RUNNING") {
             // Pause for 0.5 seconds and repeat
             std::chrono::milliseconds duration(500);
@@ -873,19 +880,10 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
         }
 
         // State is complete, check for end result
-        v = rsp.get("result");
-        if (!v.is<picojson::object>()) {
-            error = "Result is not an object";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        picojson::value w = v.get("endResult");
-        if (!w.is<std::string>()) {
-            error = "Result is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        str = w.get<std::string>();
+        picojson::object result_obj = getJsonObject(rsp, "result", result);
+        if (result != OK) return result;
+        str = getJsonString(picojson::value(result_obj), "endResult", result);
+        if (result != OK) return result;
         result = parseMIDSIDResult(str);
         if (result == UNSPECIFIED_ERROR) {
             // Unknown result
@@ -900,41 +898,21 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
         // details
 
         // signatureProtocol
-        // Signature
-        v = rsp.get("signature");
-        if (v.is<picojson::object>()) {
-            w = v.get("value");
-            if (!w.is<std::string>()) {
-                error = "Value is not a string";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            dst.signature = w.get<std::string>();
-            dst.signature_json = v.get<picojson::object>();
+        // Signature (optional field; rsp is a verified object here)
+        if (picojson::value sig = rsp.get("signature"); sig.is<picojson::object>()) {
+            dst.signature = getJsonString(sig, "value", result);
+            if (result != OK) return result;
+            dst.signature_json = sig.get<picojson::object>();
         }
         // Interaction type
-        v = rsp.get("interactionTypeUsed");
-        if (!v.is<std::string>()) {
-            error = "InteractionTypeUsed is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.inter_type_used = v.get<std::string>();
+        dst.inter_type_used = getJsonString(rsp, "interactionTypeUsed", result);
+        if (result != OK) return result;
 
         // Certificate
-        v = rsp.get("cert");
-        if (!v.is<picojson::object>()) {
-            error = "Certificate is not a JSON object";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        w = v.get("value");
-        if (!w.is<std::string>()) {
-            error = "Certificate value is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.cert = w.get<std::string>();
+        picojson::object cert_obj = getJsonObject(rsp, "cert", result);
+        if (result != OK) return result;
+        dst.cert = getJsonString(picojson::value(cert_obj), "value", result);
+        if (result != OK) return result;
         error = {};
 
         return OK;
@@ -994,7 +972,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         picojson::value(inter)
     };
     //std::string inter_str = picojson::value(inter_arr).serialize();
-    std::string inter_str = "[{\"type\":\"confirmationMessageAndVerificationCodeChoice\",\"displayText200\":\"Do you want to decrypt the document\"}]";
+    std::string inter_str = "[{\"type\":\"confirmationnMessageAndVerificationCodeChoice\",\"displayText200\":\"Do you want to decrypt the document\"}]";
     LOG_DBG("Interactions: {}", inter_str);
     inter_str = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
     std::string inter_str_64 = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
@@ -1003,7 +981,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         {"certificateLevel", picojson::value(certificateLevel)},
         {"signatureProtocol", picojson::value("ACSP_V2")},
         {"signatureProtocolParameters", picojson::value(spp)},
-        {"interactions", picojson::value(inter_str_64)},
+        {"interactions", picojson::value(inter_str)},
         {"vcType", picojson::value("numeric4")}
     };
     picojson::value query(obj);
@@ -1061,13 +1039,9 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         LOG_WARN("Invalid Authentication response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    picojson::value w = rsp_json.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid Authentication response";
-        LOG_WARN("Invalid Authentication response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string sessionId = w.get<std::string>();
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string sessionId = getJsonString(rsp_json, "sessionID", rv);
+    if (rv != libcdoc::OK) return rv;
     LOG_DBG("SessionID: {}", sessionId);
 
     SIDResponse sidrsp;
@@ -1199,13 +1173,9 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         LOG_WARN("Invalid Mobile ID response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    picojson::value w = v.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid Mobile ID response";
-        LOG_WARN("Invalid Mobile ID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string sessionID  = w.get<std::string>();
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string sessionID = getJsonString(v, "sessionID", rv);
+    if (rv != libcdoc::OK) return rv;
     LOG_DBG("SessionID: {}", sessionID);
 
     SIDResponse sidrsp;

@@ -223,6 +223,63 @@ struct SessionToken {
 
 std::string decodeTicket(const std::string& ticket);
 
+/**
+ * @brief Build the ACSP_V2 signed payload (Smart-ID RP v3)
+ *
+ * The payload is the |-joined string:
+ * schemeName|ACSP_V2|serverRandom|rpChallenge|userChallenge|base64(rpName)||
+ * interactionsDigest|interactionTypeUsed||flowType
+ * (construction verified against the SK reference verifier).
+ */
+std::string buildAcspV2Payload(const std::string& scheme_name, const std::string& server_random,
+                               const std::string& rp_challenge, const std::string& user_challenge,
+                               const std::string& rp_name, const std::string& interactions_digest,
+                               const std::string& interaction_type_used, const std::string& flow_type);
+
+/**
+ * @brief Validate the authentication session client-side (S8)
+ *
+ * Checks that the session signing certificate belongs to rcpt_id (via
+ * CryptoBackend::validateCertificate), that the session token is not expired,
+ * and extracts the schemeName/rpName claims needed for ticket validation.
+ *
+ * @param crypto crypto backend
+ * @param rcpt_id recipient id from the lock (etsi/PNOEE-...)
+ * @param session_token the SD-JWT session token from the auth server
+ * @param session_cert_b64 session signing certificate (base64url DER)
+ * @param scheme_name output: session token schemeName claim
+ * @param rp_name output: session token rpName claim
+ * @param error output: error description on failure
+ * @return error code or OK
+ */
+result_t validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
+                             const std::string& session_token, const std::string& session_cert_b64,
+                             std::string& scheme_name, std::string& rp_name, std::string& error);
+
+/**
+ * @brief Validate a signed SID/MID auth ticket client-side (S8)
+ *
+ * Checks that the signing certificate belongs to rcpt_id and that the
+ * ACSP_V2 signature verifies. This binds the signer's identity, the consent
+ * text shown to the user (interactionsDigest) and the freshness
+ * (serverRandom) of the signature before it is presented to share servers.
+ *
+ * @param crypto crypto backend
+ * @param rcpt_id recipient id from the lock (etsi/PNOEE-...)
+ * @param ticket the auth ticket (jwt~disclosures...)
+ * @param cert_der signing certificate in DER encoding
+ * @param signature_params_json the x-cdoc2-sid-rpv3-signature-parameters JSON
+ * @param scheme_name schemeName (from the session token claims)
+ * @param rp_name rpName (from the session token claims)
+ * @param error output: error description on failure
+ * @return error code or OK
+ */
+result_t validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
+                            const std::string& ticket, const std::vector<uint8_t>& cert_der,
+                            const std::string& signature_params_json,
+                            const std::string& scheme_name, const std::string& rp_name,
+                            std::string& error);
+
 } // namespace libcdoc
 
 #endif // KEYSHARES_H

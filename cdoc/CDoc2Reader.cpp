@@ -293,6 +293,17 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             }
         }
 
+        // S8: validate the authentication session client-side - the session
+        // certificate must belong to the lock recipient and the session token
+        // must not be expired. Also learns the schemeName/rpName claims needed
+        // to verify the signed ticket later.
+        std::string scheme_name, rp_name, v_err;
+        if (auto rv = validateSessionData(crypto, rcpt_id, session.token, session.cert, scheme_name, rp_name, v_err); rv != OK) {
+            setLastError(v_err);
+            LOG_ERROR("{}", last_error);
+            return rv;
+        }
+
         // Get nonces
         for (auto& share : shares) {
             std::vector<uint8_t> nonce;
@@ -349,6 +360,18 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         if (result != libcdoc::OK) {
             LOG_ERROR("Cannot generate share tickets");
             return result;
+        }
+        // S8: verify the signed auth ticket client-side before spending it -
+        // the signing certificate must belong to rcpt_id and the ACSP_V2
+        // signature must verify (binds identity, the consent text shown to
+        // the user, and freshness). All tickets share the same signed JWT,
+        // so validating the first one covers them all.
+        if (!auth_tokens.empty()) {
+            if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, auth.params, scheme_name, rp_name, v_err); rv != OK) {
+                setLastError(v_err);
+                LOG_ERROR("{}", last_error);
+                return rv;
+            }
         }
         std::vector<uint8_t>& kek_build = kek.getTarget(32);
         std::fill(kek_build.begin(), kek_build.end(), 0);
