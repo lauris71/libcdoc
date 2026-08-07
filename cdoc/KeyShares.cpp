@@ -219,7 +219,7 @@ MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
 
     LOG_TRACE_KEY("MID signing: {}", digest);
 
-    result_t result = network->signMID(dst, cert, url, rp_uuid, rp_name, phone, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
+    result_t result = network->signMID(dst, cert, params, url, phone, session.token, session.cert, rcpt_id, digest, libcdoc::CryptoBackend::SHA_256);
     if (result != OK) {
         error = network->getLastErrorStr(result);
     }
@@ -345,7 +345,7 @@ decodeTicket(const std::string& ticket)
 
 
 std::string
-libcdoc::buildAcspV2Payload(const std::string& scheme_name, const std::string& server_random,
+buildAcspV2Payload(const std::string& scheme_name, const std::string& server_random,
                             const std::string& rp_challenge, const std::string& user_challenge,
                             const std::string& rp_name, const std::string& interactions_digest,
                             const std::string& interaction_type_used, const std::string& flow_type)
@@ -359,7 +359,7 @@ libcdoc::buildAcspV2Payload(const std::string& scheme_name, const std::string& s
 }
 
 libcdoc::result_t
-libcdoc::validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
+validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id, bool is_mid,
                              const std::string& session_token, const std::string& session_cert_b64,
                              std::string& scheme_name, std::string& rp_name, std::string& error)
 {
@@ -393,7 +393,7 @@ libcdoc::validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
     }
     scheme_name = json.get("schemeName").is<std::string>() ? json.get("schemeName").get<std::string>() : std::string();
     rp_name = json.get("rpName").is<std::string>() ? json.get("rpName").get<std::string>() : std::string();
-    if (scheme_name.empty() || rp_name.empty()) {
+    if (!is_mid && (scheme_name.empty() || rp_name.empty())) {
         error = "Session token misses schemeName/rpName claims";
         return DATA_FORMAT_ERROR;
     }
@@ -401,7 +401,7 @@ libcdoc::validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
 }
 
 libcdoc::result_t
-libcdoc::validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
+validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
                             const std::string& ticket, const std::vector<uint8_t>& cert_der,
                             const std::string& signature_params_json,
                             const std::string& scheme_name, const std::string& rp_name,

@@ -1881,23 +1881,23 @@ BOOST_AUTO_TEST_CASE(ValidateSessionDataChecks)
     libcdoc::CryptoBackend crypto;
     std::string err, scheme, rp;
     std::string good = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":2000000000})");
-    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", good, SID_CERT_B64URL,
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, good, SID_CERT_B64URL,
                                                    scheme, rp, err),
                       libcdoc::OK);
     BOOST_CHECK_EQUAL(scheme, "smart-id-demo");
     BOOST_CHECK_EQUAL(rp, "DEMO");
     // Expired session token.
     std::string expired = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":1000000000})");
-    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", expired, SID_CERT_B64URL,
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, expired, SID_CERT_B64URL,
                                                    scheme, rp, err),
                       libcdoc::NetworkBackend::NETWORK_ERROR);
     // Identity mismatch.
-    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039914", good, SID_CERT_B64URL,
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039914", false, good, SID_CERT_B64URL,
                                                    scheme, rp, err),
                       libcdoc::CRYPTO_ERROR);
     // Missing scheme claims.
     std::string noclaims = makeSessionToken(R"({"exp":2000000000})");
-    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", noclaims, SID_CERT_B64URL,
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, noclaims, SID_CERT_B64URL,
                                                    scheme, rp, err),
                       libcdoc::DATA_FORMAT_ERROR);
 }

@@ -269,8 +269,31 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             return libcdoc::CONFIGURATION_ERROR;
         }
         // auth_url = "https://cdoc2-auth.dev.riaint.ee";
+        // fixme:
+        std::string signer = conf->getValue(Configuration::SHARE_SIGNER);
+        LOG_DBG("Signer: {}", signer);
+        bool mid = false;
+        if (signer == Configuration::SHARE_SIGNER_SID) {
+            //
+        } else if (signer == Configuration::SHARE_SIGNER_MID) {
+            mid = true;
+        } else {
+            setLastError(t_("Unknown or missing signer type"));
+            LOG_ERROR("Unknown or missing signer type");
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        std::string phone;
+        if (mid) {
+            phone = conf->getValue({}, Configuration::PHONE_NUMBER);
+            if (phone.empty()) {
+                setLastError(t_("Missing phone number"));
+                LOG_ERROR("Missing phone number");
+                return libcdoc::CONFIGURATION_ERROR;
+            }
+        }
+
         SessionData session;
-        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, session.token, session.cert); rv != OK) {
+        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, phone, session.token, session.cert); rv != OK) {
             setLastError(network->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
@@ -298,7 +321,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         // must not be expired. Also learns the schemeName/rpName claims needed
         // to verify the signed ticket later.
         std::string scheme_name, rp_name, v_err;
-        if (auto rv = validateSessionData(crypto, rcpt_id, session.token, session.cert, scheme_name, rp_name, v_err); rv != OK) {
+        if (auto rv = validateSessionData(crypto, rcpt_id, mid, session.token, session.cert, scheme_name, rp_name, v_err); rv != OK) {
             setLastError(v_err);
             LOG_ERROR("{}", last_error);
             return rv;
@@ -328,10 +351,8 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         std::vector<std::string> auth_tokens;
         AuthenticationData auth;
         result_t result = NOT_IMPLEMENTED;
-        // fixme:
-        std::string signer = "SMART_ID";// conf->getValue(Configuration::SHARE_SIGNER);
-        LOG_DBG("Signer: {}", signer);
-        if (signer == "SMART_ID") {
+
+        if (!mid) {
             SIDSigner signer(rp_url, session, rcpt_id, network);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
@@ -340,22 +361,15 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 auth.cert = std::move(signer.cert);
                 auth.params = std::move(signer.params);
             }
-        } else if (signer == "MOBILE_ID") {
-            // "https://sid.demo.sk.ee/smart-id-rp/v2"
-            std::string url = conf->getValue(Configuration::MID_DOMAIN, Configuration::BASE_URL);
-            // "37200000566"
-            std::string phone = conf->getValue(Configuration::MID_DOMAIN, Configuration::PHONE_NUMBER);
-            MIDSigner signer(url, {}, {}, phone, rcpt_id, network);
+        } else {
+            MIDSigner signer(rp_url, phone, session, rcpt_id, network);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
             } else {
                 auth.cert = std::move(signer.cert);
+                auth.params = std::move(signer.params);
             }
-        } else {
-            setLastError(t_("Unknown or missing signer type"));
-            LOG_ERROR("Unknown or missing signer type");
-            return result;
         }
         if (result != libcdoc::OK) {
             LOG_ERROR("Cannot generate share tickets");
@@ -366,8 +380,9 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         // signature must verify (binds identity, the consent text shown to
         // the user, and freshness). All tickets share the same signed JWT,
         // so validating the first one covers them all.
-        if (!auth_tokens.empty()) {
-            if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, auth.params, scheme_name, rp_name, v_err); rv != OK) {
+        if (!auth_tokens.empty() && !mid) {
+            std::vector params = fromBase64URL(auth.params[network->X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS]);
+            if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, std::string(params.cbegin(), params.cend()), scheme_name, rp_name, v_err); rv != OK) {
                 setLastError(v_err);
                 LOG_ERROR("{}", last_error);
                 return rv;

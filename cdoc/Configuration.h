@@ -59,20 +59,10 @@ struct CDOC_EXPORT Configuration {
      * @brief Method for signing keyshare tickets (SMART_ID or MOBILE_ID)
      */
     static constexpr char const *SHARE_SIGNER = "SHARE_SIGNER";
+    static constexpr char const *SHARE_SIGNER_SID = "SMART_ID";
+    static constexpr char const *SHARE_SIGNER_MID = "MOBILE_ID";
     /**
-     * @brief Domain of SmartID settings
-     */
-    static constexpr char const *SID_DOMAIN = "SMART_ID";
-    /**
-     * @brief Domain of Mobile ID settings
-     */
-    static constexpr char const *MID_DOMAIN = "MOBILE_ID";
-    /**
-     * @brief MID/SID base url (domain is SMART_ID or MOBILE_ID)
-     */
-    static constexpr char const *BASE_URL = "BASE_URL";
-    /**
-     * @brief Mobile ID phone number (domain is MOBILE_ID)
+     * @brief Mobile ID phone number
      */
     static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
 #endif

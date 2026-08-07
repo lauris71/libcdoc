@@ -58,6 +58,7 @@ struct ToolConf : public JSONConfiguration {
     std::vector<ServerData> servers;
     std::string auth_server;
     std::string rp_server;
+    std::string phone;
 
     /**
      * @brief Files to be encrypted, or file to be decrypted.
@@ -85,6 +86,10 @@ struct ToolConf : public JSONConfiguration {
                 return auth_server;
             } else if (param == Configuration::RP_SERVER) {
                 return rp_server;
+            } else if (param == Configuration::PHONE_NUMBER) {
+                return phone;
+            } else if (param == Configuration::SHARE_SIGNER) {
+                return (phone.empty()) ? Configuration::SHARE_SIGNER_SID : Configuration::SHARE_SIGNER_MID;
             }
         }
         for (auto& sdata : servers) {

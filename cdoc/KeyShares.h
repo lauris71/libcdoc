@@ -71,7 +71,7 @@ struct SessionData {
  */
 struct AuthenticationData {
     std::vector<uint8_t> cert;
-    std::string params;
+    std::map<std::string, std::string> params;
 };
 
 /**
@@ -101,6 +101,11 @@ struct Signer {
      */
     virtual result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) = 0;
     /**
+     * @brief Full session token
+     * 
+     */
+    const SessionData& session;
+    /**
      * @brief Signing algorithm name (RS256/ES256)
      * 
      */
@@ -115,7 +120,7 @@ struct Signer {
      * 
      */
     std::vector<uint8_t> cert;
-    std::string params;
+    std::map<std::string, std::string> params;
     /**
      * @brief The text of last error
      * 
@@ -126,10 +131,11 @@ protected:
     /**
      * @brief Construct a new Signer object
      * 
+     * @param _session Full session data (token and certificate)
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      * @param _algo_name Signing algorithm name (RS256/ES256)
      */
-    Signer(const std::string& _rcpt_id, const std::string _algo_name, NetworkBackend *_network) : rcpt_id(_rcpt_id), algo_name(_algo_name), network(_network) {}
+    Signer(const SessionData& _session, const std::string& _rcpt_id, const std::string& _algo_name, NetworkBackend *_network) : session(_session), rcpt_id(_rcpt_id), algo_name(_algo_name), network(_network) {}
 };
 
 /**
@@ -142,11 +148,6 @@ struct SIDSigner : public Signer {
      * 
      */
     const std::string url;
-    /**
-     * @brief Full session token
-     * 
-     */
-    const SessionData& session;
 
     /**
      * @brief Construct a new SIDSigner object
@@ -156,7 +157,7 @@ struct SIDSigner : public Signer {
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
     SIDSigner(const std::string& _url, const SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_rcpt_id, "RSASSA-PSS+ACSP_V2", network), url(_url), session(_session) {}
+    : Signer(_session, _rcpt_id, "RSASSA-PSS+ACSP_V2", network), url(_url) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
@@ -172,16 +173,6 @@ struct MIDSigner : public Signer {
      */
     const std::string url;
     /**
-     * @brief Relying party UUID
-     * 
-     */
-    const std::string rp_uuid;
-    /**
-     * @brief Relying party name
-     * 
-     */
-    const std::string rp_name;
-    /**
      * @brief Recipient phone number (with country code)
      * 
      */
@@ -190,12 +181,10 @@ struct MIDSigner : public Signer {
      * @brief Construct a new MIDSigner object
      * 
      * @param _url Mobile ID gateway url
-     * @param _rp_uuid Relying party UUID
-     * @param _rp_name Relying party name
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
-    MIDSigner(const std::string& _url, const std::string& _rp_uuid, const std::string& _rp_name, const std::string& _phone, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_rcpt_id, "ES256", network), url(_url), rp_uuid(_rp_uuid), rp_name(_rp_name), phone(_phone) {}
+    MIDSigner(const std::string& _url, const std::string& _phone, const SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
+    : Signer(_session, _rcpt_id, "ES256", network), url(_url), phone(_phone) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
@@ -241,7 +230,7 @@ std::string buildAcspV2Payload(const std::string& scheme_name, const std::string
  *
  * Checks that the session signing certificate belongs to rcpt_id (via
  * CryptoBackend::validateCertificate), that the session token is not expired,
- * and extracts the schemeName/rpName claims needed for ticket validation.
+ * and extracts the schemeName/rpName claims needed for ticket validation for SmartId.
  *
  * @param crypto crypto backend
  * @param rcpt_id recipient id from the lock (etsi/PNOEE-...)
@@ -252,7 +241,7 @@ std::string buildAcspV2Payload(const std::string& scheme_name, const std::string
  * @param error output: error description on failure
  * @return error code or OK
  */
-result_t validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id,
+result_t validateSessionData(CryptoBackend *crypto, const std::string& rcpt_id, bool is_mid,
                              const std::string& session_token, const std::string& session_cert_b64,
                              std::string& scheme_name, std::string& rp_name, std::string& error);
 

@@ -21,6 +21,8 @@
 
 #include <cdoc/CryptoBackend.h>
 
+#include <map>
+
 namespace libcdoc {
 
 struct CDOC_EXPORT NetworkBackend {
@@ -188,6 +190,13 @@ struct CDOC_EXPORT NetworkBackend {
     virtual result_t fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id);
 
 #ifdef HAS_KEYSHARES
+
+    const std::string X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS = "x-cdoc2-sid-rpv3-signature-parameters";
+    const std::string X_RP_SIGNED_HASH = "x-rp-signed-hash";
+    const std::string X_RP_NAME = "x-rp-name";
+    const std::string HDR_SIGNATURE_INPUT = "Signature-Input";
+    const std::string HDR_SIGNATURE = "Signature";
+
     /**
      * @brief Get a session token and certificate for share authentication
      *
@@ -201,7 +210,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param cert Output parameter for session certificate
      * @return Error code or OK
      */
-    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, std::string& token, std::string& cert);
+    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, std::string& token, std::string& cert);
 
     /**
      * @brief fetch authentication nonce from share server
@@ -220,7 +229,8 @@ struct CDOC_EXPORT NetworkBackend {
      * @param cert a certificate of signing key (PEM without newlines)
      * @return error code or OK
      */
-    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::string& auth_params);
+    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
+        const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::map<std::string, std::string>& auth_params);
 #endif
 
     /**
@@ -286,16 +296,17 @@ struct CDOC_EXPORT NetworkBackend {
      * 
      * @param dst a container for signature
      * @param cert a container for certificate
+     * @param params SID signature parameters
      * @param url SmartID gateway base URL
-     * @param rp_uuid relying party UUID
-     * @param rp_name relying party name
+     * @param session_token session token
+     * @param session_cert session certificate
      * @param rcpt_id recipient id (etsi/PNOEE-XYZXYZXYZXY)
      * @param digest digest to sign
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
-    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::string& params,
-        const std::string& url, const std::string& auth_token, const std::string& auth_cert,
+    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+        const std::string& url, const std::string& session_token, const std::string& session_cert,
         const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 
     /**
@@ -312,8 +323,8 @@ struct CDOC_EXPORT NetworkBackend {
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
-    result_t signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-        const std::string& url, const std::string& rp_uuid, const std::string& rp_name, const std::string& phone,
+    result_t signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+        const std::string& url, const std::string& phone, const std::string& session_token, const std::string& session_cert,
         const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 #endif
 };
