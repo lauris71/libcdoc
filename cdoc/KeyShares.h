@@ -269,6 +269,43 @@ result_t validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
                             const std::string& scheme_name, const std::string& rp_name,
                             std::string& error);
 
+/**
+ * @brief Validate the RP server's RFC9421 HTTP countersignature (Mobile-ID flow)
+ *
+ * Reconstructs the signature base from the rp-sig covered components
+ * (x-rp-signed-hash, x-rp-name) and verifies the Signature header value with
+ * the RP server public key selected by keyid from the server JWKS.
+ *
+ * @param params the MID signature parameters (HTTP headers from the RP server)
+ * @param rp_jwks the RP server JWK Set JSON (from /.well-known/jwks.jws)
+ * @param error output: error description on failure
+ * @return error code or OK
+ */
+result_t validateRpHttpSignature(const std::map<std::string, std::string>& params,
+                                 const std::string& rp_jwks, std::string& error);
+
+/**
+ * @brief Validate a signed Mobile-ID auth ticket client-side (S8)
+ *
+ * Checks that the signing certificate belongs to rcpt_id, that the phone's
+ * ECDSA (ES256) signature verifies over the ticket signing input, that
+ * x-rp-signed-hash matches the ticket signature, and that the RP server's
+ * RFC9421 HTTP countersignature verifies.
+ *
+ * @param crypto crypto backend
+ * @param rcpt_id recipient id from the lock (etsi/PNOEE-...)
+ * @param ticket the auth ticket (jwt~disclosures...)
+ * @param cert_der signing certificate in DER encoding
+ * @param params the MID signature parameters (HTTP headers from the RP server)
+ * @param rp_jwks the RP server JWK Set JSON (from /.well-known/jwks.jws)
+ * @param error output: error description on failure
+ * @return error code or OK
+ */
+result_t validateAuthTicketMID(CryptoBackend *crypto, const std::string& rcpt_id,
+                               const std::string& ticket, const std::vector<uint8_t>& cert_der,
+                               const std::map<std::string, std::string>& params,
+                               const std::string& rp_jwks, std::string& error);
+
 } // namespace libcdoc
 
 #endif // KEYSHARES_H

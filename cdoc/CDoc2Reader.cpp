@@ -376,16 +376,34 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             return result;
         }
         // S8: verify the signed auth ticket client-side before spending it -
-        // the signing certificate must belong to rcpt_id and the ACSP_V2
+        // the signing certificate must belong to rcpt_id and the ticket
         // signature must verify (binds identity, the consent text shown to
         // the user, and freshness). All tickets share the same signed JWT,
         // so validating the first one covers them all.
-        if (!auth_tokens.empty() && !mid) {
-            std::vector params = fromBase64URL(auth.params[network->X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS]);
-            if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, std::string(params.cbegin(), params.cend()), scheme_name, rp_name, v_err); rv != OK) {
-                setLastError(v_err);
-                LOG_ERROR("{}", last_error);
-                return rv;
+        if (!auth_tokens.empty()) {
+            if (!mid) {
+                // Smart-ID: RSASSA-PSS over the ACSP_V2 payload
+                std::vector params = fromBase64URL(auth.params[network->X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS]);
+                if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, std::string(params.cbegin(), params.cend()), scheme_name, rp_name, v_err); rv != OK) {
+                    setLastError(v_err);
+                    LOG_ERROR("{}", last_error);
+                    return rv;
+                }
+            } else {
+                // Mobile-ID: ECDSA (ES256) ticket signature plus the RP
+                // server RFC9421 HTTP countersignature. The RP signing keys
+                // are fetched from its well-known endpoint.
+                std::string jwks;
+                if (auto rv = network->fetchWellKnownKeys(jwks, rp_url); rv != OK) {
+                    setLastError(network->getLastErrorStr(rv));
+                    LOG_ERROR("{}", last_error);
+                    return rv;
+                }
+                if (auto rv = validateAuthTicketMID(crypto, rcpt_id, auth_tokens[0], auth.cert, auth.params, jwks, v_err); rv != OK) {
+                    setLastError(v_err);
+                    LOG_ERROR("{}", last_error);
+                    return rv;
+                }
             }
         }
         std::vector<uint8_t>& kek_build = kek.getTarget(32);

@@ -197,6 +197,7 @@ public:
      */
     enum class SignatureAlgorithm {
         RSASSA_PSS_SHA256,  /**< RSASSA-PSS, SHA-256, MGF1/SHA-256, salt length = digest length */
+        ES256,              /**< ECDSA P-256/SHA-256; data must be the 32-byte digest, signature is raw r||s */
     };
 
     /**
@@ -214,6 +215,22 @@ public:
                                   const std::vector<uint8_t> &data,
                                   const std::vector<uint8_t> &signature,
                                   SignatureAlgorithm algo);
+
+    /**
+     * @brief Validate an ES256 signature with a raw EC public key point
+     *
+     * Used for the RFC9421 HTTP countersignature of the RP server (Mobile-ID
+     * flow), where the signing key is distributed as a JWK (x/y coordinates)
+     * rather than a certificate.
+     *
+     * @param pubkey_point uncompressed EC P-256 point (0x04 || x || y, 65 bytes)
+     * @param digest the 32-byte SHA-256 digest of the signed data
+     * @param signature raw r||s signature (64 bytes)
+     * @return true if the signature verifies
+     */
+    static bool validateSignatureECPoint(const std::vector<uint8_t> &pubkey_point,
+                                         const std::vector<uint8_t> &digest,
+                                         const std::vector<uint8_t> &signature);
 
     static bool isError(int retval, const char* funcName, const char* file, int line)
     {

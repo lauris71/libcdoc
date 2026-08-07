@@ -873,6 +873,52 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
 }
 
 libcdoc::result_t
+libcdoc::NetworkBackend::fetchWellKnownKeys(std::string& dst, const std::string& url)
+{
+    LOG_DBG("Get well-known keys from: {}", url);
+
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    result = setPeerCertificates(cli, this, buildURL(host, port));
+    if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    std::string full = path + "/.well-known/jwks.jws";
+    httplib::Headers hdrs;
+    if (httplib::Result rsp = cli.Get(full, hdrs); !rsp)
+        return NETWORK_ERROR;
+    else if (rsp->status < 200 || rsp->status >= 300) {
+        error = FORMAT("Well-known keys request failed with status {}", rsp->status);
+        LOG_WARN("{}", error);
+        return NETWORK_ERROR;
+    } else
+        dst = std::move(rsp->body);
+
+    // The endpoint name says .jws: accept both a plain JWK Set (what the
+    // servers currently return) and a JWS compact serialization
+    // (header64.payload64.signature64) whose payload is the JWK Set.
+    if (dst.find("\"keys\"") == std::string::npos) {
+        std::vector<std::string> parts = split(dst, '.');
+        if (parts.size() == 3) {
+            std::vector<uint8_t> payload = fromBase64URL(parts[1]);
+            dst.assign(payload.begin(), payload.end());
+        }
+    }
+    if (dst.find("\"keys\"") == std::string::npos) {
+        error = "Well-known keys response is not a JWK Set";
+        LOG_WARN("{}", error);
+        dst.clear();
+        return NETWORK_ERROR;
+    }
+    return libcdoc::OK;
+}
+
+libcdoc::result_t
 libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 {
     LOG_INFO("Verification code: {:04d} url: {}", feedback.code, feedback.url);

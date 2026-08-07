@@ -476,6 +476,186 @@ validateAuthTicket(CryptoBackend *crypto, const std::string& rcpt_id,
     return OK;
 }
 
+namespace {
+
+// Extract the uncompressed point (0x04 || x || y) of the EC P-256 JWK with
+// the given kid from a JWK Set JSON. Returns empty if not found/malformed.
+std::vector<uint8_t>
+jwkEcPoint(const std::string& jwks_json, const std::string& kid)
+{
+    picojson::value json;
+    if (!picojson::parse(json, jwks_json).empty() || !json.is<picojson::object>())
+        return {};
+    picojson::value keys = json.get("keys");
+    if (!keys.is<picojson::array>())
+        return {};
+    for (const auto& kv : keys.get<picojson::array>()) {
+        if (!kv.is<picojson::object>())
+            continue;
+        auto field = [&kv](const char *name) -> std::string {
+            picojson::value v = kv.get(name);
+            return v.is<std::string>() ? v.get<std::string>() : std::string();
+        };
+        if (field("kid") != kid)
+            continue;
+        if (field("kty") != "EC" || field("crv") != "P-256")
+            return {};
+        std::vector<uint8_t> x = fromBase64URL(field("x"));
+        std::vector<uint8_t> y = fromBase64URL(field("y"));
+        if (x.empty() || y.empty())
+            return {};
+        std::vector<uint8_t> point(1 + x.size() + y.size());
+        point[0] = 0x04;
+        std::copy(x.begin(), x.end(), point.begin() + 1);
+        std::copy(y.begin(), y.end(), point.begin() + 1 + x.size());
+        return point;
+    }
+    return {};
+}
+
+// Signature-Input header: rp-sig=(<components>);created=...;keyid="..."
+// Returns the parameters part (everything after "rp-sig=") and the keyid.
+bool
+parseSignatureInput(const std::string& header, std::string& params, std::string& keyid)
+{
+    if (!header.starts_with("rp-sig="))
+        return false;
+    params = header.substr(7);
+    auto pos = params.find("keyid=\"");
+    if (pos == std::string::npos)
+        return false;
+    auto end = params.find('"', pos + 7);
+    if (end == std::string::npos)
+        return false;
+    keyid = params.substr(pos + 7, end - pos - 7);
+    return !keyid.empty();
+}
+
+// Signature header: rp-sig=:<base64>:
+std::string
+parseSignatureHeader(const std::string& header)
+{
+    if (!header.starts_with("rp-sig=:") || !header.ends_with(":") || header.size() < 10)
+        return {};
+    return header.substr(8, header.size() - 9);
+}
+
+// RFC9421 section 2.5 signature base for the rp-sig covered components
+std::string
+buildRpSignatureBase(const std::string& rp_signed_hash, const std::string& rp_name,
+                     const std::string& signature_params)
+{
+    return "\"x-rp-signed-hash\": " + rp_signed_hash + "\n"
+         + "\"x-rp-name\": " + rp_name + "\n"
+         + "\"@signature-params\": " + signature_params;
+}
+
+} // namespace
+
+libcdoc::result_t
+validateRpHttpSignature(const std::map<std::string, std::string>& params, const std::string& rp_jwks,
+                        std::string& error)
+{
+    auto getParam = [&params](const char *name, std::string& dst) -> bool {
+        auto it = params.find(name);
+        if (it == params.end() || it->second.empty())
+            return false;
+        dst = it->second;
+        return true;
+    };
+    std::string rp_signed_hash, rp_name, signature_input, signature;
+    if (!getParam("x-rp-signed-hash", rp_signed_hash) ||
+        !getParam("x-rp-name", rp_name) ||
+        !getParam("Signature-Input", signature_input) ||
+        !getParam("Signature", signature)) {
+        error = "Missing RFC9421 signature parameters";
+        return DATA_FORMAT_ERROR;
+    }
+    std::string sig_params, keyid;
+    if (!parseSignatureInput(signature_input, sig_params, keyid)) {
+        error = "Invalid Signature-Input header";
+        return DATA_FORMAT_ERROR;
+    }
+    // RFC9421 byte sequences use standard base64
+    std::vector<uint8_t> sig = fromBase64(parseSignatureHeader(signature));
+    if (sig.empty()) {
+        error = "Invalid Signature header";
+        return DATA_FORMAT_ERROR;
+    }
+    std::vector<uint8_t> point = jwkEcPoint(rp_jwks, keyid);
+    if (point.empty()) {
+        error = FORMAT("No matching key in RP server JWKS (kid {})", keyid);
+        return CRYPTO_ERROR;
+    }
+    std::string base = buildRpSignatureBase(rp_signed_hash, rp_name, sig_params);
+    std::vector<uint8_t> digest(32);
+    SHA256(reinterpret_cast<uint8_t *>(base.data()), base.size(), digest.data());
+    if (!Crypto::validateSignatureECPoint(point, digest, sig)) {
+        error = "RP HTTP signature verification failed";
+        return CRYPTO_ERROR;
+    }
+    return OK;
+}
+
+libcdoc::result_t
+validateAuthTicketMID(CryptoBackend *crypto, const std::string& rcpt_id,
+                      const std::string& ticket, const std::vector<uint8_t>& cert_der,
+                      const std::map<std::string, std::string>& params, const std::string& rp_jwks,
+                      std::string& error)
+{
+    if (!crypto) {
+        error = "No crypto backend";
+        return CryptoBackend::INVALID_PARAMS;
+    }
+    // Signing certificate identity must match the container recipient.
+    if (auto rv = crypto->validateCertificate(rcpt_id, cert_der); rv != OK) {
+        error = FORMAT("Signing certificate does not match recipient {}", rcpt_id);
+        return rv;
+    }
+
+    // The signed part of the ticket JWT is header64.payload64.sig64; the hash
+    // sent to Mobile-ID is SHA-256 of the signing input.
+    auto parts = split(ticket, '~');
+    if (parts.empty()) {
+        error = "Invalid ticket";
+        return DATA_FORMAT_ERROR;
+    }
+    auto jwt_parts = split(parts[0], '.');
+    if (jwt_parts.size() != 3) {
+        error = "Invalid ticket JWT";
+        return DATA_FORMAT_ERROR;
+    }
+    std::string signing_input = jwt_parts[0] + "." + jwt_parts[1];
+    std::vector<uint8_t> signature = fromBase64URL(jwt_parts[2]);
+    if (signature.size() != 64) {
+        error = "Invalid ticket signature";
+        return DATA_FORMAT_ERROR;
+    }
+    std::vector<uint8_t> digest(32);
+    SHA256(reinterpret_cast<uint8_t *>(signing_input.data()), signing_input.size(), digest.data());
+    if (!Crypto::validateSignature(cert_der, digest, signature, Crypto::SignatureAlgorithm::ES256)) {
+        error = "Auth ticket signature verification failed";
+        return CRYPTO_ERROR;
+    }
+
+    // x-rp-signed-hash must be base64(SHA256(ticket signature)): this links
+    // the RP server's HTTP countersignature to the phone's signature.
+    auto it = params.find("x-rp-signed-hash");
+    if (it == params.end()) {
+        error = "Missing x-rp-signed-hash";
+        return DATA_FORMAT_ERROR;
+    }
+    std::vector<uint8_t> sig_hash(32);
+    SHA256(signature.data(), signature.size(), sig_hash.data());
+    if (it->second != toBase64(sig_hash)) {
+        error = "x-rp-signed-hash does not match the ticket signature";
+        return CRYPTO_ERROR;
+    }
+
+    // RP server RFC9421 HTTP countersignature
+    return validateRpHttpSignature(params, rp_jwks, error);
+}
+
 } // namespace libcdoc
 
 

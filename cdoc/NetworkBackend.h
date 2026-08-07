@@ -231,6 +231,21 @@ struct CDOC_EXPORT NetworkBackend {
      */
     virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
         const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::map<std::string, std::string>& auth_params);
+
+    /**
+     * @brief Fetch the server's public signing keys (JWKS)
+     *
+     * GET <url>/.well-known/jwks.jws and return the JWK Set JSON. The
+     * response may be a plain JWK Set or a JWS compact serialization whose
+     * payload is the JWK Set; both are handled. The JWS signature is not
+     * verified - the pinned TLS channel is the trust anchor (and the keys
+     * are cross-checked by the share servers).
+     *
+     * @param dst a container for the JWK Set JSON
+     * @param url server url (RP server)
+     * @return error code or OK
+     */
+    virtual result_t fetchWellKnownKeys(std::string& dst, const std::string& url);
 #endif
 
     /**

@@ -28,6 +28,8 @@
 #include <Tar.h>
 #include <Utils.h>
 #include <XmlReader.h>
+#include <openssl/sha.h>
+
 #include <cdoc/Crypto.h>
 #include <cdoc/Io.h>
 #include <cdoc/KeyShares.h>
@@ -1900,6 +1902,140 @@ BOOST_AUTO_TEST_CASE(ValidateSessionDataChecks)
     BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, noclaims, SID_CERT_B64URL,
                                                    scheme, rp, err),
                       libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Mobile-ID (MID) ticket validation: ECDSA (ES256) phone signature plus the
+// RP server RFC9421 HTTP countersignature. All vectors come from a working
+// cdoc-tool Mobile-ID session log (2026-08-07, SK test identity
+// PNOEE-51307149560) and the RP server's real well-known JWKS; both
+// signatures were independently verified with OpenSSL.
+BOOST_AUTO_TEST_SUITE(MidTicketValidation)
+
+namespace {
+
+static const char *MID_CERT_B64 =
+        "MIIDqDCCAy6gAwIBAgIQB9W11BzBABj+0d/AZx6UHzAKBggqhkjOPQQDAjBxMQswCQYDVQQGEwJFRTEbMBkGA1UECgwSU0sgSUQg"
+        "U29sdXRpb25zIEFTMRcwFQYDVQRhDA5OVFJFRS0xMDc0NzAxMzEsMCoGA1UEAwwjVEVTVCBvZiBTSyBJRCBTb2x1dGlvbnMgRUlE"
+        "LVEgMjAyMUUwHhcNMjQwNjEyMDY0NTI4WhcNMjkwNjE2MDY0NTI3WjCBlTELMAkGA1UEBhMCRUUxLzAtBgNVBAMMJk1BUlkgw4RO"
+        "TixPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMSUwIwYDVQQEDBxPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMRIwEAYD"
+        "VQQqDAlNQVJZIMOETk4xGjAYBgNVBAUTEVBOT0VFLTUxMzA3MTQ5NTYwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWlV1aVSX"
+        "w6WhagWmFmXE/oe+0R1xZzrHyoiVlgKpGiJ8cwIQLogRGQnWY7NwgQvRHCBmsl99bj57h7SWnd03m6OCAYEwggF9MAkGA1UdEwQC"
+        "MAAwHwYDVR0jBBgwFoAUScfc7QYUosdtnKbP11L9aOXoBBQwcAYIKwYBBQUHAQEEZDBiMDMGCCsGAQUFBzAChidodHRwOi8vYy5z"
+        "ay5lZS9URVNUX0VJRC1RXzIwMjFFLmRlci5jcnQwKwYIKwYBBQUHMAGGH2h0dHA6Ly9haWEuZGVtby5zay5lZS9laWRxMjAyMWUw"
+        "eAYDVR0gBHEwbzAIBgYEAI96AQIwYwYJKwYBBAHOHxIBMFYwVAYIKwYBBQUHAgEWSGh0dHBzOi8vd3d3LnNraWRzb2x1dGlvbnMu"
+        "ZXUvcmVzb3VyY2VzL2NlcnRpZmljYXRpb24tcHJhY3RpY2Utc3RhdGVtZW50LzA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5z"
+        "ay5lZS90ZXN0X2VpZC1xXzIwMjFlLmNybDAdBgNVHQ4EFgQUj8KjnXvGQJCRYOd5LVfPku7QsZwwDgYDVR0PAQH/BAQDAgeAMAoG"
+        "CCqGSM49BAMCA2gAMGUCMQCocXWDbBnkM3WEyBdv9Vm0A1MNRv08WrR192dRBcX42Kz5oiH0SdHRJv2ffeuEeSwCMEw2tSA3ClJv"
+        "233Dl7rIYU/T6UG2NQhvDD5FhnP0umZRmVfAUQ6eVcmU8AhFtNJjwg==";
+
+static const char *MID_CERT_B64URL =
+        "MIIDqDCCAy6gAwIBAgIQB9W11BzBABj-0d_AZx6UHzAKBggqhkjOPQQDAjBxMQswCQYDVQQGEwJFRTEbMBkGA1UECgwSU0sgSUQg"
+        "U29sdXRpb25zIEFTMRcwFQYDVQRhDA5OVFJFRS0xMDc0NzAxMzEsMCoGA1UEAwwjVEVTVCBvZiBTSyBJRCBTb2x1dGlvbnMgRUlE"
+        "LVEgMjAyMUUwHhcNMjQwNjEyMDY0NTI4WhcNMjkwNjE2MDY0NTI3WjCBlTELMAkGA1UEBhMCRUUxLzAtBgNVBAMMJk1BUlkgw4RO"
+        "TixPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMSUwIwYDVQQEDBxPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMRIwEAYD"
+        "VQQqDAlNQVJZIMOETk4xGjAYBgNVBAUTEVBOT0VFLTUxMzA3MTQ5NTYwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWlV1aVSX"
+        "w6WhagWmFmXE_oe-0R1xZzrHyoiVlgKpGiJ8cwIQLogRGQnWY7NwgQvRHCBmsl99bj57h7SWnd03m6OCAYEwggF9MAkGA1UdEwQC"
+        "MAAwHwYDVR0jBBgwFoAUScfc7QYUosdtnKbP11L9aOXoBBQwcAYIKwYBBQUHAQEEZDBiMDMGCCsGAQUFBzAChidodHRwOi8vYy5z"
+        "ay5lZS9URVNUX0VJRC1RXzIwMjFFLmRlci5jcnQwKwYIKwYBBQUHMAGGH2h0dHA6Ly9haWEuZGVtby5zay5lZS9laWRxMjAyMWUw"
+        "eAYDVR0gBHEwbzAIBgYEAI96AQIwYwYJKwYBBAHOHxIBMFYwVAYIKwYBBQUHAgEWSGh0dHBzOi8vd3d3LnNraWRzb2x1dGlvbnMu"
+        "ZXUvcmVzb3VyY2VzL2NlcnRpZmljYXRpb24tcHJhY3RpY2Utc3RhdGVtZW50LzA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5z"
+        "ay5lZS90ZXN0X2VpZC1xXzIwMjFlLmNybDAdBgNVHQ4EFgQUj8KjnXvGQJCRYOd5LVfPku7QsZwwDgYDVR0PAQH_BAQDAgeAMAoG"
+        "CCqGSM49BAMCA2gAMGUCMQCocXWDbBnkM3WEyBdv9Vm0A1MNRv08WrR192dRBcX42Kz5oiH0SdHRJv2ffeuEeSwCMEw2tSA3ClJv"
+        "233Dl7rIYU_T6UG2NQhvDD5FhnP0umZRmVfAUQ6eVcmU8AhFtNJjwg";
+
+static const char *MID_TICKET_JWT =
+        "eyJhbGciOiJFUzI1NiIsInR5cCI6InZuZC5jZG9jMi5hdXRoLXRva2VuLnYxK3NkLWp3dCJ9.eyJfc2QiOlsiWktZWWpYa01WRTB"
+        "hT2VGV2poUHJxY1d5M1o2dkpkek5qSkpnckVEenBIMCJdLCJfc2RfYWxnIjoic2hhLTI1NiIsImlzcyI6ImV0c2lcL1BOT0VFLTU"
+        "xMzA3MTQ5NTYwIn0.qrq6MiMCovJOfoDPVmh5tlbKDBQaOpyjzg_IpA635zET1njSnxszqePa79WEmo2GRQ-XtloXlY8aQ5ZL7ys"
+        "WNA";
+
+static const char *RP_JWKS_JSON = R"({"keys":[{"kid":"VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo","kty":"EC","use":null,"crv":"P-256","x":"H0VsHWVwImGA4uolFRROI5MWsEnVFrOKkFlRsFHRGKQ","y":"kOSoL7uoujqoIgCIn867lq6E-LflpMy6E8fsEYBcYxM","n":null,"e":null,"alg":"ES256"}]})";
+
+std::vector<uint8_t> midCert() { return libcdoc::fromBase64(MID_CERT_B64); }
+
+std::string midTicketJwt() { return MID_TICKET_JWT; }
+
+std::map<std::string, std::string> midParams()
+{
+    return {
+        {"x-rp-signed-hash", "hXPUTG2KxbSQSyb8vv2956q0aYta1K9tPZm8EFPJjUU="},
+        {"x-rp-name", "DEMO"},
+        {"Signature-Input", R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108129;keyid="VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo")"},
+        {"Signature", "rp-sig=:Mv0mLPa0K1M7T8FzU3ilCZROfs9SqFQOfjIzS8tTEhC7Ih+C+1S1yTjhbVls0m6ViDxOTHBmk/xSvIWX6YQIwA==:"},
+    };
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(MidPhoneSignatureVerifies)
+{
+    // ES256 over SHA256(JWT signing input) with the phone certificate key
+    // (verified independently with OpenSSL against the log data).
+    std::string jwt = midTicketJwt();
+    auto parts = libcdoc::split(jwt, '.');
+    BOOST_REQUIRE_EQUAL(parts.size(), 3);
+    std::vector<uint8_t> sig = libcdoc::fromBase64URL(parts[2]);
+    BOOST_REQUIRE_EQUAL(sig.size(), 64);
+    std::string input = parts[0] + "." + parts[1];
+    std::vector<uint8_t> digest(32);
+    SHA256(reinterpret_cast<uint8_t *>(input.data()), input.size(), digest.data());
+    BOOST_CHECK(libcdoc::Crypto::validateSignature(midCert(), digest, sig,
+                                                   libcdoc::Crypto::SignatureAlgorithm::ES256));
+    // Tampered digest must not verify.
+    digest[0] ^= 0x01;
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature(midCert(), digest, sig,
+                                                    libcdoc::Crypto::SignatureAlgorithm::ES256));
+}
+
+BOOST_AUTO_TEST_CASE(RpHttpSignatureVerifies)
+{
+    std::string err;
+    // The real log countersignature verifies against the real RP JWKS
+    // (verified independently with OpenSSL).
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(midParams(), RP_JWKS_JSON, err), libcdoc::OK);
+    // Tampered covered component -> verification failure.
+    auto bad = midParams();
+    bad["x-rp-name"] = "EVIL";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Tampered signature metadata (created timestamp) -> verification failure.
+    bad = midParams();
+    bad["Signature-Input"] = R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108128;keyid="VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo")";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Unknown key id.
+    bad = midParams();
+    bad["Signature-Input"] = R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108129;keyid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Missing headers.
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature({}, RP_JWKS_JSON, err), libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateAuthTicketMidEndToEnd)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err;
+    std::string ticket = midTicketJwt() + "~aud~ZGlzY2xvc3VyZQ";
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", ticket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::OK);
+    // Wrong recipient.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-30303039903", ticket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
+    // Tampered phone signature (flip a character in the JWT payload changes
+    // the signing input and therefore the digest).
+    std::string badTicket = ticket;
+    badTicket[badTicket.find('.') - 1] = (badTicket[badTicket.find('.') - 1] == 'A') ? 'B' : 'A';
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", badTicket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
+    // x-rp-signed-hash not matching the ticket signature.
+    auto bad = midParams();
+    bad["x-rp-signed-hash"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", ticket,
+                                                     midCert(), bad, RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
