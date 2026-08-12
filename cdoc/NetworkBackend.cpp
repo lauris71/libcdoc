@@ -478,7 +478,8 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
-    std::string full = path + "/key-capsules/" + transaction_id;
+    // S12: transaction_id comes from the (untrusted) container
+    std::string full = path + "/key-capsules/" + urlEncodeComponent(transaction_id);
     httplib::Headers hdrs;
     httplib::Response rsp;;
     result = get(cli, hdrs, full, rsp);
@@ -783,7 +784,17 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     SessionToken stoken(auth_token);
     std::string session_token_disclosed = stoken.discloseForUrl(url);
 
-    std::string full = path + "/key-shares/" + share_id + "/nonce";
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
+
+    // S12: share_id comes from the (untrusted) container
+    std::string full = path + "/key-shares/" + urlEncodeComponent(share_id) + "/nonce";
     httplib::Headers hdrs;
     hdrs.insert({"x-cdoc2-session-token", session_token_disclosed});
     hdrs.insert({"x-cdoc2-session-x5c", auth_cert});
@@ -829,7 +840,17 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     SessionToken stoken(session_token);
     std::string session_token_disclosed = stoken.discloseForUrl(url);
 
-    std::string full = path + "/key-shares/" + share_id;
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
+
+    // S12: share_id comes from the (untrusted) container
+    std::string full = path + "/key-shares/" + urlEncodeComponent(share_id);
     LOG_DBG("Share url: {}", full);
     httplib::Headers hdrs;
     hdrs.insert({"x-cdoc2-session-token", session_token_disclosed});
@@ -961,7 +982,8 @@ static result_t
 waitForResult(SIDMIDResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_token_disclosed, const std::string& auth_cert, const std::string& session_id, bool sid, double seconds)
 {
     double end = libcdoc::getTime() + seconds;
-    std::string full = path + session_id;
+    // S12: session_id comes from the server response
+    std::string full = path + urlEncodeComponent(session_id);
     LOG_DBG("SID/MID session query path: {}", full);
     while (libcdoc::getTime() < end) {
         httplib::Response rsp;
@@ -1096,6 +1118,15 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
 
     SessionToken stoken(session_token);
     std::string session_token_disclosed = stoken.discloseForUrl(url);
+
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
 
     picojson::object sap = {
         {"hashAlgorithm", picojson::value(hashAlgorithm)}
@@ -1257,6 +1288,15 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
 
     SessionToken stoken(session_token);
     std::string session_token_disclosed = stoken.discloseForUrl(url);
+
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
 
     LOG_DBG("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);

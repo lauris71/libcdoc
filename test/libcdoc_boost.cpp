@@ -1540,6 +1540,19 @@ BOOST_AUTO_TEST_CASE(EmptyOrDisclosurelessTokenFailsClosed)
     BOOST_CHECK(!twopart.hasDisclosureForUrl("https://share1.example.com"));
 }
 
+// S10 regression: malformed tokens (fewer than 3 parts) must disclose
+// nothing; callers treat an empty disclosure as a hard error and never send
+// an empty x-cdoc2-session-token header.
+BOOST_AUTO_TEST_CASE(MalformedTokenDisclosesNothing)
+{
+    libcdoc::SessionToken empty("");
+    BOOST_CHECK(empty.discloseForUrl("https://share1.example.com").empty());
+    libcdoc::SessionToken bare("jwt");
+    BOOST_CHECK(bare.discloseForUrl("https://share1.example.com").empty());
+    libcdoc::SessionToken twopart("jwt~aud");
+    BOOST_CHECK(twopart.discloseForUrl("https://share1.example.com").empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // Regression coverage for the constant-time PKCS#1 v1.5 unpadding used by
@@ -1702,6 +1715,61 @@ BOOST_AUTO_TEST_CASE(TwoServersPassTheCountCheck)
     // Gets past the URL-count check and fails later in the (stubbed) share
     // upload - i.e. NOT with CONFIGURATION_ERROR.
     BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::NOT_IMPLEMENTED);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S12 regression: untrusted values (container share ids, server nonces)
+// must be percent-encoded before being composed into request URLs.
+BOOST_AUTO_TEST_SUITE(UrlEncoding)
+
+BOOST_AUTO_TEST_CASE(ComponentEncoding)
+{
+    // Unreserved characters pass through unchanged.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("abcXYZ019-_.~"), "abcXYZ019-_.~");
+    // Typical share ids (hex) and nonces (base64url) are unchanged.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("a9e41c78982fc2079e7966ae885c1434"),
+                      "a9e41c78982fc2079e7966ae885c1434");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("xESQowIVG_5riudd-NBUpQ"), "xESQowIVG_5riudd-NBUpQ");
+    // Reserved and dangerous characters are percent-encoded.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("../admin"), "..%2Fadmin");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("x?y=1&z=2"), "x%3Fy%3D1%26z%3D2");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("a b"), "a%20b");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("100%"), "100%25");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("x#y"), "x%23y");
+    // Empty input.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent(""), "");
+    // Non-ASCII bytes are percent-encoded per byte (UTF-8 'ä').
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("\xc3\xa4"), "%C3%A4");
+}
+
+BOOST_AUTO_TEST_CASE(ShareUrlEncodesUntrustedParts)
+{
+    libcdoc::ShareData share("https://shares.example.com/", "1a81/../admin");
+    share.nonce = "no nce+here";
+    BOOST_CHECK_EQUAL(share.getURL(),
+                      "https://shares.example.com/key-shares/1a81%2F..%2Fadmin?nonce=no%20nce%2Bhere");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S11 regression: Crypto::extract must implement HKDF-Extract(salt, IKM)
+// with the arguments in (IKM, salt) order. The keyshare KEK derivation
+// depends on this convention (spec: KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i,
+// KeyMaterial_i)).
+BOOST_AUTO_TEST_SUITE(HkdfExtractConvention)
+
+BOOST_AUTO_TEST_CASE(Rfc5869TestCase1)
+{
+    // RFC 5869, Test Case 1 (SHA-256)
+    std::vector<uint8_t> ikm(22, 0x0b);
+    std::vector<uint8_t> salt {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c};
+    std::vector<uint8_t> prk = libcdoc::Crypto::extract(ikm, salt);
+    BOOST_CHECK_EQUAL(libcdoc::toHex(prk),
+        "077709362C2E32DF0DDC3F0DC47BBA6390B6C73BB50F9C3122EC844AD7C2B3E5");
+    // Swapped arguments must give a different result (guards the convention).
+    std::vector<uint8_t> swapped = libcdoc::Crypto::extract(salt, ikm);
+    BOOST_CHECK(prk != swapped);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

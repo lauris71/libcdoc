@@ -375,8 +375,11 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             // key_material is split-share-input material; wipe on exit.
             libcdoc::Cleanser key_material_guard(key_material);
 
-            //KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i, KeyMaterial_i)
-            std::vector<uint8_t> kek_pm = libcdoc::Crypto::extract(key_material_salt, key_material);
+            // KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i, KeyMaterial_i)
+            // RFC 5869: HKDF-Extract(salt, IKM); Crypto::extract takes (IKM, salt).
+            // (S11: the arguments were swapped, deviating from the spec and
+            // the reference implementation.)
+            std::vector<uint8_t> kek_pm = libcdoc::Crypto::extract(key_material, key_material_salt);
             libcdoc::Cleanser kek_pm_guard(kek_pm);
 
             // KEK_i = HKDF_Expand(KEK_i_pm, "CDOC2kek" + FMKEncryptionMethod + RecipientInfo_i, L)

@@ -246,6 +246,16 @@ struct urlEncode {
     friend std::ostream& operator<<(std::ostream& escaped, urlEncode src);
 };
 
+/**
+ * @brief Percent-encode a string for use as a URL path segment or query value
+ *
+ * RFC 3986 unreserved characters (A-Z a-z 0-9 - _ . ~) are kept as-is,
+ * everything else (including space) is percent-encoded. Used to safely
+ * interpolate untrusted values (share ids, nonces, transaction ids) into
+ * request URLs (S12).
+ */
+std::string urlEncodeComponent(std::string_view value);
+
 std::vector<uint8_t> toUint8Vector(const auto* data)
 {
     return {data->cbegin(), data->cend()};

@@ -266,6 +266,26 @@ parseEtsiRecipientId(std::string_view rcpt_id)
 }
 
 std::string
+urlEncodeComponent(std::string_view value)
+{
+    static constexpr char UNRESERVED[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~";
+    static constexpr char HEX[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(value.size());
+    for (char c : value) {
+        if (memchr(UNRESERVED, c, sizeof(UNRESERVED) - 1)) {
+            out += c;
+        } else {
+            out += '%';
+            out += HEX[(static_cast<unsigned char>(c) >> 4) & 0x0F];
+            out += HEX[static_cast<unsigned char>(c) & 0x0F];
+        }
+    }
+    return out;
+}
+
+std::string
 sanitiseExtractedFilename(std::string_view name)
 {
     // 1. Reject anything whose UTF-8 is malformed or contains NUL/control

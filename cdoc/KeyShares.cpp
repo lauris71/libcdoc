@@ -45,7 +45,9 @@ libcdoc::ShareData::getURL()
     std::string url = base_url;
     if (!base_url.ends_with('/'))
         url = url + "/";
-    url = url +  + "key-shares/" + share_id + "?nonce=" + nonce;
+    // S12: share_id comes from the (untrusted) container and nonce from the
+    // share server - percent-encode both before composing the URL.
+    url = url + "key-shares/" + urlEncodeComponent(share_id) + "?nonce=" + urlEncodeComponent(nonce);
     LOG_DBG("Share URL: {}", url);
     return url;
 }
@@ -240,6 +242,10 @@ SessionToken::SessionToken(std::string_view str)
         for (size_t i = 2; i < parts.size(); i++) {
             disclosures.push_back(parts[i]);
         }
+    } else {
+        // S10: a token without disclosures can authorize nothing; log it so
+        // that the resulting "no disclosure" errors are diagnosable.
+        LOG_WARN("Session token is malformed ({} parts, expected at least 3)", parts.size());
     }
 }
 
