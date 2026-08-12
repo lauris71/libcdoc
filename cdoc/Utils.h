@@ -86,6 +86,30 @@ static constexpr bool fromHex(auto pos, auto end, auto& val)
     return std::from_chars(p, p + 2, val, 16).ec == std::errc{};
 }
 
+/**
+ * @brief Parse a bounded non-negative decimal integer
+ *
+ * Reports failure explicitly: the whole string must be digits and the value
+ * must fit in [0, max_value]. Used for security-relevant numeric fields
+ * (e.g. the authentication verification code) where a malformed server
+ * value must never silently render as 0 (S16).
+ *
+ * @param str string to parse
+ * @param max_value maximum accepted value (inclusive)
+ * @param out parsed value on success
+ * @return true on success
+ */
+inline bool
+parseBoundedUInt(std::string_view str, int max_value, int& out)
+{
+    int value = -1;
+    auto res = std::from_chars(str.data(), str.data() + str.size(), value);
+    if (res.ec != std::errc() || res.ptr != str.data() + str.size() || value < 0 || value > max_value)
+        return false;
+    out = value;
+    return true;
+}
+
 static std::vector<uint8_t>
 fromHex(std::string_view hex) {
     std::vector<uint8_t> val;

@@ -270,14 +270,12 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         }
         // auth_url = "https://cdoc2-auth.dev.riaint.ee";
         // fixme:
-        std::string signer = conf->getValue(Configuration::SHARE_SIGNER);
-        LOG_DBG("Signer: {}", signer);
+        std::string signer_type = conf->getValue(Configuration::SHARE_SIGNER);
+        LOG_DBG("Signer: {}", signer_type);
         bool mid = false;
-        if (signer == Configuration::SHARE_SIGNER_SID) {
-            //
-        } else if (signer == Configuration::SHARE_SIGNER_MID) {
+        if (signer_type == Configuration::SHARE_SIGNER_MID) {
             mid = true;
-        } else {
+        } else if (signer_type != Configuration::SHARE_SIGNER_SID) {
             setLastError(t_("Unknown or missing signer type"));
             LOG_ERROR("Unknown or missing signer type");
             return libcdoc::CONFIGURATION_ERROR;

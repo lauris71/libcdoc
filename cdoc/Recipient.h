@@ -201,7 +201,8 @@ struct CDOC_EXPORT Recipient {
      * 
      * @param label the label text
      * @param server_id the id of share server group
-     * @param recipient_id the recipient id (PNOEE-01234567890)
+     * @param recipient_id the recipient id (PNOEE-01234567890, without the "etsi/"
+     *        prefix; validated by validate())
      * @return Recipient a new Recipient structure
      */
     static Recipient makeShare(std::string label, std::string server_id, std::string recipient_id);

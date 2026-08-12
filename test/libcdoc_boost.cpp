@@ -1719,6 +1719,52 @@ BOOST_AUTO_TEST_CASE(TwoServersPassTheCountCheck)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// S13 regression: keyshare recipient ids must be valid ETSI semantics
+// identifiers - malformed ids must fail at encryption time, not at the
+// share server.
+BOOST_AUTO_TEST_SUITE(KeyShareRecipientValidation)
+
+BOOST_AUTO_TEST_CASE(RecipientIdValidated)
+{
+    // Valid Estonian and Lithuanian personal codes.
+    BOOST_CHECK(libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039903").validate());
+    BOOST_CHECK(libcdoc::Recipient::makeShare("label", "server1", "PNOLT-30303039903").validate());
+    // Malformed ids are rejected.
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "30303039903").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNOEE-3030303990A").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNO-30303039903").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039903/../../x").validate());
+    // Missing server id is still rejected.
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "", "PNOEE-30303039903").validate());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S16 regression: the authentication verification code is the user's
+// consent anchor - a malformed server value must never render as 0.
+BOOST_AUTO_TEST_SUITE(BoundedUIntParsing)
+
+BOOST_AUTO_TEST_CASE(ParseBoundedUInt)
+{
+    int out = -1;
+    // Valid codes (Smart-ID/Mobile-ID numeric4 range 0000-9999).
+    BOOST_CHECK(libcdoc::parseBoundedUInt("6434", 9999, out) && out == 6434);
+    BOOST_CHECK(libcdoc::parseBoundedUInt("0000", 9999, out) && out == 0);
+    BOOST_CHECK(libcdoc::parseBoundedUInt("9999", 9999, out) && out == 9999);
+    // Malformed or out-of-range values are rejected (previously these
+    // rendered as verification code 0 via unchecked strtold).
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("10000", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("abc", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("12x", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("-1", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt(" 42", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("42 ", 9999, out));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // S12 regression: untrusted values (container share ids, server nonces)
 // must be percent-encoded before being composed into request URLs.
 BOOST_AUTO_TEST_SUITE(UrlEncoding)

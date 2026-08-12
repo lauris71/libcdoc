@@ -709,8 +709,18 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
     if (result != libcdoc::OK) return NETWORK_ERROR;
     LOG_DBG("Verification code: {}", ver_code);
 
+    // S16: the verification code is the user's consent anchor - a malformed
+    // server value must never be rendered as 0 or garbage. Smart-ID/Mobile-ID
+    // numeric4 codes are 0000-9999.
+    int vc = 0;
+    if (!libcdoc::parseBoundedUInt(ver_code, 9999, vc)) {
+        error = FORMAT("Invalid verification code in response: {}", ver_code);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+
     SIDMIDFeedback fb = {
-        .code = (int) std::strtold(ver_code.c_str(), nullptr),
+        .code = vc,
     };
     result = showFeedback(fb);
     if (result != OK) {
