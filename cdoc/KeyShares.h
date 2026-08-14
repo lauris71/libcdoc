@@ -54,17 +54,6 @@ struct ShareData {
 };
 
 /**
- * @brief Session data
- * 
- * The session token and certificate provided by AUTH server
- * 
- */
-struct SessionData {
-    std::string token;
-    std::string cert;
-};
-
-/**
  * @brief Authentication data for share tickets
  * 
  * The certificate and signature parameters from RP server
@@ -104,7 +93,7 @@ struct Signer {
      * @brief Full session token
      * 
      */
-    const SessionData& session;
+    const NetworkBackend::SessionData& session;
     /**
      * @brief Signing algorithm name (RS256/ES256)
      * 
@@ -135,7 +124,7 @@ protected:
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      * @param _algo_name Signing algorithm name (RS256/ES256)
      */
-    Signer(const SessionData& _session, const std::string& _rcpt_id, const std::string& _algo_name, NetworkBackend *_network) : session(_session), rcpt_id(_rcpt_id), algo_name(_algo_name), network(_network) {}
+    Signer(const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, const std::string& _algo_name, NetworkBackend *_network) : session(_session), rcpt_id(_rcpt_id), algo_name(_algo_name), network(_network) {}
 };
 
 /**
@@ -156,7 +145,7 @@ struct SIDSigner : public Signer {
      * @param _session Full session data (token and certificate)
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
-    SIDSigner(const std::string& _url, const SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
+    SIDSigner(const std::string& _url, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
     : Signer(_session, _rcpt_id, "RSASSA-PSS+ACSP_V2", network), url(_url) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
@@ -183,7 +172,7 @@ struct MIDSigner : public Signer {
      * @param _url Mobile ID gateway url
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      */
-    MIDSigner(const std::string& _url, const std::string& _phone, const SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
+    MIDSigner(const std::string& _url, const std::string& _phone, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
     : Signer(_session, _rcpt_id, "ES256", network), url(_url), phone(_phone) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;

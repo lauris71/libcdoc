@@ -38,6 +38,7 @@
 // Handle standard C++ types
 %include "std_string.i"
 %include "std_vector.i"
+%include "std_map.i"
 
 %include "typemaps.i"
 
@@ -517,6 +518,7 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %typemap(javaout) std::map<std::string, std::string> {
     return $jnicall;
 }
+%typemap(javain) std::map<std::string, std::string> "$javainput"
 
 //
 // std::vector<std::vector<uint8_t>> <- CertificateList

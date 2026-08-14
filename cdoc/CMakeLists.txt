@@ -160,8 +160,9 @@ if(SWIG_FOUND)
         set_target_properties(cdoc_java PROPERTIES
             INSTALL_RPATH $<$<PLATFORM_ID:Darwin>:/Library/Frameworks>
             SWIG_COMPILE_DEFINITIONS $<$<PLATFORM_ID:Windows>:SWIGWIN>
+            SWIG_COMPILE_DEFINITIONS HAS_KEYSHARES
         )
-        #install(TARGETS cdoc_java DESTINATION $<IF:$<PLATFORM_ID:Darwin>,/Library/Java/Extensions,${CMAKE_INSTALL_LIBDIR}>) # FIXME: build mac packages
+        target_compile_definitions(cdoc_java PRIVATE HAS_KEYSHARES)
         install(TARGETS cdoc_java DESTINATION ${CMAKE_INSTALL_LIBDIR})
         install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/java/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ee/ria/cdoc FILES_MATCHING PATTERN "*.java")
         if(WIN32)

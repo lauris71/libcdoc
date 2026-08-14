@@ -638,7 +638,7 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, std::string& token, std::string& cert)
+libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, SessionData& session)
 {
     // Start authentication
     std::string host, path;
@@ -734,7 +734,7 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
     result = waitForAuthResult(auth_rsp, cli, path + "/auth/status/", location, 60);
     if (result != OK) return result;
 
-    cert = auth_rsp.cert;
+    session.cert = auth_rsp.cert;
 
     auto parts = split(auth_rsp.sessionToken, '~');
     // In minimum we need JWT, AUD, RP disclosure and 2 share disclosures
@@ -754,7 +754,7 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
         }
     }
 
-    token = auth_rsp.sessionToken;
+    session.token = auth_rsp.sessionToken;
 
     auto decoded = decodeTicket(jwt);
     LOG_TRACE("Session token: {}", decoded);

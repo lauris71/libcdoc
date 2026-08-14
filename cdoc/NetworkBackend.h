@@ -198,6 +198,17 @@ struct CDOC_EXPORT NetworkBackend {
     const std::string HDR_SIGNATURE = "Signature";
 
     /**
+     * @brief Session data
+     * 
+     * The session token and certificate provided by AUTH server
+     * 
+     */
+    struct SessionData {
+        std::string token;
+        std::string cert;
+    };
+
+    /**
      * @brief Get a session token and certificate for share authentication
      *
      * Implementation may cache the session token and certificate if appropriate
@@ -210,7 +221,7 @@ struct CDOC_EXPORT NetworkBackend {
      * @param cert Output parameter for session certificate
      * @return Error code or OK
      */
-    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, std::string& token, std::string& cert);
+    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, SessionData& session);
 
     /**
      * @brief fetch authentication nonce from share server

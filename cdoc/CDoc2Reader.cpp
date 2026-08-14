@@ -290,8 +290,8 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             }
         }
 
-        SessionData session;
-        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, phone, session.token, session.cert); rv != OK) {
+        NetworkBackend::SessionData session;
+        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, phone, session); rv != OK) {
             setLastError(network->getLastErrorStr(rv));
             LOG_ERROR("{}", last_error);
             return rv;
