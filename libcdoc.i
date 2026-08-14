@@ -521,6 +521,86 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %typemap(javain) std::map<std::string, std::string> "$javainput"
 
 //
+// std::map<std::string, std::string>& (method arguments) <-> java.util.Map<String,String>
+//
+// fetchShare/signSID/signMID take the signature parameters as a string map.
+// The in-direction converts a Java Map to a temporary C++ map (read-only,
+// the convention for these parameters). The directorin-direction converts
+// C++ -> Java for upcalls into Java NetworkBackend implementations.
+//
+
+%fragment("SWIG_JavaMapToStringMap", "header") {
+static std::map<std::string, std::string> SWIG_JavaMapToStringMap(JNIEnv *jenv, jobject jmap) {
+    std::map<std::string, std::string> result;
+    if (!jmap)
+        return result;
+    jclass map_class = jenv->FindClass("java/util/Map");
+    jmethodID entry_set_mid = jenv->GetMethodID(map_class, "entrySet", "()Ljava/util/Set;");
+    jobject entry_set = jenv->CallObjectMethod(jmap, entry_set_mid);
+    jclass set_class = jenv->FindClass("java/util/Set");
+    jmethodID iterator_mid = jenv->GetMethodID(set_class, "iterator", "()Ljava/util/Iterator;");
+    jobject iterator = jenv->CallObjectMethod(entry_set, iterator_mid);
+    jclass iterator_class = jenv->FindClass("java/util/Iterator");
+    jmethodID has_next_mid = jenv->GetMethodID(iterator_class, "hasNext", "()Z");
+    jmethodID next_mid = jenv->GetMethodID(iterator_class, "next", "()Ljava/lang/Object;");
+    jclass entry_class = jenv->FindClass("java/util/Map$Entry");
+    jmethodID get_key_mid = jenv->GetMethodID(entry_class, "getKey", "()Ljava/lang/Object;");
+    jmethodID get_value_mid = jenv->GetMethodID(entry_class, "getValue", "()Ljava/lang/Object;");
+    while (jenv->CallBooleanMethod(iterator, has_next_mid)) {
+        jobject entry = jenv->CallObjectMethod(iterator, next_mid);
+        jstring jkey = (jstring) jenv->CallObjectMethod(entry, get_key_mid);
+        jstring jval = (jstring) jenv->CallObjectMethod(entry, get_value_mid);
+        const char *key_chars = jenv->GetStringUTFChars(jkey, nullptr);
+        std::string key(key_chars ? key_chars : "");
+        if (key_chars) jenv->ReleaseStringUTFChars(jkey, key_chars);
+        const char *val_chars = jenv->GetStringUTFChars(jval, nullptr);
+        std::string val(val_chars ? val_chars : "");
+        if (val_chars) jenv->ReleaseStringUTFChars(jval, val_chars);
+        result.emplace(std::move(key), std::move(val));
+        jenv->DeleteLocalRef(entry);
+        jenv->DeleteLocalRef(jkey);
+        jenv->DeleteLocalRef(jval);
+    }
+    jenv->DeleteLocalRef(entry_set);
+    jenv->DeleteLocalRef(iterator);
+    return result;
+}}
+
+%fragment("SWIG_StringMapToJavaMap", "header") {
+static jobject SWIG_StringMapToJavaMap(JNIEnv *jenv, const std::map<std::string, std::string> &data) {
+    jclass map_class = jenv->FindClass("java/util/HashMap");
+    jmethodID mid_new = jenv->GetMethodID(map_class, "<init>", "()V");
+    jmethodID mid_put = jenv->GetMethodID(map_class, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    jobject jmap = jenv->NewObject(map_class, mid_new);
+    for (const auto &pair : data) {
+        jstring key = jenv->NewStringUTF(pair.first.c_str());
+        jstring val = jenv->NewStringUTF(pair.second.c_str());
+        jenv->CallObjectMethod(jmap, mid_put, key, val);
+        jenv->DeleteLocalRef(key);
+        jenv->DeleteLocalRef(val);
+    }
+    return jmap;
+}}
+
+// in: Java Map -> temporary C++ map (input-only parameters)
+%typemap(in, fragment="SWIG_JavaMapToStringMap") std::map<std::string, std::string>&,
+                                                  const std::map<std::string, std::string>& %{
+    std::map<std::string, std::string> $1_map = SWIG_JavaMapToStringMap(jenv, $input);
+    $1 = &$1_map;
+%}
+%typemap(jni) std::map<std::string, std::string>&, const std::map<std::string, std::string>& "jobject"
+%typemap(jtype) std::map<std::string, std::string>&, const std::map<std::string, std::string>& "java.util.Map<String,String>"
+%typemap(jstype) std::map<std::string, std::string>&, const std::map<std::string, std::string>& "java.util.Map<String,String>"
+%typemap(javain) std::map<std::string, std::string>&, const std::map<std::string, std::string>& "$javainput"
+
+// directorin: C++ map -> Java Map (upcall into a Java NetworkBackend)
+%typemap(directorin, descriptor="Ljava/util/Map;", fragment="SWIG_StringMapToJavaMap")
+        std::map<std::string, std::string>&, const std::map<std::string, std::string>& %{
+    $input = SWIG_StringMapToJavaMap(jenv, $1);
+%}
+%typemap(javadirectorin) std::map<std::string, std::string>&, const std::map<std::string, std::string>& "$jniinput"
+
+//
 // std::vector<std::vector<uint8_t>> <- CertificateList
 //
 
@@ -667,6 +747,7 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %}
 %typemap(javaimports) libcdoc::NetworkBackend %{
     import java.util.ArrayList;
+    import java.util.Map;
 %}
 #endif
 

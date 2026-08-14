@@ -572,6 +572,11 @@ static result_t
 waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_proc_uuid, double seconds)
 {
     httplib::Headers hdrs;
+    // Polling may take tens of seconds while the user approves the request;
+    // the server closes idle keep-alive connections (Connection: close), and
+    // reusing a dead socket fails with "Cannot connect". Open a fresh
+    // connection for each poll instead.
+    cli.set_keep_alive(false);
 
     double end = getTime() + seconds;
     std::string full = path + auth_proc_uuid;
@@ -991,6 +996,10 @@ namespace libcdoc {
 static result_t
 waitForResult(SIDMIDResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& auth_token_disclosed, const std::string& auth_cert, const std::string& session_id, bool sid, double seconds)
 {
+    // Same rationale as in waitForAuthResult: long user-approval waits make
+    // pooled keep-alive sockets go stale; poll on fresh connections.
+    cli.set_keep_alive(false);
+
     double end = libcdoc::getTime() + seconds;
     // S12: session_id comes from the server response
     std::string full = path + urlEncodeComponent(session_id);
