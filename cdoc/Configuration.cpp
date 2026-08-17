@@ -41,7 +41,13 @@ libcdoc::Configuration::getInt(std::string_view param, int def_val) const
 {
     std::string val = getValue(param);
     if (val.empty()) return def_val;
-    return std::stoi(val);
+    // N15: std::stoi throws on malformed config values. Use from_chars
+    // and fall back to the default instead of crashing.
+    int result = 0;
+    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), result);
+    if (ec != std::errc{} || ptr != val.data() + val.size())
+        return def_val;
+    return result;
 }
 
 int64_t
@@ -49,7 +55,11 @@ libcdoc::Configuration::getInt64(std::string_view param, int64_t def_val) const
 {
     std::string val = getValue(param);
     if (val.empty()) return def_val;
-    return std::stoll(val);
+    int64_t result = 0;
+    auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), result);
+    if (ec != std::errc{} || ptr != val.data() + val.size())
+        return def_val;
+    return result;
 }
 
 struct JSONConfiguration::Private {

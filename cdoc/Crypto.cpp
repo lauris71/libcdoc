@@ -201,7 +201,12 @@ std::vector<uint8_t> Crypto::decodeBase64(const uint8_t *data)
 		return result;
 	}
 
-    if(SSL_FAILED(EVP_DecodeFinal(ctx.get(), result.data(), &size2), "EVP_DecodeFinal"))
+    // N13: EVP_DecodeFinal must write at result.data() + size1, not
+    // result.data(). For clean input OpenSSL consumes everything in
+    // DecodeUpdate (size2 == 0), but embedded whitespace/line breaks
+    // can leave work for DecodeFinal; writing at offset 0 would
+    // silently overwrite the first size2 bytes.
+    if(SSL_FAILED(EVP_DecodeFinal(ctx.get(), result.data() + size1, &size2), "EVP_DecodeFinal"))
         result.clear();
 	else
         result.resize(size_t(size1 + size2));
@@ -751,6 +756,23 @@ int Crypto::decryptRSAv15_implicitReject(std::vector<uint8_t>& dst,
                 libcdoc::cleanse(tmp);
                 // Length didn't match - fall through to software path so we
                 // produce a synthetic plaintext of the correct length.
+                //
+                // N12 (accepted residual): the OpenSSL >= 3.2 fast path
+                // returns after one RSA operation when padding is valid
+                // AND the message length equals expected_len; all other
+                // cases fall through to the software path below (second
+                // RSA op + DER encode + HMAC/HKDF). An attacker with
+                // precise timing can therefore distinguish
+                // "PKCS#1-conformant with a 32-byte message" from
+                // everything else - a narrow Bleichenbacher-style oracle
+                // covering roughly 1/246 of conformant messages for
+                // 2048-bit keys. We accept this residual: the N10
+                // per-key minimum-interval throttle limits the attacker
+                // to one query per second per RSA key, so extracting a
+                // usable oracle signal requires days of wall-clock time
+                // and is further constrained by the same countermeasures
+                // that protect the software path (constant-time unpad,
+                // synthetic plaintext, AES-GCM body authentication).
             }
         }
     }
