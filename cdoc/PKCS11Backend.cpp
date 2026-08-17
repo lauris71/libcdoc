@@ -246,6 +246,7 @@ libcdoc::PKCS11Backend::PKCS11Backend(const std::string &driver)
 
 libcdoc::PKCS11Backend::~PKCS11Backend()
 {
+	if (!d) return;
 	if(d->f) {
 		d->f->C_Finalize(nullptr);
 		d->f = nullptr;

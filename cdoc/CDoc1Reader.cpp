@@ -38,8 +38,11 @@ constexpr std::string_view MIME_ZLIB = "http://www.isi.edu/in-noes/iana/assignme
 constexpr std::string_view MIME_DDOC = "http://www.sk.ee/DigiDoc/v1.3.0/digidoc.xsd";
 constexpr std::string_view MIME_DDOC_OLD = "http://www.sk.ee/DigiDoc/1.3.0/digidoc.xsd";
 
+// CDoc 1.0 used AES-CBC; CDoc 1.1 switched to AES-GCM and all CDoc 1.0
+// containers have long since expired. AES-CBC also has no authentication,
+// which makes it a poor fit for the "reject at the body" FMK-oracle
+// defence documented below. We therefore do not accept CBC containers.
 constexpr std::array SUPPORTED_METHODS {
-    libcdoc::Crypto::AES128CBC_MTH, libcdoc::Crypto::AES192CBC_MTH, libcdoc::Crypto::AES256CBC_MTH,
     libcdoc::Crypto::AES128GCM_MTH, libcdoc::Crypto::AES192GCM_MTH, libcdoc::Crypto::AES256GCM_MTH
 };
 
@@ -115,10 +118,10 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     setLastError({});
 
     // Determine the FMK length from the container's body cipher. The CDoc1
-    // body uses AES-128/192/256 in CBC or GCM mode, so the FMK is 16, 24
-    // or 32 bytes long. We pin this length up-front and pass it to the RSA
-    // decrypt path so that an attacker observing this function cannot
-    // distinguish between
+    // body uses AES-128/192/256 in GCM mode (CBC was only used by CDoc 1.0,
+    // which we no longer accept), so the FMK is 16, 24 or 32 bytes long.
+    // We pin this length up-front and pass it to the RSA decrypt path so
+    // that an attacker observing this function cannot distinguish between
     //   (a) RSA padding failed
     //   (b) RSA padding succeeded but the resulting length was wrong
     //   (c) a wholly different recipient was used to derive a wrong key.
@@ -127,9 +130,7 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     // candidate FMK of the right length, and the eventual AES decrypt at
     // the container body level either authenticates that FMK (success) or
     // rejects it. CDoc1 has no header HMAC, so the AES-GCM tag is the
-    // only bit of authentication we can rely on. AES-CBC containers
-    // therefore retain a residual oracle (PKCS#7 stripping); using GCM
-    // when re-encrypting with libcdoc is strongly preferred.
+    // only bit of authentication we can rely on.
     size_t expected_fmk_len = 0;
     if (const EVP_CIPHER *c = libcdoc::Crypto::cipher(d->method); c) {
         expected_fmk_len = size_t(EVP_CIPHER_key_length(c));
@@ -413,7 +414,7 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         return libcdoc::WORKFLOW_ERROR;
     }
     if (auto result = d->dsrc->seek(0); result != libcdoc::OK) {
-        LOG_ERROR("{}", d->src->getLastErrorStr(result));
+        LOG_ERROR("{}", d->dsrc->getLastErrorStr(result));
         return result;
     }
 
@@ -441,13 +442,13 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         return libcdoc::IO_ERROR;
     }
 
-    // Treat any post-FMK decrypt error - including AES-CBC PKCS#7 stripping
-    // failures and AES-GCM tag mismatches - as the same "container body
-    // decrypt failed" event. This is the single bit of information an
-    // attacker can extract per submission of a tampered CDoc1, and we
-    // rate-limit it. A per-process exponential backoff turns a remote
-    // Bleichenbacher campaign of 2^20+ queries into hours/days of
-    // wall-clock cost without penalising legitimate single-shot use.
+    // Treat any post-FMK decrypt error - in practice an AES-GCM tag
+    // mismatch - as the same "container body decrypt failed" event.
+    // This is the single bit of information an attacker can extract per
+    // submission of a tampered CDoc1, and we rate-limit it. A per-process
+    // exponential backoff turns a remote Bleichenbacher campaign of
+    // 2^20+ queries into hours/days of wall-clock cost without
+    // penalising legitimate single-shot use.
     constexpr auto THROTTLE_SCOPE = "cdoc1-rsa-decrypt";
     auto report_failure = [&]{
         libcdoc::Crypto::rsaOracleThrottleOnFailure(THROTTLE_SCOPE);

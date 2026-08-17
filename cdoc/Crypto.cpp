@@ -88,9 +88,9 @@ std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std:
 
 const EVP_CIPHER *Crypto::cipher(const std::string &algo)
 {
-	if(algo == AES128CBC_MTH) return EVP_aes_128_cbc();
-	if(algo == AES192CBC_MTH) return EVP_aes_192_cbc();
-	if(algo == AES256CBC_MTH) return EVP_aes_256_cbc();
+	// AES-CBC was only used by CDoc 1.0; all CDoc 1.0 containers have
+	// expired and we no longer accept it. It is intentionally absent here
+	// so that unknown-method errors surface early at the CDoc1 reader.
 	if(algo == AES128GCM_MTH) return EVP_aes_128_gcm();
 	if(algo == AES192GCM_MTH) return EVP_aes_192_gcm();
 	if(algo == AES256GCM_MTH) return EVP_aes_256_gcm();

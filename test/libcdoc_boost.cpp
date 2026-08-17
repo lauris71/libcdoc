@@ -1079,6 +1079,34 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(constructor, Buf, BufTypes)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// Regression for SecurityReview_Kilo_2026-07 N2: AES-CBC was only used by
+// CDoc 1.0, which is long expired, and the DecryptionSource CBC path was
+// broken anyway (the `size != out` invariant fails for padded CBC).
+// Support has been removed entirely; the Crypto::cipher lookup and the
+// CDoc1 reader's SUPPORTED_METHODS list must not let CBC methods through.
+BOOST_AUTO_TEST_SUITE(AesCbcRemoved)
+
+BOOST_AUTO_TEST_CASE(CipherLookupRejectsCbc)
+{
+    constexpr std::array cbcMethods {
+        "http://www.w3.org/2001/04/xmlenc#aes128-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes192-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
+    };
+    for (const char *m : cbcMethods) {
+        BOOST_CHECK(libcdoc::Crypto::cipher(m) == nullptr);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(CipherLookupStillAcceptsGcm)
+{
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES128GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES192GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES256GCM_MTH)) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // Regression coverage for libcdoc::sanitiseExtractedFilename(). All inputs
 // here come from attacker-controlled archive headers (tar / DDoc); the
 // helper is the single chokepoint that decides whether an entry can ever

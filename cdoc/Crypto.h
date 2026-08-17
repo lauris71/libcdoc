@@ -44,9 +44,9 @@ public:
 	static constexpr std::string_view KWAES256_MTH = "http://www.w3.org/2001/04/xmlenc#kw-aes256";
 
 	static const std::string SHA256_MTH, SHA384_MTH, SHA512_MTH;
-    static constexpr std::string_view AES128CBC_MTH = "http://www.w3.org/2001/04/xmlenc#aes128-cbc";
-    static constexpr std::string_view AES192CBC_MTH = "http://www.w3.org/2001/04/xmlenc#aes192-cbc";
-    static constexpr std::string_view AES256CBC_MTH = "http://www.w3.org/2001/04/xmlenc#aes256-cbc";
+    // AES-CBC was only used by CDoc 1.0; all CDoc 1.0 containers have
+    // expired and we no longer accept it. The constants are removed so
+    // that new code cannot accidentally re-introduce CBC support.
     static constexpr std::string_view AES128GCM_MTH = "http://www.w3.org/2009/xmlenc11#aes128-gcm";
     static constexpr std::string_view AES192GCM_MTH = "http://www.w3.org/2009/xmlenc11#aes192-gcm";
     static constexpr std::string_view AES256GCM_MTH = "http://www.w3.org/2009/xmlenc11#aes256-gcm";
