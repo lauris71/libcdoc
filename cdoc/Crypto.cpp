@@ -468,43 +468,46 @@ void Crypto::LogSslError(const char* funcName, const char* file, int line)
 
 namespace {
 
-// Per-scope consecutive-failure counter. Process-wide. The mutex protects a
-// small map keyed by scope string; lock contention is negligible because
-// throttle invocations only happen on the failed-decrypt path which is
-// already an attacker-budget-limited code path.
+// Per-key last-failure timestamp. Process-wide. The mutex protects a
+// small map keyed by the recipient's public-key hash; lock contention is
+// negligible because throttle invocations only happen on the failed-decrypt
+// path which is already an attacker-budget-limited code path.
 std::mutex g_throttle_mutex;
-std::unordered_map<std::string, unsigned int> g_throttle_failures;
+std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_throttle_failures;
 
-constexpr std::chrono::milliseconds kThrottleBase{50};
-constexpr std::chrono::milliseconds kThrottleCap{5000};
+constexpr std::chrono::milliseconds kMinFailureInterval{1000};
 
 } // anonymous namespace
 
-void Crypto::rsaOracleThrottleOnFailure(const std::string& scope)
+void Crypto::rsaOracleThrottle(const std::string& key_id)
 {
-    unsigned int failures = 0;
+    const auto now = std::chrono::steady_clock::now();
+    std::chrono::milliseconds delay{0};
     {
         std::lock_guard<std::mutex> lk(g_throttle_mutex);
-        failures = ++g_throttle_failures[scope];
+        // Erase entries older than the minimum interval to bound map growth.
+        for (auto it = g_throttle_failures.begin(); it != g_throttle_failures.end(); ) {
+            if (now - it->second >= kMinFailureInterval) {
+                it = g_throttle_failures.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        auto [entry, inserted] = g_throttle_failures.try_emplace(key_id, now);
+        if (!inserted) {
+            const auto elapsed = now - entry->second;
+            if (elapsed < kMinFailureInterval) {
+                delay = std::chrono::duration_cast<std::chrono::milliseconds>(kMinFailureInterval - elapsed);
+            }
+            entry->second = now;
+        }
     }
-
-    // delay = base * 2^(failures-1), capped at kThrottleCap. Computed on a
-    // wider integer to avoid overflow for very large failure counts.
-    auto delay = kThrottleBase;
-    for (unsigned int i = 1; i < failures && delay < kThrottleCap; ++i) {
-        delay *= 2;
+    // Sleep outside the mutex to avoid holding the lock during the delay.
+    if (delay.count() > 0) {
+        LOG_WARN("RSA decrypt failure (key={}); throttling for {} ms",
+                 key_id, delay.count());
+        std::this_thread::sleep_for(delay);
     }
-    if (delay > kThrottleCap) delay = kThrottleCap;
-
-    LOG_WARN("RSA decrypt failure (scope={}, consecutive={}); throttling for {} ms",
-             scope, failures, delay.count());
-    std::this_thread::sleep_for(delay);
-}
-
-void Crypto::rsaOracleThrottleOnSuccess(const std::string& scope)
-{
-    std::lock_guard<std::mutex> lk(g_throttle_mutex);
-    g_throttle_failures.erase(scope);
 }
 
 namespace {
@@ -848,7 +851,7 @@ EncryptionConsumer::close() noexcept try
     {
         if(SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl"))
             return CRYPTO_ERROR;
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (dst.write(tag.data(), tag.size()) != tag.size())
             return IO_ERROR;
     }
@@ -856,7 +859,7 @@ EncryptionConsumer::close() noexcept try
     {
         if(SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_GET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl"))
             return CRYPTO_ERROR;
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (dst.write(tag.data(), tag.size()) != tag.size())
             return IO_ERROR;
     }
@@ -966,14 +969,14 @@ result_t DecryptionSource::close()
         return error;
 
     if (EVP_CIPHER_CTX_mode(ctx.get()) == EVP_CIPH_GCM_MODE) {
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl")) {
             return error = CRYPTO_ERROR;
         }
     }
     else if(EVP_CIPHER_CTX_flags(ctx.get()) & EVP_CIPH_FLAG_AEAD_CIPHER)
     {
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl")) {
             return error = CRYPTO_ERROR;
         }

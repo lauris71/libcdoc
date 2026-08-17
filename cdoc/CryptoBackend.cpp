@@ -116,6 +116,12 @@ CryptoBackend::extractHKDF(std::vector<uint8_t>& kek_pm, const std::vector<uint8
                            int32_t kdf_iter, unsigned int idx)
 {
     if (salt.empty()) return INVALID_PARAMS;
+    // N8: The container's kdf_iterations is attacker-controlled int32.
+    // Values < 0 (possible from sign-wrap when Lock::getInt reads 4
+    // big-endian bytes as unsigned > INT32_MAX) would silently take the
+    // raw-key path below, turning a password lock into a (failing)
+    // symmetric-key lock. Reject them here so the failure is explicit.
+    if (kdf_iter < 0) return INVALID_PARAMS;
     if ((kdf_iter > 0) && pw_salt.empty()) return INVALID_PARAMS;
     std::vector<uint8_t> key_material;
     int result = getKeyMaterial(key_material, pw_salt, kdf_iter, idx);

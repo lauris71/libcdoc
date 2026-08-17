@@ -27,6 +27,7 @@
 #include <Recipient.h>
 #include <Tar.h>
 #include <Utils.h>
+#include <ZStream.h>
 #include <XmlReader.h>
 #include <cdoc/Crypto.h>
 
@@ -1079,6 +1080,69 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(constructor, Buf, BufTypes)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// Regression for SecurityReview_Kilo_2026-07 N7: ZSource had no limit on
+// total decompressed output, so a few-KB compressed container could expand
+// to gigabytes of memory (CDoc1) or disk (CDoc2). The reader must cap the
+// total inflated size and fail with IO_ERROR past the limit.
+BOOST_AUTO_TEST_SUITE(ZSourceLimit)
+
+// A zlib stream of repeating zeros compresses to almost nothing; without
+// a cap the reader would happily inflate unlimited attacker-controlled
+// output.
+BOOST_AUTO_TEST_CASE(EnforcesMaxDecompressedSize)
+{
+    // Build a compressed stream that expands well past the cap.
+    // 1 MiB of zeros compresses to ~1 KiB.
+    const size_t PLAIN_SIZE = 1024 * 1024;
+    std::vector<uint8_t> plain(PLAIN_SIZE, 0);
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+    BOOST_REQUIRE(compressed.size() < plain.size() / 100); // sanity: it compressed
+
+    // Read with a 64 KiB cap — must fail with IO_ERROR, not return the full MiB.
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 64 * 1024);
+    std::vector<uint8_t> buf(4096);
+    libcdoc::result_t total = 0;
+    while (true) {
+        auto rv = zsrc.read(buf.data(), buf.size());
+        if (rv < 0) {
+            BOOST_CHECK_EQUAL(rv, libcdoc::IO_ERROR);
+            break;
+        }
+        if (rv == 0) break;
+        total += rv;
+    }
+    BOOST_CHECK(zsrc.isError());
+    // The limited read should have produced less than the full payload.
+    BOOST_CHECK(total < PLAIN_SIZE);
+}
+
+// Without a cap (max_size = 0) the stream must succeed as before.
+BOOST_AUTO_TEST_CASE(UnlimitedWhenCapIsZero)
+{
+    const std::vector<uint8_t> plain = {'h', 'e', 'l', 'l', 'o'};
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 0); // no cap
+    std::vector<uint8_t> buf(plain.size());
+    auto rv = zsrc.read(buf.data(), buf.size());
+    BOOST_CHECK_EQUAL(rv, plain.size());
+    BOOST_CHECK_EQUAL_COLLECTIONS(buf.begin(), buf.end(), plain.begin(), plain.end());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // Regression for SecurityReview_Kilo_2026-07 N2: AES-CBC was only used by
 // CDoc 1.0, which is long expired, and the DecryptionSource CBC path was
 // broken anyway (the `size != out` invariant fails for padded CBC).
@@ -1103,6 +1167,61 @@ BOOST_AUTO_TEST_CASE(CipherLookupStillAcceptsGcm)
     BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES128GCM_MTH)) != nullptr);
     BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES192GCM_MTH)) != nullptr);
     BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES256GCM_MTH)) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N8: PBKDF2 kdf_iterations
+// from the container is attacker-controlled int32. Without bounds it
+// enables both CPU-exhaustion DoS (huge iteration counts) and sign-wrap
+// confusion (values > INT32_MAX wrap negative and silently take the raw
+// symmetric-key path). The writer must enforce [100k, 10M] and the
+// reader must reject > 100M.
+BOOST_AUTO_TEST_SUITE(Pbkdf2IterationBounds)
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooFewIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 99'999);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMinimumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 100'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMaximumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooManyIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'001);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsZeroIterations)
+{
+    // kdf_iter == 0 means a raw symmetric key (no PBKDF2); valid.
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 0);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(ReaderRejectsNegativeIterations)
+{
+    // Negative kdf_iter (possible from sign-wrap when the container's
+    // unsigned 4-byte field is read as signed int32) must be rejected
+    // before it silently takes the raw-key path.
+    TestCrypto crypto;
+    crypto.password = "test";
+    std::vector<uint8_t> kek_pm;
+    std::vector<uint8_t> salt(16, 0);
+    std::vector<uint8_t> pw_salt(16, 0);
+    auto rv = crypto.extractHKDF(kek_pm, salt, pw_salt, -1, 0);
+    BOOST_CHECK_EQUAL(rv, libcdoc::CryptoBackend::INVALID_PARAMS);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

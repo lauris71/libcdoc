@@ -135,33 +135,26 @@ public:
                                             size_t expected_len);
 
     /**
-     * @brief Apply a delay proportional to the number of consecutive
-     *        decrypt failures recorded for a given (process, key) pair.
+     * @brief Enforce a minimum interval between RSA decrypt failures
+     *        from the same recipient key.
      *
-     * Bleichenbacher / cross-protocol attacks against RSA-PKCS#1 v1.5 require
-     * a large number of adaptive queries against the same victim
-     * ciphertext-key pair. This helper introduces an exponentially-growing
-     * sleep on consecutive decrypt failures, which dramatically increases
-     * the wall-clock cost of a remote oracle attack while remaining
-     * essentially invisible during normal use (one or two failures only).
+     * Bleichenbacher / cross-protocol attacks against RSA-PKCS#1 v1.5
+     * require a large number of adaptive queries against the same victim
+     * key. This helper enforces a 1-second minimum interval between
+     * consecutive failures for a given key, dramatically increasing the
+     * wall-clock cost of a remote oracle campaign without penalising
+     * legitimate single-shot use.
      *
-     * The throttle is per-process and is designed to be advisory: long-
-     * running services that decrypt many containers should additionally
-     * implement per-recipient rate limits in their host application.
+     * The throttle is keyed by a hash of the recipient's public key
+     * (not the container ciphertext), so different RSA keys have
+     * independent intervals and no cross-tenant DoS is possible.
      *
-     * @param scope an arbitrary string that scopes the failure counter; use
-     *              the recipient identifier or "default" if you don't have
-     *              one. Different scopes have independent counters.
+     * On each call, entries older than the minimum interval are erased,
+     * keeping the map bounded.
+     *
+     * @param key_id a hex-encoded hash of the recipient's public key
      */
-    static void rsaOracleThrottleOnFailure(const std::string& scope);
-
-    /**
-     * @brief Reset the consecutive-failure counter for the given scope.
-     *
-     * Should be called after any successful authenticated decrypt to
-     * prevent the throttle from punishing legitimate retries.
-     */
-    static void rsaOracleThrottleOnSuccess(const std::string& scope);
+    static void rsaOracleThrottle(const std::string& key_id);
 
     /**
      * @brief Constant-time PKCS#1 v1.5 unpadding from a pre-decrypted EM block.

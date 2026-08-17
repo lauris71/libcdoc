@@ -76,6 +76,16 @@ struct CDOC_EXPORT Configuration {
      */
     static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
 #endif
+    /**
+     * @brief Maximum decompressed payload size for CDoc1 zlib content (bytes).
+     * Default: 2 GiB.
+     */
+    static constexpr char const *CDOC1_MAX_DECOMPRESSED_SIZE = "CDOC1_MAX_DECOMPRESSED_SIZE";
+    /**
+     * @brief Maximum decompressed payload size for CDoc2 zlib content (bytes).
+     * Default: 20 GiB.
+     */
+    static constexpr char const *CDOC2_MAX_DECOMPRESSED_SIZE = "CDOC2_MAX_DECOMPRESSED_SIZE";
 
 	Configuration() = default;
 	virtual ~Configuration() noexcept = default;
@@ -113,6 +123,13 @@ struct CDOC_EXPORT Configuration {
      * @return the key value
      */
     int getInt(std::string_view param, int def_val = 0) const;
+    /**
+     * @brief get 64-bit integer value of configuration parameter from the default domain
+     * @param param the parameter name
+     * @param def_val the default value to return if parameter is not set
+     * @return the key value
+     */
+    int64_t getInt64(std::string_view param, int64_t def_val = 0) const;
 };
 
 /**

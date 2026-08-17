@@ -44,6 +44,14 @@ libcdoc::Configuration::getInt(std::string_view param, int def_val) const
     return std::stoi(val);
 }
 
+int64_t
+libcdoc::Configuration::getInt64(std::string_view param, int64_t def_val) const
+{
+    std::string val = getValue(param);
+    if (val.empty()) return def_val;
+    return std::stoll(val);
+}
+
 struct JSONConfiguration::Private {
     picojson::object root = {};
 };

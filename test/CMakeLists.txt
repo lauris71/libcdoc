@@ -11,6 +11,7 @@ target_link_libraries(unittests
     LibXml2::LibXml2
     cdoc
     Boost::unit_test_framework
+    ZLIB::ZLIB
 )
 
 add_test(NAME runtest
