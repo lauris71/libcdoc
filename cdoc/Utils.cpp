@@ -66,12 +66,16 @@ getTime()
 #define timegm _mkgmtime
 #endif
 
+// N17: return -1 on parse failure so callers can distinguish garbage
+// from a valid timestamp. Previously a malformed ISO string produced
+// an undefined time_t via std::get_time without checking in.fail().
 double
 timeFromISO(const std::string& iso)
 {
     std::istringstream in{iso};
     std::tm t = {};
     in >> std::get_time(&t, "%Y-%m-%dT%TZ");
+    if (in.fail()) return -1;
     return timegm(&t);
 }
 

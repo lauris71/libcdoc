@@ -367,7 +367,13 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         dst.expiry_time = expiry_ts;
         LOG_TRACE("Given expiry timestamp: {}", dst.expiry_time);
     } else {
-        dst.expiry_time = uint64_t(timeFromISO(expiry_str));
+        double parsed = timeFromISO(expiry_str);
+        if (parsed < 0) {
+            LOG_WARN("Invalid server expiry '{}', using client-supplied expiry", expiry_str);
+            dst.expiry_time = expiry_ts;
+        } else {
+            dst.expiry_time = uint64_t(parsed);
+        }
         LOG_TRACE("Server expiry timestamp: {}", dst.expiry_time);
     }
 

@@ -1226,6 +1226,28 @@ BOOST_AUTO_TEST_CASE(ReaderRejectsNegativeIterations)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// Regression for SecurityReview_Kilo_2026-07 N17: timeFromISO did not
+// check std::get_time failure, so a malformed server expiry produced
+// garbage time_t that was cast to uint64_t. The function now returns -1
+// on parse failure and the caller falls back to the client-supplied
+// expiry with a warning.
+BOOST_AUTO_TEST_SUITE(TimeFromISO)
+
+BOOST_AUTO_TEST_CASE(ParsesValidISO)
+{
+    double rv = libcdoc::timeFromISO("2026-08-18T12:00:00Z");
+    BOOST_CHECK(rv > 0);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInvalidISO)
+{
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("not-a-date"), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO(""), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-13-45T99:99:99Z"), -1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // Regression coverage for libcdoc::sanitiseExtractedFilename(). All inputs
 // here come from attacker-controlled archive headers (tar / DDoc); the
 // helper is the single chokepoint that decides whether an entry can ever

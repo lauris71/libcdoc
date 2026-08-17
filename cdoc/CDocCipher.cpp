@@ -516,9 +516,11 @@ int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
 
 int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const string& base_pathname)
 {
-    vector<uint8_t> fmk;
+    // N18: the FMK is key material; store it in a SecureTarget (self-cleaning)
+    // and explicitly cleanse after the reader has consumed it.
+    libcdoc::SecureTarget fmk;
     LOG_DBG("Fetching FMK, idx=", lock_idx);
-    int result = rdr->getFMK(fmk, lock_idx);
+    int result = rdr->getFMK(fmk.getTarget(), lock_idx);
     LOG_DBG("Got FMK");
     if (result != libcdoc::OK) {
         LOG_ERROR("Error on extracting FMK: {} {}", result, rdr->getLastErrorStr());
@@ -528,6 +530,8 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
 
     /* Do pull */
     result = rdr->beginDecryption(fmk);
+    // The reader has consumed the FMK; cleanse it immediately.
+    fmk.cleanse();
     if (result != libcdoc::OK) {
         LOG_ERROR("Error while decrypting files: {} {}", result, rdr->getLastErrorStr());
         return 1;
@@ -692,9 +696,11 @@ CDocCipher::ReEncrypt(ToolConf& conf, RcptInfo& dec_info, std::vector<libcdoc::R
     unique_ptr<CDocWriter> wrtr(CDocWriter::createWriter(conf.cdocVersion, conf.out, &conf, &crypto, &network));
 
     // Begin
-    vector<uint8_t> fmk;
+    // N18: the FMK is key material; store it in a SecureTarget (self-cleaning)
+    // and explicitly cleanse after the reader has consumed it.
+    libcdoc::SecureTarget fmk;
     LOG_DBG("Fetching FMK, idx={}", lock_idx);
-    int64_t result = rdr->getFMK(fmk, lock_idx);
+    int64_t result = rdr->getFMK(fmk.getTarget(), lock_idx);
     LOG_DBG("Got FMK");
     if (result != libcdoc::OK) {
         LOG_ERROR("Error on extracting FMK: {} {}", result, rdr->getLastErrorStr());
@@ -709,6 +715,8 @@ CDocCipher::ReEncrypt(ToolConf& conf, RcptInfo& dec_info, std::vector<libcdoc::R
     }
 
     result = rdr->beginDecryption(fmk);
+    // The reader has consumed the FMK; cleanse it immediately.
+    fmk.cleanse();
     if (result != libcdoc::OK) {
         LOG_ERROR("Error while decrypting files: {} {}", result, rdr->getLastErrorStr());
         return 1;
