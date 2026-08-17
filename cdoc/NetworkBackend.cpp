@@ -604,7 +604,7 @@ waitForAuthResult(AuthResponse& dst, httplib::SSLClient& cli, const std::string&
         if (result != OK) return NetworkBackend::NETWORK_ERROR;
         LOG_DBG("Status: {}", dst.status);
 
-        if (dst.status == "RUNNING") {
+        if ((dst.status == "RUNNING") || (dst.status == "STARTED")) {
             // Pause for 0.5 seconds and repeat
             std::chrono::milliseconds duration(500);
             std::this_thread::sleep_for(duration);
