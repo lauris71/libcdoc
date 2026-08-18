@@ -206,7 +206,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
         error = FORMAT("Cannot get peer certificate list: {}", result);
         return result;
     }
-    libcdoc::LOG_DBG("Num TLS certs {}", certs.size());
+    LOG_DBG("Num TLS certs {}", certs.size());
     if (!certs.empty()) {
         SSL_CTX *ctx = cli.ssl_context();
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
@@ -274,7 +274,7 @@ static libcdoc::result_t
 post(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, const std::string& req, httplib::Response& rsp)
 {
     // Capture TLS and HTTP errors
-    libcdoc::LOG_TRACE("POST: {} {}", path, req);
+    LOG_TRACE("POST: {} {}", path, req);
     httplib::Result res = cli.Post(path, hdrs, req, "application/json");
     if (!res) {
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
