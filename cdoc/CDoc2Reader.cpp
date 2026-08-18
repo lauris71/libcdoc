@@ -66,8 +66,7 @@ libcdoc::CDoc2::getSaltForExpand(const std::vector<uint8_t>& key_material, const
 }
 
 struct CDoc2Reader::Private {
-    Private(libcdoc::DataSource *src, bool take_ownership) : _src(src), _owned(take_ownership) {
-    }
+    Private(libcdoc::DataSource *src, bool take_ownership) : _src(src), _owned(take_ownership) {}
 
     ~Private() {
         if (_owned) delete _src;
@@ -120,7 +119,6 @@ CDoc2Reader::getLockForCert(const std::vector<uint8_t>& cert){
     LOG_TRACE("Cert public key: {}", toHex(other_key));
     int lock_idx = 0;
     for (const Lock &ll : priv->locks) {
-        LOG_TRACE("Lock {} type {}", lock_idx, (int) ll.type);
         if (ll.isPKI() && ll.getBytes(libcdoc::Lock::RCPT_KEY) == other_key) {
             return lock_idx;
         }
@@ -138,10 +136,10 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_ERROR("{}", last_error);
         return libcdoc::WRONG_ARGUMENTS;
     }
-    LOG_TRACE("CDoc2Reader::getFMK: {}", lock_idx);
-    LOG_TRACE("CDoc2Reader::num locks: {}", priv->locks.size());
+    LOG_DBG("CDoc2Reader::getFMK: {}", lock_idx);
+    LOG_DBG("CDoc2Reader::num locks: {}", priv->locks.size());
     const Lock& lock = priv->locks.at(lock_idx);
-    LOG_TRACE("Label: {}", lock.label);
+    LOG_DBG("Label: {}", lock.label);
 
     // RAII-cleanse `kek` on every exit from this function (including
     // exceptions). All early returns below previously had to remember to
@@ -151,7 +149,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
 
     if (lock.type == Lock::Type::PASSWORD) {
         // Password
-        LOG_TRACE("password");
+        LOG_DBG("Password-based lock");
         std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
         LOG_TRACE("info: {}", toHex(info_str));
         SecureTarget kek_pm;
@@ -165,7 +163,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         kek = libcdoc::Crypto::expand(kek_pm, info_str, 32);
     } else if (lock.type == Lock::Type::SYMMETRIC_KEY) {
         // Symmetric key
-        LOG_TRACE("symmetric");
+        LOG_DBG("Symmetric-key based lock");
         std::string info_str = libcdoc::CDoc2::getSaltForExpand(lock.label);
         LOG_TRACE("info: {}", toHex(info_str));
         SecureTarget kek_pm;
@@ -178,6 +176,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         LOG_TRACE_KEY("kek_pm: {}", kek_pm);
         kek = libcdoc::Crypto::expand(kek_pm, info_str, 32);
     } else if ((lock.type == Lock::Type::PUBLIC_KEY) || (lock.type == Lock::Type::SERVER)) {
+        LOG_DBG("Public/private key based lock");
         // Public/private key
         SecureTarget key_material;
         // SERVER path fetches key_material over the network; PUBLIC_KEY
@@ -236,6 +235,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         }
 #ifdef HAS_KEYSHARES
     } else  if (lock.type == Lock::Type::SHARE_SERVER) {
+        LOG_DBG("Share server based lock");
         /* SALT */
         std::vector<uint8_t> salt = lock.getBytes(Lock::SALT);
         /* RECIPIENT_ID */
@@ -414,6 +414,7 @@ CDoc2Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer
 libcdoc::result_t
 CDoc2Reader::beginDecryption(const std::vector<uint8_t>& fmk)
 {
+    LOG_DBG("CDoc2Reader::beginDecryption");
     if(fmk.size() != 32) {
         setLastError("No decryption key provided or invalid key length");
         LOG_ERROR("{}", last_error);
@@ -454,20 +455,24 @@ CDoc2Reader::beginDecryption(const std::vector<uint8_t>& fmk)
 libcdoc::result_t
 CDoc2Reader::nextFile(std::string& name, int64_t& size)
 {
+    LOG_DBG("CDoc2Reader::nextFile");
     if (!priv->tar) {
         setLastError("nextFile() called before beginDecryption()");
         LOG_ERROR("{}", last_error);
-            return libcdoc::WORKFLOW_ERROR;
-        }
+        return libcdoc::WORKFLOW_ERROR;
+    }
     result_t result = priv->tar->next(name, size);
     if (result < 0) {
+        // According to specification payload integrity should be reported even if there are parsing errors
         result_t sr = priv->decryptAllAndClose();
         if (sr != OK) {
+            LOG_WARN("Crypto payload integrity check failed");
             setLastError("Crypto payload integrity check failed");
             return sr;
         }
         setLastError(priv->tar->getLastErrorStr(result));
     }
+    LOG_DBG("CDoc2Reader::nextFile: result: {}, name: {} size: {}", result, name, size);
     return result;
 }
 
@@ -481,19 +486,23 @@ CDoc2Reader::readData(uint8_t *dst, size_t size)
     }
     result_t result = priv->tar->read(dst, size);
     if (result < 0) {
+        // According to specification payload integrity should be reported even if there are parsing errors
         result_t sr = priv->decryptAllAndClose();
         if (sr != OK) {
+            LOG_WARN("Crypto payload integrity check failed");
             setLastError("Crypto payload integrity check failed");
             return sr;
         }
         setLastError(priv->tar->getLastErrorStr(result));
     }
+    LOG_DBG("CDoc2Reader::readData: result {}", result);
     return result;
 }
 
 libcdoc::result_t
 CDoc2Reader::finishDecryption()
 {
+    LOG_DBG("CDoc2Reader::finishDecryption");
     if (!priv->tar) {
         setLastError("finishDecryption() called before beginDecryption()");
         LOG_ERROR("{}", last_error);
@@ -520,16 +529,14 @@ CDoc2Reader::Private::buildLock(Lock& lock, const cdoc20::header::RecipientRecor
     using namespace cdoc20::recipients;
     using namespace cdoc20::header;
 
-    lock.label = recipient.key_label()->str();
-    lock.encrypted_fmk = toUint8Vector(recipient.encrypted_fmk());
-
-    if(recipient.fmk_encryption_method() != cdoc20::header::FMKEncryptionMethod::XOR)
-    {
+    if(recipient.fmk_encryption_method() != cdoc20::header::FMKEncryptionMethod::XOR) {
         LOG_WARN("Unsupported FMK encryption method");
         return;
     }
-    switch(recipient.capsule_type())
-    {
+    lock.label = recipient.key_label()->str();
+    lock.encrypted_fmk = toUint8Vector(recipient.encrypted_fmk());
+
+    switch(recipient.capsule_type()) {
     case Capsule::recipients_ECCPublicKeyCapsule:
         if(const auto *capsule = recipient.capsule_as_recipients_ECCPublicKeyCapsule()) {
             lock.type = Lock::Type::PUBLIC_KEY;

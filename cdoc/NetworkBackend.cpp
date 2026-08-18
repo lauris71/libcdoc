@@ -206,7 +206,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
         error = FORMAT("Cannot get peer certificate list: {}", result);
         return result;
     }
-    libcdoc::LOG_TRACE("Num TLS certs {}", certs.size());
+    libcdoc::LOG_DBG("Num TLS certs {}", certs.size());
     if (!certs.empty()) {
         SSL_CTX *ctx = cli.ssl_context();
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
@@ -316,7 +316,7 @@ get(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, pi
 libcdoc::result_t
 libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, const std::vector<uint8_t>& rcpt_key, const std::vector<uint8_t> &key_material, const std::string& type, uint64_t expiry_ts)
 {
-    LOG_TRACE("Sendkey");
+    LOG_DBG("NetworkBackend::Sendkey");
     picojson::object obj = {
         {"recipient_id", picojson::value(libcdoc::toBase64(rcpt_key))},
         {"ephemeral_key_material", picojson::value(libcdoc::toBase64(key_material))},
@@ -340,7 +340,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     httplib::Headers hdrs;
     if (expiry_ts) {
         std::string expiry_str = timeToISO(expiry_ts);
-        LOG_TRACE("Expiry time: {}", expiry_str);
+        LOG_DBG("Expiry time: {}", expiry_str);
         hdrs.emplace("x-expiry-time", expiry_str);
     }
     httplib::Response rsp;
@@ -362,10 +362,10 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     dst.transaction_id = std::move(location);
 
     std::string expiry_str = rsp.get_header_value("x-expiry-time");
-    LOG_TRACE("Server expiry: {}", expiry_str);
+    LOG_DBG("Server expiry: {}", expiry_str);
     if (expiry_str.empty()) {
         dst.expiry_time = expiry_ts;
-        LOG_TRACE("Given expiry timestamp: {}", dst.expiry_time);
+        LOG_DBG("Given expiry timestamp: {}", dst.expiry_time);
     } else {
         double parsed = timeFromISO(expiry_str);
         if (parsed < 0) {
@@ -374,7 +374,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         } else {
             dst.expiry_time = uint64_t(parsed);
         }
-        LOG_TRACE("Server expiry timestamp: {}", dst.expiry_time);
+        LOG_DBG("Server expiry timestamp: {}", dst.expiry_time);
     }
 
     return OK;

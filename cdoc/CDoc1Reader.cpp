@@ -419,7 +419,6 @@ CDoc1Reader::isCDoc1File(libcdoc::DataSource *src)
 result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
     const std::function<libcdoc::result_t(libcdoc::DataSource &src, const std::string &mime)>& f)
 {
-    setLastError({});
     if (fmk.empty()) {
         setLastError("FMK is missing");
         return libcdoc::WRONG_ARGUMENTS;
@@ -437,6 +436,7 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         LOG_ERROR("{}", d->dsrc->getLastErrorStr(result));
         return result;
     }
+    setLastError({});
 
     std::vector<unsigned char> b64;
     XMLReader reader(*d->dsrc);
