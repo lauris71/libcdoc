@@ -738,8 +738,7 @@ int Crypto::decryptRSAv15_implicitReject(std::vector<uint8_t>& dst,
         EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_PADDING) == 1) {
         unsigned int impl_reject = 1;
         OSSL_PARAM params[] = {
-            OSSL_PARAM_construct_uint(OSSL_ASYM_CIPHER_PARAM_IMPLICIT_REJECTION,
-                                      &impl_reject),
+            OSSL_PARAM_construct_uint(OSSL_ASYM_CIPHER_PARAM_IMPLICIT_REJECTION, &impl_reject),
             OSSL_PARAM_END
         };
         if (EVP_PKEY_CTX_set_params(ctx.get(), params) == 1) {

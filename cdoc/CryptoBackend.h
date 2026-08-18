@@ -57,9 +57,9 @@ struct CDOC_EXPORT CryptoBackend {
     // KDF_ITER_MIN_ENCRYPT iterations and at most KDF_ITER_MAX_ENCRYPT.
     // Decryption limit (reader side): containers with more than
     // KDF_ITER_MAX_DECRYPT iterations are rejected outright.
-    static constexpr int32_t KDF_ITER_MIN_ENCRYPT = 100'000;
-    static constexpr int32_t KDF_ITER_MAX_ENCRYPT = 10'000'000;
-    static constexpr int32_t KDF_ITER_MAX_DECRYPT = 100'000'000;
+    static constexpr int32_t KDF_ITER_MIN_ENCRYPT = 100000;
+    static constexpr int32_t KDF_ITER_MAX_ENCRYPT = 10000000;
+    static constexpr int32_t KDF_ITER_MAX_DECRYPT = 100000000;
 
     enum HashAlgorithm : uint32_t {
         SHA_224,
