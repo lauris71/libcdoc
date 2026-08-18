@@ -112,7 +112,12 @@ libcdoc::PKCS11Backend::Private::login(int slot, const std::vector<uint8_t>& pin
 		case CKR_CANCEL:
 		case CKR_FUNCTION_CANCELED:
             LOG_DBG("PKCS11:C_Login CANCELED");
-			break;
+			// N21: CKR_CANCEL/CKR_FUNCTION_CANCELED mean the login was
+			// aborted; the session is not authenticated. Close it and
+			// return an error instead of falling through as success.
+			f->C_CloseSession(session);
+			session = CK_INVALID_HANDLE;
+			return PKCS11_ERROR;
 		default:
             LOG_DBG("PKCS11:C_Login {}", result);
 			f->C_CloseSession(session);

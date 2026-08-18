@@ -19,6 +19,7 @@
 #include "Crypto.h"
 #include "CryptoBackend.h"
 #include "Utils.h"
+#include "utils/memory.h"
 
 #define OPENSSL_SUPPRESS_DEPRECATED
 
@@ -66,20 +67,25 @@ CryptoBackend::deriveConcatKDF(std::vector<uint8_t>& dst, const std::vector<uint
 							   const std::vector<uint8_t> &algorithmID, const std::vector<uint8_t> &partyUInfo, const std::vector<uint8_t> &partyVInfo,
                                unsigned int idx)
 {
-	std::vector<uint8_t> shared_secret;
-    int result = deriveECDH1(shared_secret, publicKey, idx);
+    // N22: ECDH shared_secret is key material; use SecureTarget so it is
+    // automatically cleansed after use instead of sitting in a plain vector.
+    SecureTarget shared_secret;
+    int result = deriveECDH1(shared_secret.getTarget(), publicKey, idx);
     if (result != OK) return result;
 	dst = libcdoc::Crypto::concatKDF(digest, ECC_KEY_LEN, shared_secret, algorithmID, partyUInfo, partyVInfo);
+    shared_secret.cleanse();
     return (dst.empty()) ? OPENSSL_ERROR : OK;
 }
 
 libcdoc::result_t
 CryptoBackend::deriveHMACExtract(std::vector<uint8_t>& dst, const std::vector<uint8_t> &public_key, const std::vector<uint8_t> &salt, unsigned int idx)
 {
-	std::vector<uint8_t> shared_secret;
-    int result = deriveECDH1(shared_secret, public_key, idx);
+    // N22: same cleansing for the HKDF-extract path.
+    SecureTarget shared_secret;
+    int result = deriveECDH1(shared_secret.getTarget(), public_key, idx);
     if (result != OK) return result;
 	dst = libcdoc::Crypto::extract(shared_secret, salt);
+    shared_secret.cleanse();
     return (dst.empty()) ? OPENSSL_ERROR : OK;
 }
 

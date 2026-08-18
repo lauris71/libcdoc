@@ -1031,6 +1031,61 @@ BOOST_AUTO_TEST_CASE(AllowsReasonablePaxHeaderSize)
     BOOST_CHECK_NE(rv, libcdoc::DATA_FORMAT_ERROR);
 }
 
+// Regression for SecurityReview_Kilo_2026-07 N20: Header::getName ran
+// strlen on a 100-byte field that may contain no NUL, over-reading into
+// adjacent header fields. The fix uses memchr with an explicit bound.
+BOOST_AUTO_TEST_CASE(NameWithoutNulDoesNotOverread)
+{
+    // Build a tar header whose 100-byte name field has NO NUL terminator.
+    std::vector<uint8_t> block(512, 0);
+    // Fill name field with 'A' - no NUL anywhere in the 100 bytes.
+    std::fill(block.begin(), block.begin() + 100, uint8_t('A'));
+
+    // mode, uid, gid, size, mtime (valid octal, as in makeTarHeader)
+    auto write_octal_field = [&](size_t offset, size_t width, int64_t value) {
+        std::string s(width - 1, '0');
+        for (size_t i = 0; i < width - 1 && value > 0; ++i) {
+            s[width - 2 - i] = char('0' + (value & 7));
+            value >>= 3;
+        }
+        std::copy(s.begin(), s.end(), block.begin() + offset);
+    };
+    write_octal_field(100, 8, 0600);
+    write_octal_field(108, 8, 0);
+    write_octal_field(116, 8, 0);
+    write_octal_field(124, 12, 0);
+    write_octal_field(136, 12, 0);
+
+    // chksum: spaces during calculation
+    std::fill(block.begin() + 148, block.begin() + 156, uint8_t(' '));
+    block[156] = uint8_t('0'); // regular file
+    constexpr std::string_view magic{"ustar\0", 6};
+    std::copy(magic.begin(), magic.end(), block.begin() + 257);
+    block[263] = '0';
+    block[264] = '0';
+
+    int64_t sum = 0;
+    for (uint8_t b : block) sum += b;
+    std::string chk(7, '0');
+    for (size_t i = 0; i < 6 && sum > 0; ++i) {
+        chk[5 - i] = char('0' + (sum & 7));
+        sum >>= 3;
+    }
+    chk[6] = '\0';
+    std::copy(chk.begin(), chk.end(), block.begin() + 148);
+    block[155] = ' ';
+
+    libcdoc::VectorSource src(block);
+    libcdoc::TarSource tar_src(&src, false);
+    std::string name;
+    int64_t size = 0;
+    auto rv = tar_src.next(name, size);
+    // The name must be exactly 100 bytes (the full field), not longer.
+    BOOST_CHECK_EQUAL(rv, libcdoc::OK);
+    BOOST_CHECK_EQUAL(name.size(), 100);
+    BOOST_CHECK(name.find_first_not_of('A') == std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(StreamingDecryption)
@@ -1355,6 +1410,46 @@ BOOST_AUTO_TEST_CASE(TruncatesOverlongNames)
     // No-extension version simply truncates.
     auto truncated = libcdoc::sanitiseExtractedFilename(std::string(400, 'b'));
     BOOST_CHECK_EQUAL(truncated.size(), 255u);
+}
+
+// N24: UTF-8 validation, boundary-aware truncation, and NTFS ADS ':' rejection.
+BOOST_AUTO_TEST_CASE(RejectsMalformedUtf8)
+{
+    // Lone continuation byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\x80.txt")), "");
+    // Truncated multi-byte sequence
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xC3.txt")), "");
+    // Invalid lead byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xFE.txt")), "");
+    // Valid UTF-8 still passes
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("\xC3\xB5.txt"), "\xC3\xB5.txt");
+}
+
+BOOST_AUTO_TEST_CASE(TruncatesAtUtf8Boundary)
+{
+    // Build a name with 254 bytes of 'a' + a 2-byte UTF-8 char at position 254-255.
+    // Naive truncation at 255 would split the codepoint.
+    std::string name(254, 'a');
+    name += "\xC3\xB5"; // 'õ' - 2-byte UTF-8
+    name += ".txt";
+    auto result = libcdoc::sanitiseExtractedFilename(name);
+    // The 2-byte character at the boundary must not be split.
+    // Result should be <= 255 and the last bytes before .txt should not
+    // be a lone continuation byte.
+    BOOST_CHECK_LE(result.size(), 255u);
+    BOOST_CHECK(result.ends_with(".txt"));
+    // Extract the stem and verify it ends at a codepoint boundary
+    std::string stem = result.substr(0, result.size() - 4);
+    BOOST_CHECK(libcdoc::isValidUtf8(stem));
+}
+
+BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
+{
+    // NTFS ADS: "file.txt:stream" creates an alternate data stream on file.txt
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:evil.exe"), "");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:stream"), "");
+    // Drive-relative is still handled (stripped, not rejected)
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "foo.txt");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

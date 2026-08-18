@@ -602,8 +602,11 @@ void unpadPKCS1v15CT(const std::vector<uint8_t> &em,
         // latch the first index at which is_zero is set
         uint8_t latch = uint8_t(is_zero & ~found_zero);
         // "if latch then first_zero_idx = i". We can't branch; do it
-        // arithmetically. (i fits comfortably in size_t.)
-        const size_t mask_size = (latch == 0xFF) ? ~size_t(0) : size_t(0);
+        // arithmetically. N25: the ternary form below may compile to a
+        // secret-dependent branch; use pure arithmetic instead.
+        // latch is 0x00 or 0xFF, so latch & 1 is 0 or 1, and
+        // size_t(0) - 0 = 0 (all zeros), size_t(0) - 1 = ~0 (all ones).
+        const size_t mask_size = size_t(0) - size_t(latch & 1);
         first_zero_idx = (i & mask_size) | (first_zero_idx & ~mask_size);
         found_zero = uint8_t(found_zero | is_zero);
     }

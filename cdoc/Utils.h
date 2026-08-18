@@ -162,9 +162,12 @@ std::string buildURL(const std::string& host, int port);
  *   - "." and ".." segments,
  *   - NUL bytes and other ASCII control characters,
  *   - leading/trailing whitespace and dots (Windows trims these silently),
- *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
- *   - excessively long names (capped at 255 bytes after sanitisation, the
- *     practical filename limit on every filesystem libcdoc supports).
+  *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
+  *   - NTFS Alternate Data Stream separator ':',
+  *   - malformed UTF-8,
+  *   - excessively long names (capped at 255 bytes after sanitisation, the
+  *     practical filename limit on every filesystem libcdoc supports;
+  *     truncation respects UTF-8 character boundaries).
  *
  * The returned string is a relative file name (no slashes), or empty if no
  * safe name could be derived. A caller that gets an empty return value MUST
