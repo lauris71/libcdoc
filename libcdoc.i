@@ -73,6 +73,8 @@
 %ignore libcdoc::Configuration::RP_UUID;
 %ignore libcdoc::Configuration::RP_NAME;
 %ignore libcdoc::Configuration::PHONE_NUMBER;
+%ignore libcdoc::Configuration::CDOC1_MAX_DECOMPRESSED_SIZE;
+%ignore libcdoc::Configuration::CDOC2_MAX_DECOMPRESSED_SIZE;
 
 %ignore libcdoc::PKCS11Backend::Handle;
 %ignore libcdoc::PKCS11Backend::findCertificates(const std::string& label);
@@ -654,6 +656,8 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     public static final String RP_UUID = "RP_UUID";
     public static final String RP_NAME = "RP_NAME";
     public static final String PHONE_NUMBER = "PHONE_NUMBER";
+    public static final String CDOC1_MAX_DECOMPRESSED_SIZE = "CDOC1_MAX_DECOMPRESSED_SIZE";
+    public static final String CDOC2_MAX_DECOMPRESSED_SIZE = "CDOC2_MAX_DECOMPRESSED_SIZE";
 %}
 
 %typemap(javaimports) ArrayList<byte[]> %{
