@@ -92,8 +92,12 @@ struct ZSource : public DataSource {
     int64_t _error = OK;
 	std::vector<uint8_t> buf;
 	int flush = Z_NO_FLUSH;
-    ZSource(DataSource *src, bool take_ownership = false)
-        : _src(src), _owned(take_ownership) {
+    /// Maximum total bytes this source will produce. 0 means unlimited.
+    /// Prevents decompression bombs (N7).
+    int64_t max_decompressed_size = 0;
+    int64_t total_inflated = 0;
+    ZSource(DataSource *src, bool take_ownership = false, int64_t max_size = 0)
+        : _src(src), _owned(take_ownership), max_decompressed_size(max_size) {
 		if (inflateInit2(&_s, MAX_WBITS) != Z_OK) {
 			_error = ZLIB_ERROR;
 		}
@@ -140,6 +144,12 @@ struct ZSource : public DataSource {
 			}
 			size_t produced = chunk - _s.avail_out;
 			total_produced += produced;
+			total_inflated += produced;
+			if (max_decompressed_size > 0 && total_inflated > max_decompressed_size) {
+				inflateEnd(&_s);
+				_error = IO_ERROR;
+				return _error;
+			}
 			if (produced == 0) break; // no progress (EOF or stream end)
 		}
 		return total_produced;

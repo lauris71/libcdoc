@@ -203,9 +203,9 @@ std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std:
 
 const EVP_CIPHER *Crypto::cipher(const std::string &algo)
 {
-	if(algo == AES128CBC_MTH) return EVP_aes_128_cbc();
-	if(algo == AES192CBC_MTH) return EVP_aes_192_cbc();
-	if(algo == AES256CBC_MTH) return EVP_aes_256_cbc();
+	// AES-CBC was only used by CDoc 1.0; all CDoc 1.0 containers have
+	// expired and we no longer accept it. It is intentionally absent here
+	// so that unknown-method errors surface early at the CDoc1 reader.
 	if(algo == AES128GCM_MTH) return EVP_aes_128_gcm();
 	if(algo == AES192GCM_MTH) return EVP_aes_192_gcm();
 	if(algo == AES256GCM_MTH) return EVP_aes_256_gcm();
@@ -316,7 +316,12 @@ std::vector<uint8_t> Crypto::decodeBase64(const uint8_t *data)
 		return result;
 	}
 
-    if(SSL_FAILED(EVP_DecodeFinal(ctx.get(), result.data(), &size2), "EVP_DecodeFinal"))
+    // N13: EVP_DecodeFinal must write at result.data() + size1, not
+    // result.data(). For clean input OpenSSL consumes everything in
+    // DecodeUpdate (size2 == 0), but embedded whitespace/line breaks
+    // can leave work for DecodeFinal; writing at offset 0 would
+    // silently overwrite the first size2 bytes.
+    if(SSL_FAILED(EVP_DecodeFinal(ctx.get(), result.data() + size1, &size2), "EVP_DecodeFinal"))
         result.clear();
 	else
         result.resize(size_t(size1 + size2));
@@ -583,43 +588,46 @@ void Crypto::LogSslError(const char* funcName, const char* file, int line)
 
 namespace {
 
-// Per-scope consecutive-failure counter. Process-wide. The mutex protects a
-// small map keyed by scope string; lock contention is negligible because
-// throttle invocations only happen on the failed-decrypt path which is
-// already an attacker-budget-limited code path.
+// Per-key last-failure timestamp. Process-wide. The mutex protects a
+// small map keyed by the recipient's public-key hash; lock contention is
+// negligible because throttle invocations only happen on the failed-decrypt
+// path which is already an attacker-budget-limited code path.
 std::mutex g_throttle_mutex;
-std::unordered_map<std::string, unsigned int> g_throttle_failures;
+std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_throttle_failures;
 
-constexpr std::chrono::milliseconds kThrottleBase{50};
-constexpr std::chrono::milliseconds kThrottleCap{5000};
+constexpr std::chrono::milliseconds kMinFailureInterval{1000};
 
 } // anonymous namespace
 
-void Crypto::rsaOracleThrottleOnFailure(const std::string& scope)
+void Crypto::rsaOracleThrottle(const std::string& key_id)
 {
-    unsigned int failures = 0;
+    const auto now = std::chrono::steady_clock::now();
+    std::chrono::milliseconds delay{0};
     {
         std::lock_guard<std::mutex> lk(g_throttle_mutex);
-        failures = ++g_throttle_failures[scope];
+        // Erase entries older than the minimum interval to bound map growth.
+        for (auto it = g_throttle_failures.begin(); it != g_throttle_failures.end(); ) {
+            if (now - it->second >= kMinFailureInterval) {
+                it = g_throttle_failures.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        auto [entry, inserted] = g_throttle_failures.try_emplace(key_id, now);
+        if (!inserted) {
+            const auto elapsed = now - entry->second;
+            if (elapsed < kMinFailureInterval) {
+                delay = std::chrono::duration_cast<std::chrono::milliseconds>(kMinFailureInterval - elapsed);
+            }
+            entry->second = now;
+        }
     }
-
-    // delay = base * 2^(failures-1), capped at kThrottleCap. Computed on a
-    // wider integer to avoid overflow for very large failure counts.
-    auto delay = kThrottleBase;
-    for (unsigned int i = 1; i < failures && delay < kThrottleCap; ++i) {
-        delay *= 2;
+    // Sleep outside the mutex to avoid holding the lock during the delay.
+    if (delay.count() > 0) {
+        LOG_WARN("RSA decrypt failure (key={}); throttling for {} ms",
+                 key_id, delay.count());
+        std::this_thread::sleep_for(delay);
     }
-    if (delay > kThrottleCap) delay = kThrottleCap;
-
-    LOG_WARN("RSA decrypt failure (scope={}, consecutive={}); throttling for {} ms",
-             scope, failures, delay.count());
-    std::this_thread::sleep_for(delay);
-}
-
-void Crypto::rsaOracleThrottleOnSuccess(const std::string& scope)
-{
-    std::lock_guard<std::mutex> lk(g_throttle_mutex);
-    g_throttle_failures.erase(scope);
 }
 
 namespace {
@@ -709,8 +717,11 @@ void unpadPKCS1v15CT(const std::vector<uint8_t> &em,
         // latch the first index at which is_zero is set
         uint8_t latch = uint8_t(is_zero & ~found_zero);
         // "if latch then first_zero_idx = i". We can't branch; do it
-        // arithmetically. (i fits comfortably in size_t.)
-        const size_t mask_size = (latch == 0xFF) ? ~size_t(0) : size_t(0);
+        // arithmetically. N25: the ternary form below may compile to a
+        // secret-dependent branch; use pure arithmetic instead.
+        // latch is 0x00 or 0xFF, so latch & 1 is 0 or 1, and
+        // size_t(0) - 0 = 0 (all zeros), size_t(0) - 1 = ~0 (all ones).
+        const size_t mask_size = size_t(0) - size_t(latch & 1);
         first_zero_idx = (i & mask_size) | (first_zero_idx & ~mask_size);
         found_zero = uint8_t(found_zero | is_zero);
     }
@@ -842,8 +853,7 @@ int Crypto::decryptRSAv15_implicitReject(std::vector<uint8_t>& dst,
         EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_PADDING) == 1) {
         unsigned int impl_reject = 1;
         OSSL_PARAM params[] = {
-            OSSL_PARAM_construct_uint(OSSL_ASYM_CIPHER_PARAM_IMPLICIT_REJECTION,
-                                      &impl_reject),
+            OSSL_PARAM_construct_uint(OSSL_ASYM_CIPHER_PARAM_IMPLICIT_REJECTION, &impl_reject),
             OSSL_PARAM_END
         };
         if (EVP_PKEY_CTX_set_params(ctx.get(), params) == 1) {
@@ -863,6 +873,23 @@ int Crypto::decryptRSAv15_implicitReject(std::vector<uint8_t>& dst,
                 libcdoc::cleanse(tmp);
                 // Length didn't match - fall through to software path so we
                 // produce a synthetic plaintext of the correct length.
+                //
+                // N12 (accepted residual): the OpenSSL >= 3.2 fast path
+                // returns after one RSA operation when padding is valid
+                // AND the message length equals expected_len; all other
+                // cases fall through to the software path below (second
+                // RSA op + DER encode + HMAC/HKDF). An attacker with
+                // precise timing can therefore distinguish
+                // "PKCS#1-conformant with a 32-byte message" from
+                // everything else - a narrow Bleichenbacher-style oracle
+                // covering roughly 1/246 of conformant messages for
+                // 2048-bit keys. We accept this residual: the N10
+                // per-key minimum-interval throttle limits the attacker
+                // to one query per second per RSA key, so extracting a
+                // usable oracle signal requires days of wall-clock time
+                // and is further constrained by the same countermeasures
+                // that protect the software path (constant-time unpad,
+                // synthetic plaintext, AES-GCM body authentication).
             }
         }
     }
@@ -963,7 +990,7 @@ EncryptionConsumer::close() noexcept try
     {
         if(SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl"))
             return CRYPTO_ERROR;
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (dst.write(tag.data(), tag.size()) != tag.size())
             return IO_ERROR;
     }
@@ -971,7 +998,7 @@ EncryptionConsumer::close() noexcept try
     {
         if(SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_GET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl"))
             return CRYPTO_ERROR;
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (dst.write(tag.data(), tag.size()) != tag.size())
             return IO_ERROR;
     }
@@ -1081,14 +1108,14 @@ result_t DecryptionSource::close()
         return error;
 
     if (EVP_CIPHER_CTX_mode(ctx.get()) == EVP_CIPH_GCM_MODE) {
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl")) {
             return error = CRYPTO_ERROR;
         }
     }
     else if(EVP_CIPHER_CTX_flags(ctx.get()) & EVP_CIPH_FLAG_AEAD_CIPHER)
     {
-        LOG_DBG("tag: {}", toHex(tag));
+        LOG_TRACE_KEY("tag: {}", tag);
         if (SSL_FAILED(EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_AEAD_SET_TAG, int(tag.size()), tag.data()), "EVP_CIPHER_CTX_ctrl")) {
             return error = CRYPTO_ERROR;
         }

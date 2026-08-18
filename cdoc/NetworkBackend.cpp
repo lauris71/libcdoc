@@ -273,7 +273,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
         error = FORMAT("Cannot get peer certificate list: {}", result);
         return result;
     }
-    libcdoc::LOG_DBG("Num TLS certs {}", certs.size());
+    LOG_DBG("Num TLS certs {}", certs.size());
     if (!certs.empty()) {
         SSL_CTX *ctx = cli.ssl_context();
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
@@ -400,7 +400,7 @@ get(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, ht
 libcdoc::result_t
 libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, const std::vector<uint8_t>& rcpt_key, const std::vector<uint8_t> &key_material, const std::string& type, uint64_t expiry_ts)
 {
-    LOG_DBG("Sendkey");
+    LOG_DBG("NetworkBackend::Sendkey");
     picojson::object obj = {
         {"recipient_id", picojson::value(libcdoc::toBase64(rcpt_key))},
         {"ephemeral_key_material", picojson::value(libcdoc::toBase64(key_material))},
@@ -451,7 +451,13 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         dst.expiry_time = expiry_ts;
         LOG_DBG("Given expiry timestamp: {}", dst.expiry_time);
     } else {
-        dst.expiry_time = uint64_t(timeFromISO(expiry_str));
+        double parsed = timeFromISO(expiry_str);
+        if (parsed < 0) {
+            LOG_WARN("Invalid server expiry '{}', using client-supplied expiry", expiry_str);
+            dst.expiry_time = expiry_ts;
+        } else {
+            dst.expiry_time = uint64_t(parsed);
+        }
         LOG_DBG("Server expiry timestamp: {}", dst.expiry_time);
     }
 
@@ -554,7 +560,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     error = {};
 
     dst.assign(location.cbegin() + prefix.size(), location.cend());
-    LOG_DBG("Share: {}", std::string((const char *) dst.data(), dst.size()));
+    LOG_TRACE("Share: {}", std::string((const char *) dst.data(), dst.size()));
 
     return OK;
 }
@@ -782,14 +788,14 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const std::string& auth_token, const std::string& auth_cert)
 {
-    LOG_DBG("Get nonce from: {}", url);
+    LOG_TRACE("Get nonce from: {}", url);
 
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -818,7 +824,7 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     result = post(cli, full, hdrs, "", rsp);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", rsp.body);
     picojson::value rsp_json;
     std::string parse_err = picojson::parse(rsp_json, rsp.body);
     if (!parse_err.empty()) {
@@ -837,14 +843,14 @@ libcdoc::result_t
 libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
     const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::map<std::string, std::string>& auth_params)
 {
-    LOG_DBG("Get share from: {}", url);
+    LOG_TRACE("Get share from: {}", url);
 
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
 
@@ -895,7 +901,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     libcdoc::result_t rv = libcdoc::OK;
     std::string share64 = getJsonString(rsp_json, "share", rv);
     if (rv != libcdoc::OK) return rv;
-    LOG_DBG("Share64: {}", share64);
+    LOG_TRACE("Share64: {}", share64);
     std::string recipient = getJsonString(rsp_json, "recipient", rv);
     if (rv != libcdoc::OK) return rv;
     std::vector<uint8_t> shareval = fromBase64(share64);
@@ -903,7 +909,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
         error = FORMAT("Invalid share size: expected 32, got {}", shareval.size());
         return NETWORK_ERROR;
     }
-    LOG_DBG("Share: {}", toHex(shareval));
+    LOG_TRACE("Share: {}", toHex(shareval));
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }

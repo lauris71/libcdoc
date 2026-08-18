@@ -204,24 +204,29 @@ struct ToolCrypto : public libcdoc::CryptoBackend {
         auto ctx = make_unique_ptr<EVP_PKEY_CTX_free>(EVP_PKEY_CTX_new(key.get(), nullptr));
         if (!ctx) return libcdoc::CRYPTO_ERROR;
 
-        EVP_PKEY *params = nullptr;
-        if ((EVP_PKEY_paramgen_init(ctx.get()) < 0) ||
-            (EVP_PKEY_CTX_set_ec_param_enc(ctx.get(), OPENSSL_EC_NAMED_CURVE) < 0) ||
-            (EVP_PKEY_paramgen(ctx.get(), &params) < 0))
+        EVP_PKEY *params_raw = nullptr;
+        // EVP functions return 1 on success, 0 or negative on failure; use
+        // != 1 (not < 0) so that a 0 return is also treated as an error.
+        if ((EVP_PKEY_paramgen_init(ctx.get()) != 1) ||
+            (EVP_PKEY_CTX_set_ec_param_enc(ctx.get(), OPENSSL_EC_NAMED_CURVE) != 1) ||
+            (EVP_PKEY_paramgen(ctx.get(), &params_raw) != 1))
             return libcdoc::CRYPTO_ERROR;
+        auto params = make_unique_ptr<EVP_PKEY_free>(params_raw);
 
         p = public_key.data();
-        auto pubkey = make_unique_ptr<EVP_PKEY_free>(d2i_PublicKey(EVP_PKEY_EC, &params, &p, long(public_key.size())));
+        auto pubkey = make_unique_ptr<EVP_PKEY_free>(d2i_PublicKey(EVP_PKEY_EC, &params_raw, &p, long(public_key.size())));
         if (!pubkey) return libcdoc::CRYPTO_ERROR;
+        // d2i_PublicKey consumed the params reference on success.
+        params.release();
 
-        size_t dlen;
-        if ((EVP_PKEY_derive_init(ctx.get()) < 0) ||
-            (EVP_PKEY_derive_set_peer(ctx.get(), pubkey.get()) < 0) ||
-            (EVP_PKEY_derive(ctx.get(), nullptr, &dlen) < 0))
+        size_t dlen = 0;
+        if ((EVP_PKEY_derive_init(ctx.get()) != 1) ||
+            (EVP_PKEY_derive_set_peer(ctx.get(), pubkey.get()) != 1) ||
+            (EVP_PKEY_derive(ctx.get(), nullptr, &dlen) != 1))
             return libcdoc::CRYPTO_ERROR;
 
         dst.resize(dlen);
-        if (EVP_PKEY_derive(ctx.get(), dst.data(), &dlen) < 0)
+        if (EVP_PKEY_derive(ctx.get(), dst.data(), &dlen) != 1)
             return libcdoc::CRYPTO_ERROR;
         dst.resize(dlen);
 
@@ -381,7 +386,7 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
                 LOG_ERROR("No such public key: {}", rcpt.p11.key_label);
                 continue;
             }
-            LOG_DBG("Public key: {}", toHex(val));
+            LOG_TRACE("Public key: {}", toHex(val));
             if (!conf.servers.empty()) {
                 key = libcdoc::Recipient::makePublicKey(std::move(label), val, conf.servers[0].ID);
             } else {
@@ -517,9 +522,11 @@ int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
 
 int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const string& base_pathname)
 {
-    vector<uint8_t> fmk;
+    // N18: the FMK is key material; store it in a SecureTarget (self-cleaning)
+    // and explicitly cleanse after the reader has consumed it.
+    libcdoc::SecureTarget fmk;
     LOG_DBG("Fetching FMK, idx=", lock_idx);
-    int result = rdr->getFMK(fmk, lock_idx);
+    int result = rdr->getFMK(fmk.getTarget(), lock_idx);
     LOG_DBG("Got FMK");
     if (result != libcdoc::OK) {
         LOG_ERROR("Error on extracting FMK: {} {}", result, rdr->getLastErrorStr());
@@ -529,6 +536,8 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
 
     /* Do pull */
     result = rdr->beginDecryption(fmk);
+    // The reader has consumed the FMK; cleanse it immediately.
+    fmk.cleanse();
     if (result != libcdoc::OK) {
         LOG_ERROR("Error while decrypting files: {} {}", result, rdr->getLastErrorStr());
         return 1;
@@ -693,9 +702,11 @@ CDocCipher::ReEncrypt(ToolConf& conf, RcptInfo& dec_info, std::vector<libcdoc::R
     unique_ptr<CDocWriter> wrtr(CDocWriter::createWriter(conf.cdocVersion, conf.out, &conf, &crypto, &network));
 
     // Begin
-    vector<uint8_t> fmk;
+    // N18: the FMK is key material; store it in a SecureTarget (self-cleaning)
+    // and explicitly cleanse after the reader has consumed it.
+    libcdoc::SecureTarget fmk;
     LOG_DBG("Fetching FMK, idx={}", lock_idx);
-    int64_t result = rdr->getFMK(fmk, lock_idx);
+    int64_t result = rdr->getFMK(fmk.getTarget(), lock_idx);
     LOG_DBG("Got FMK");
     if (result != libcdoc::OK) {
         LOG_ERROR("Error on extracting FMK: {} {}", result, rdr->getLastErrorStr());
@@ -710,6 +721,8 @@ CDocCipher::ReEncrypt(ToolConf& conf, RcptInfo& dec_info, std::vector<libcdoc::R
     }
 
     result = rdr->beginDecryption(fmk);
+    // The reader has consumed the FMK; cleanse it immediately.
+    fmk.cleanse();
     if (result != libcdoc::OK) {
         LOG_ERROR("Error while decrypting files: {} {}", result, rdr->getLastErrorStr());
         return 1;

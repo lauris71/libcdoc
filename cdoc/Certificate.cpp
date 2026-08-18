@@ -109,6 +109,10 @@ Certificate::getEIDType() const
         if(len == NID_undef) {
             continue;
         }
+        // N14: OBJ_obj2txt returns the full needed length which may exceed
+        // the buffer when the policy OID stringifies long (crafted arcs).
+        // Clamp to the buffer size to prevent string_view OOB stack read.
+        len = std::min(len, PolicyBufferLen);
 
         std::string_view policy(buf, size_t(len));
         if (policy.starts_with("2.999.")) { // Zetes TEST OID prefix

@@ -27,6 +27,7 @@
 #include <Recipient.h>
 #include <Tar.h>
 #include <Utils.h>
+#include <ZStream.h>
 #include <XmlReader.h>
 #include <openssl/sha.h>
 
@@ -1075,6 +1076,61 @@ BOOST_AUTO_TEST_CASE(AllowsReasonablePaxHeaderSize)
     BOOST_CHECK_NE(rv, libcdoc::DATA_FORMAT_ERROR);
 }
 
+// Regression for SecurityReview_Kilo_2026-07 N20: Header::getName ran
+// strlen on a 100-byte field that may contain no NUL, over-reading into
+// adjacent header fields. The fix uses memchr with an explicit bound.
+BOOST_AUTO_TEST_CASE(NameWithoutNulDoesNotOverread)
+{
+    // Build a tar header whose 100-byte name field has NO NUL terminator.
+    std::vector<uint8_t> block(512, 0);
+    // Fill name field with 'A' - no NUL anywhere in the 100 bytes.
+    std::fill(block.begin(), block.begin() + 100, uint8_t('A'));
+
+    // mode, uid, gid, size, mtime (valid octal, as in makeTarHeader)
+    auto write_octal_field = [&](size_t offset, size_t width, int64_t value) {
+        std::string s(width - 1, '0');
+        for (size_t i = 0; i < width - 1 && value > 0; ++i) {
+            s[width - 2 - i] = char('0' + (value & 7));
+            value >>= 3;
+        }
+        std::copy(s.begin(), s.end(), block.begin() + offset);
+    };
+    write_octal_field(100, 8, 0600);
+    write_octal_field(108, 8, 0);
+    write_octal_field(116, 8, 0);
+    write_octal_field(124, 12, 0);
+    write_octal_field(136, 12, 0);
+
+    // chksum: spaces during calculation
+    std::fill(block.begin() + 148, block.begin() + 156, uint8_t(' '));
+    block[156] = uint8_t('0'); // regular file
+    constexpr std::string_view magic{"ustar\0", 6};
+    std::copy(magic.begin(), magic.end(), block.begin() + 257);
+    block[263] = '0';
+    block[264] = '0';
+
+    int64_t sum = 0;
+    for (uint8_t b : block) sum += b;
+    std::string chk(7, '0');
+    for (size_t i = 0; i < 6 && sum > 0; ++i) {
+        chk[5 - i] = char('0' + (sum & 7));
+        sum >>= 3;
+    }
+    chk[6] = '\0';
+    std::copy(chk.begin(), chk.end(), block.begin() + 148);
+    block[155] = ' ';
+
+    libcdoc::VectorSource src(block);
+    libcdoc::TarSource tar_src(&src, false);
+    std::string name;
+    int64_t size = 0;
+    auto rv = tar_src.next(name, size);
+    // The name must be exactly 100 bytes (the full field), not longer.
+    BOOST_CHECK_EQUAL(rv, libcdoc::OK);
+    BOOST_CHECK_EQUAL(name.size(), 100);
+    BOOST_CHECK(name.find_first_not_of('A') == std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(StreamingDecryption)
@@ -1120,6 +1176,174 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(constructor, Buf, BufTypes)
 
         BOOST_CHECK_EQUAL_COLLECTIONS(plaintext.begin(), plaintext.end(), decrypted_text.begin(), decrypted_text.end());
     }
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N7: ZSource had no limit on
+// total decompressed output, so a few-KB compressed container could expand
+// to gigabytes of memory (CDoc1) or disk (CDoc2). The reader must cap the
+// total inflated size and fail with IO_ERROR past the limit.
+BOOST_AUTO_TEST_SUITE(ZSourceLimit)
+
+// A zlib stream of repeating zeros compresses to almost nothing; without
+// a cap the reader would happily inflate unlimited attacker-controlled
+// output.
+BOOST_AUTO_TEST_CASE(EnforcesMaxDecompressedSize)
+{
+    // Build a compressed stream that expands well past the cap.
+    // 1 MiB of zeros compresses to ~1 KiB.
+    const size_t PLAIN_SIZE = 1024 * 1024;
+    std::vector<uint8_t> plain(PLAIN_SIZE, 0);
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+    BOOST_REQUIRE(compressed.size() < plain.size() / 100); // sanity: it compressed
+
+    // Read with a 64 KiB cap — must fail with IO_ERROR, not return the full MiB.
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 64 * 1024);
+    std::vector<uint8_t> buf(4096);
+    libcdoc::result_t total = 0;
+    while (true) {
+        auto rv = zsrc.read(buf.data(), buf.size());
+        if (rv < 0) {
+            BOOST_CHECK_EQUAL(rv, libcdoc::IO_ERROR);
+            break;
+        }
+        if (rv == 0) break;
+        total += rv;
+    }
+    BOOST_CHECK(zsrc.isError());
+    // The limited read should have produced less than the full payload.
+    BOOST_CHECK(total < PLAIN_SIZE);
+}
+
+// Without a cap (max_size = 0) the stream must succeed as before.
+BOOST_AUTO_TEST_CASE(UnlimitedWhenCapIsZero)
+{
+    const std::vector<uint8_t> plain = {'h', 'e', 'l', 'l', 'o'};
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 0); // no cap
+    std::vector<uint8_t> buf(plain.size());
+    auto rv = zsrc.read(buf.data(), buf.size());
+    BOOST_CHECK_EQUAL(rv, plain.size());
+    BOOST_CHECK_EQUAL_COLLECTIONS(buf.begin(), buf.end(), plain.begin(), plain.end());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N2: AES-CBC was only used by
+// CDoc 1.0, which is long expired, and the DecryptionSource CBC path was
+// broken anyway (the `size != out` invariant fails for padded CBC).
+// Support has been removed entirely; the Crypto::cipher lookup and the
+// CDoc1 reader's SUPPORTED_METHODS list must not let CBC methods through.
+BOOST_AUTO_TEST_SUITE(AesCbcRemoved)
+
+BOOST_AUTO_TEST_CASE(CipherLookupRejectsCbc)
+{
+    constexpr std::array cbcMethods {
+        "http://www.w3.org/2001/04/xmlenc#aes128-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes192-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
+    };
+    for (const char *m : cbcMethods) {
+        BOOST_CHECK(libcdoc::Crypto::cipher(m) == nullptr);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(CipherLookupStillAcceptsGcm)
+{
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES128GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES192GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES256GCM_MTH)) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N8: PBKDF2 kdf_iterations
+// from the container is attacker-controlled int32. Without bounds it
+// enables both CPU-exhaustion DoS (huge iteration counts) and sign-wrap
+// confusion (values > INT32_MAX wrap negative and silently take the raw
+// symmetric-key path). The writer must enforce [100k, 10M] and the
+// reader must reject > 100M.
+BOOST_AUTO_TEST_SUITE(Pbkdf2IterationBounds)
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooFewIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 99'999);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMinimumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 100'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMaximumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooManyIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'001);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsZeroIterations)
+{
+    // kdf_iter == 0 means a raw symmetric key (no PBKDF2); valid.
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 0);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(ReaderRejectsNegativeIterations)
+{
+    // Negative kdf_iter (possible from sign-wrap when the container's
+    // unsigned 4-byte field is read as signed int32) must be rejected
+    // before it silently takes the raw-key path.
+    TestCrypto crypto;
+    crypto.password = "test";
+    std::vector<uint8_t> kek_pm;
+    std::vector<uint8_t> salt(16, 0);
+    std::vector<uint8_t> pw_salt(16, 0);
+    auto rv = crypto.extractHKDF(kek_pm, salt, pw_salt, -1, 0);
+    BOOST_CHECK_EQUAL(rv, libcdoc::CryptoBackend::INVALID_PARAMS);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N17: timeFromISO did not
+// check std::get_time failure, so a malformed server expiry produced
+// garbage time_t that was cast to uint64_t. The function now returns -1
+// on parse failure and the caller falls back to the client-supplied
+// expiry with a warning.
+BOOST_AUTO_TEST_SUITE(TimeFromISO)
+
+BOOST_AUTO_TEST_CASE(ParsesValidISO)
+{
+    double rv = libcdoc::timeFromISO("2026-08-18T12:00:00Z");
+    BOOST_CHECK(rv > 0);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInvalidISO)
+{
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("not-a-date"), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO(""), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-13-45T99:99:99Z"), -1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1231,6 +1455,46 @@ BOOST_AUTO_TEST_CASE(TruncatesOverlongNames)
     // No-extension version simply truncates.
     auto truncated = libcdoc::sanitiseExtractedFilename(std::string(400, 'b'));
     BOOST_CHECK_EQUAL(truncated.size(), 255u);
+}
+
+// N24: UTF-8 validation, boundary-aware truncation, and NTFS ADS ':' rejection.
+BOOST_AUTO_TEST_CASE(RejectsMalformedUtf8)
+{
+    // Lone continuation byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\x80.txt")), "");
+    // Truncated multi-byte sequence
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xC3.txt")), "");
+    // Invalid lead byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xFE.txt")), "");
+    // Valid UTF-8 still passes
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("\xC3\xB5.txt"), "\xC3\xB5.txt");
+}
+
+BOOST_AUTO_TEST_CASE(TruncatesAtUtf8Boundary)
+{
+    // Build a name with 254 bytes of 'a' + a 2-byte UTF-8 char at position 254-255.
+    // Naive truncation at 255 would split the codepoint.
+    std::string name(254, 'a');
+    name += "\xC3\xB5"; // 'õ' - 2-byte UTF-8
+    name += ".txt";
+    auto result = libcdoc::sanitiseExtractedFilename(name);
+    // The 2-byte character at the boundary must not be split.
+    // Result should be <= 255 and the last bytes before .txt should not
+    // be a lone continuation byte.
+    BOOST_CHECK_LE(result.size(), 255u);
+    BOOST_CHECK(result.ends_with(".txt"));
+    // Extract the stem and verify it ends at a codepoint boundary
+    std::string stem = result.substr(0, result.size() - 4);
+    BOOST_CHECK(libcdoc::isValidUtf8(stem));
+}
+
+BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
+{
+    // NTFS ADS: "file.txt:stream" creates an alternate data stream on file.txt
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:evil.exe"), "");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:stream"), "");
+    // Drive-relative is still handled (stripped, not rejected)
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "foo.txt");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

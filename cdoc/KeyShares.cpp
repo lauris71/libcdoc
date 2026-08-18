@@ -61,7 +61,7 @@ struct JWTSigner {
 
     JWTSigner(Signer *_parent) : parent(_parent) {}
     std::string sign(const std::string& data, std::error_code& ec) const {
-        LOG_DBG("Sign JWT: {}", data);
+        LOG_TRACE("Sign JWT: {}", data);
         std::vector<uint8_t> digest(32);
         SHA256((uint8_t *) data.c_str(), data.size(), digest.data());
         std::vector<uint8_t> dst;
@@ -163,11 +163,11 @@ Signer::generateTickets(std::vector<std::string>& dst, std::vector<ShareData>& s
     std::vector<Disclosure> disclosures;
     for (auto share : shares) {
         Disclosure &d = disclosures.emplace_back(std::string{}, share.getURL());
-        LOG_DBG("Disclosure for {}: {}", share.base_url, d.json);
+        LOG_TRACE("Disclosure for {}: {}", share.base_url, d.json);
     }
     // Create disclosure of the whole list
     Disclosure aud("aud", disclosures);
-    LOG_DBG("Full disclosure: {}", aud.json);
+    LOG_TRACE("Full disclosure: {}", aud.json);
 
     // Create and sign JWT container
     error = {};
@@ -179,9 +179,9 @@ Signer::generateTickets(std::vector<std::string>& dst, std::vector<ShareData>& s
 						   .set_payload_claim("_sd", picojson::value(_sd))
 						   .set_payload_claim("_sd_alg", picojson::value("sha-256"))
 						   .sign(jwtsig);
-    LOG_DBG("Token: {}", token);
+    LOG_TRACE("Token: {}", token);
     if (result != OK) {
-        LOG_DBG("Jwt signing failed with code {}", result);
+        LOG_TRACE("Jwt signing failed with code {}", result);
         return result;
     }
 
@@ -192,7 +192,7 @@ Signer::generateTickets(std::vector<std::string>& dst, std::vector<ShareData>& s
     for (unsigned int i = 0; i < disclosures.size(); i++) {
         std::string disclosed = jwt + "~" + toBase64URL(disclosures[i].json) + "~";
         dst.push_back(disclosed);
-        LOG_DBG("Ticket for {}: {}", shares[i].base_url, disclosed);
+        LOG_TRACE("Ticket for {}: {}", shares[i].base_url, disclosed);
     }
 
     return OK;
@@ -208,9 +208,9 @@ SIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
         error = network->getLastErrorStr(result);
     }
 
-    LOG_DBG("SID signature:{}", toHex(dst));
-    LOG_DBG("SID signatureB64:{}", toBase64URL(dst));
-    LOG_DBG("SID certificateB64:{}", toBase64(cert));
+    LOG_TRACE("SID signature:{}", toHex(dst));
+    LOG_TRACE("SID signatureB64:{}", toBase64URL(dst));
+    LOG_TRACE("SID certificateB64:{}", toBase64(cert));
     
     return result;
 }
@@ -226,9 +226,9 @@ MIDSigner::signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& dig
         error = network->getLastErrorStr(result);
     }
 
-    LOG_DBG("MID signature:{}", toHex(dst));
-    LOG_DBG("MID signatureB64:{}", toBase64URL(dst));
-    LOG_DBG("MID certificateB64:{}", toBase64(cert));
+    LOG_TRACE("MID signature:{}", toHex(dst));
+    LOG_TRACE("MID signatureB64:{}", toBase64URL(dst));
+    LOG_TRACE("MID certificateB64:{}", toBase64(cert));
     
     return result;
 }

@@ -124,7 +124,12 @@ struct libcdoc::Header {
 	}
 
 	std::string getName() const {
-		return std::string(name.data(), std::min<size_t>(name.size(), strlen(name.data())));
+		// N20: strlen over-reads into adjacent header fields when the
+		// 100-byte name field lacks a NUL terminator. Use memchr with an
+		// explicit bound instead.
+		const char *nul = static_cast<const char *>(memchr(name.data(), '\0', name.size()));
+		size_t len = nul ? size_t(nul - name.data()) : name.size();
+		return std::string(name.data(), len);
 	}
 
     constexpr int64_t getSize() const noexcept {

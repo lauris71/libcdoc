@@ -197,9 +197,12 @@ std::string buildURL(const std::string& host, int port);
  *   - "." and ".." segments,
  *   - NUL bytes and other ASCII control characters,
  *   - leading/trailing whitespace and dots (Windows trims these silently),
- *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
- *   - excessively long names (capped at 255 bytes after sanitisation, the
- *     practical filename limit on every filesystem libcdoc supports).
+  *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
+  *   - NTFS Alternate Data Stream separator ':',
+  *   - malformed UTF-8,
+  *   - excessively long names (capped at 255 bytes after sanitisation, the
+  *     practical filename limit on every filesystem libcdoc supports;
+  *     truncation respects UTF-8 character boundaries).
  *
  * The returned string is a relative file name (no slashes), or empty if no
  * safe name could be derived. A caller that gets an empty return value MUST
@@ -360,6 +363,10 @@ static inline void LogFormat(LogLevel level, std::string_view file, int line, st
 #define LOG_INFO(...) LogFormat(libcdoc::LEVEL_INFO, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_DBG(...) LogFormat(libcdoc::LEVEL_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 
+// LOG_TRACE and LOG_TRACE_KEY are compile-gated by LIBCDOC_CRYPTO_TRACE
+// (default OFF). They are intended for debugging cryptographic material and
+// other potentially sensitive data. Never use LOG_DBG for secrets — it is
+// runtime-gated only and may be enabled in production deployments.
 #ifdef LIBCDOC_CRYPTO_TRACE
 #define LOG_TRACE(...) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_TRACE_KEY(MSG, KEY) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, MSG, toHex(KEY))

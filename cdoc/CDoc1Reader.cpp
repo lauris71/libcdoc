@@ -19,6 +19,7 @@
 #include "CDoc1Reader.h"
 
 #include "Certificate.h"
+#include "Configuration.h"
 #include "Crypto.h"
 #include "CryptoBackend.h"
 #include "DDocReader.h"
@@ -28,7 +29,9 @@
 #include "utils/memory.h"
 
 #include <openssl/evp.h>
+#include <openssl/sha.h>
 
+#include <array>
 #include <map>
 #include <span>
 
@@ -38,8 +41,11 @@ constexpr std::string_view MIME_ZLIB = "http://www.isi.edu/in-noes/iana/assignme
 constexpr std::string_view MIME_DDOC = "http://www.sk.ee/DigiDoc/v1.3.0/digidoc.xsd";
 constexpr std::string_view MIME_DDOC_OLD = "http://www.sk.ee/DigiDoc/1.3.0/digidoc.xsd";
 
+// CDoc 1.0 used AES-CBC; CDoc 1.1 switched to AES-GCM and all CDoc 1.0
+// containers have long since expired. AES-CBC also has no authentication,
+// which makes it a poor fit for the "reject at the body" FMK-oracle
+// defence documented below. We therefore do not accept CBC containers.
 constexpr std::array SUPPORTED_METHODS {
-    libcdoc::Crypto::AES128CBC_MTH, libcdoc::Crypto::AES192CBC_MTH, libcdoc::Crypto::AES256CBC_MTH,
     libcdoc::Crypto::AES128GCM_MTH, libcdoc::Crypto::AES192GCM_MTH, libcdoc::Crypto::AES256GCM_MTH
 };
 
@@ -63,6 +69,11 @@ struct CDoc1Reader::Private
     std::vector<DDOCReader::File> files;
     int64_t f_pos = -1;
     std::unique_ptr<libcdoc::VectorSource> src;
+
+    // N10: RSA oracle throttle state. Set during getFMK when the lock is
+    // RSA; empty otherwise (no throttle for ECC/AES-wrap paths).
+    bool is_rsa = false;
+    std::string throttle_key_id;
 
     ~Private()
     {
@@ -115,10 +126,10 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     setLastError({});
 
     // Determine the FMK length from the container's body cipher. The CDoc1
-    // body uses AES-128/192/256 in CBC or GCM mode, so the FMK is 16, 24
-    // or 32 bytes long. We pin this length up-front and pass it to the RSA
-    // decrypt path so that an attacker observing this function cannot
-    // distinguish between
+    // body uses AES-128/192/256 in GCM mode (CBC was only used by CDoc 1.0,
+    // which we no longer accept), so the FMK is 16, 24 or 32 bytes long.
+    // We pin this length up-front and pass it to the RSA decrypt path so
+    // that an attacker observing this function cannot distinguish between
     //   (a) RSA padding failed
     //   (b) RSA padding succeeded but the resulting length was wrong
     //   (c) a wholly different recipient was used to derive a wrong key.
@@ -127,9 +138,7 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     // candidate FMK of the right length, and the eventual AES decrypt at
     // the container body level either authenticates that FMK (success) or
     // rejects it. CDoc1 has no header HMAC, so the AES-GCM tag is the
-    // only bit of authentication we can rely on. AES-CBC containers
-    // therefore retain a residual oracle (PKCS#7 stripping); using GCM
-    // when re-encrypting with libcdoc is strongly preferred.
+    // only bit of authentication we can rely on.
     size_t expected_fmk_len = 0;
     if (const EVP_CIPHER *c = libcdoc::Crypto::cipher(d->method); c) {
         expected_fmk_len = size_t(EVP_CIPHER_key_length(c));
@@ -163,7 +172,19 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         // Even on "OK" the contents may be synthetic - that is the point.
         // The downstream AES decrypt at the body level is what tells
         // success from failure.
+        //
+        // N10: mark this lock as RSA and compute a stable key identifier
+        // for the oracle throttle. The identifier is a SHA-256 hash of the
+        // recipient's public key, so different RSA keys have independent
+        // throttle intervals and no cross-tenant DoS is possible.
+        d->is_rsa = true;
+        std::array<uint8_t, 32> hash{};
+        SHA256(lock.getBytes(Lock::Params::RCPT_KEY).data(),
+               lock.getBytes(Lock::Params::RCPT_KEY).size(), hash.data());
+        d->throttle_key_id = toHex(hash);
     } else {
+        d->is_rsa = false;
+        d->throttle_key_id.clear();
         SecureTarget key;
         int result = crypto->deriveConcatKDF(key.getTarget(),
             lock.getBytes(Lock::Params::KEY_MATERIAL),
@@ -398,7 +419,6 @@ CDoc1Reader::isCDoc1File(libcdoc::DataSource *src)
 result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
     const std::function<libcdoc::result_t(libcdoc::DataSource &src, const std::string &mime)>& f)
 {
-    setLastError({});
     if (fmk.empty()) {
         setLastError("FMK is missing");
         return libcdoc::WRONG_ARGUMENTS;
@@ -413,9 +433,10 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         return libcdoc::WORKFLOW_ERROR;
     }
     if (auto result = d->dsrc->seek(0); result != libcdoc::OK) {
-        LOG_ERROR("{}", d->src->getLastErrorStr(result));
+        LOG_ERROR("{}", d->dsrc->getLastErrorStr(result));
         return result;
     }
+    setLastError({});
 
     std::vector<unsigned char> b64;
     XMLReader reader(*d->dsrc);
@@ -441,16 +462,14 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         return libcdoc::IO_ERROR;
     }
 
-    // Treat any post-FMK decrypt error - including AES-CBC PKCS#7 stripping
-    // failures and AES-GCM tag mismatches - as the same "container body
-    // decrypt failed" event. This is the single bit of information an
-    // attacker can extract per submission of a tampered CDoc1, and we
-    // rate-limit it. A per-process exponential backoff turns a remote
-    // Bleichenbacher campaign of 2^20+ queries into hours/days of
-    // wall-clock cost without penalising legitimate single-shot use.
-    constexpr auto THROTTLE_SCOPE = "cdoc1-rsa-decrypt";
+    // N10: the RSA oracle throttle is keyed by a hash of the recipient's
+    // public key, and only fires for RSA locks (set in getFMK). ECC/
+    // AES-wrap locks have no Bleichenbacher-style oracle to protect, so
+    // they skip the throttle entirely.
     auto report_failure = [&]{
-        libcdoc::Crypto::rsaOracleThrottleOnFailure(THROTTLE_SCOPE);
+        if (d->is_rsa && !d->throttle_key_id.empty()) {
+            libcdoc::Crypto::rsaOracleThrottle(d->throttle_key_id);
+        }
     };
 
     VectorSource src(b64);
@@ -462,7 +481,12 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
     }
     libcdoc::result_t inner_rv = libcdoc::OK;
     if (d->mime == MIME_ZLIB) {
-        libcdoc::ZSource zsrc(&dec);
+        // N7: cap decompressed size to prevent decompression bombs.
+        // CDoc1 buffers whole files in memory, so a smaller default (2 GiB)
+        // is used compared to CDoc2's streaming default (20 GiB).
+        static constexpr int64_t DEFAULT_MAX = 2LL * 1024 * 1024 * 1024;
+        int64_t max_size = conf ? conf->getInt64(libcdoc::Configuration::CDOC1_MAX_DECOMPRESSED_SIZE, DEFAULT_MAX) : DEFAULT_MAX;
+        libcdoc::ZSource zsrc(&dec, false, max_size);
         inner_rv = f(zsrc, d->properties["OriginalMimeType"]);
     } else {
         inner_rv = f(dec, d->mime);
@@ -481,6 +505,5 @@ result_t CDoc1Reader::decryptData(const std::vector<uint8_t>& fmk,
         report_failure();
         return close_rv;
     }
-    libcdoc::Crypto::rsaOracleThrottleOnSuccess(THROTTLE_SCOPE);
     return libcdoc::OK;
 }

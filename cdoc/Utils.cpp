@@ -106,12 +106,16 @@ getTime()
 #define timegm _mkgmtime
 #endif
 
+// N17: return -1 on parse failure so callers can distinguish garbage
+// from a valid timestamp. Previously a malformed ISO string produced
+// an undefined time_t via std::get_time without checking in.fail().
 double
 timeFromISO(const std::string& iso)
 {
     std::istringstream in{iso};
     std::tm t = {};
     in >> std::get_time(&t, "%Y-%m-%dT%TZ");
+    if (in.fail()) return -1;
     return timegm(&t);
 }
 
@@ -293,6 +297,7 @@ sanitiseExtractedFilename(std::string_view name)
     //    truncate at NUL while the filesystem treats the full name, which
     //    has historically been used to mask malicious extensions.
     if (name.empty()) return {};
+    if (!isValidUtf8(std::string(name))) return {};
     for (unsigned char c : name) {
         if (c == 0u) return {};
         if (c < 0x20u && c != '\t') return {};   // strip ASCII control bytes
@@ -316,6 +321,11 @@ sanitiseExtractedFilename(std::string_view name)
          (base[0] >= 'a' && base[0] <= 'z'))) {
         base = base.substr(2);
     }
+
+    // 3a. Reject any remaining ':' (NTFS Alternate Data Stream separator).
+    //     A name like "file.txt:evil.exe" would create the ADS "evil.exe"
+    //     on the file "file.txt" instead of a normal file.
+    if (base.find(':') != std::string_view::npos) return {};
 
     // 4. Trim trailing dots and whitespace. Windows silently strips these
     //    when creating files, so "evil.exe.." resolves to "evil.exe" and
@@ -357,8 +367,18 @@ sanitiseExtractedFilename(std::string_view name)
     //    A name longer than that would fail filesystem operations anyway;
     //    truncating up-front gives a uniform error mode. We truncate from
     //    the end while keeping the file extension if there is one.
+    //    Truncation respects UTF-8 character boundaries so a multi-byte
+    //    codepoint is never split in half.
     constexpr size_t MAX_BYTES = 255;
     if (base.size() > MAX_BYTES) {
+        // Find the last UTF-8 codepoint boundary at or before MAX_BYTES.
+        // A continuation byte has the pattern 10xxxxxx (0x80-0xBF).
+        auto utf8_boundary = [](std::string_view sv, size_t max_pos) -> size_t {
+            size_t pos = std::min(max_pos, sv.size());
+            while (pos > 0 && (uint8_t(sv[pos - 1]) & 0xC0) == 0x80)
+                --pos;
+            return pos;
+        };
         size_t dot = base.find_last_of('.');
         if (dot != std::string_view::npos &&
             dot > 0 &&
@@ -366,14 +386,15 @@ sanitiseExtractedFilename(std::string_view name)
             // Preserve a short extension; truncate the stem.
             std::string_view ext = base.substr(dot);
             std::string_view stem = base.substr(0, dot);
-            size_t keep_stem = MAX_BYTES - ext.size();
+            size_t keep_stem = utf8_boundary(stem, MAX_BYTES - ext.size());
             std::string out;
-            out.reserve(MAX_BYTES);
+            out.reserve(keep_stem + ext.size());
             out.assign(stem.data(), keep_stem);
             out.append(ext.data(), ext.size());
             return out;
         }
-        return std::string(base.substr(0, MAX_BYTES));
+        size_t keep = utf8_boundary(base, MAX_BYTES);
+        return std::string(base.substr(0, keep));
     }
 
     return std::string(base);
