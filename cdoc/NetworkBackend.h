@@ -152,7 +152,10 @@ struct CDOC_EXPORT NetworkBackend {
      */
 	virtual std::string getLastErrorStr(result_t code) const;
 
-	/**
+    virtual result_t get(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert);
+    virtual result_t post(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert);
+
+    /**
 	 * @brief send key material to keyserver
      *
      * The default implementation uses internal http client and peer TLS certificate list.
@@ -209,6 +212,54 @@ struct CDOC_EXPORT NetworkBackend {
     };
 
     /**
+     * @brief Run a full SID/MID authentication round-trip.
+     *
+     * POSTs @p request_body to `{url}/auth/start`, extracts the Location
+     * header and verification code, calls showFeedback, then polls
+     * GET `{url}/auth/status/{id}` until the server reports COMPLETE.
+     *
+     * The default implementation uses a single httplib::SSLClient with
+     * httpPost/httpGet, polling on the same connection with
+     * set_keep_alive(false).
+     *
+     * @param url The auth server base URL
+     * @param request_body Pre-constructed JSON request body
+     * @param response_body Output: final response body (COMPLETE state)
+     * @param response_headers Output: final response headers
+     * @return Error code or OK
+     */
+    virtual result_t getAuthResponse(const std::string& url, const std::string& request_body,
+        std::string& response_body, std::map<std::string, std::string>& response_headers);
+
+    /**
+     * @brief Run a full SID/MID signing round-trip.
+     *
+     * POSTs @p request_body to @p post_path, extracts the session ID from
+     * the response body, then polls GET on @p poll_path_prefix/{sessionID}
+     * until the server reports COMPLETE.
+     *
+     * Unlike getAuthResponse, this method does not call showFeedback; the
+     * caller is expected to display the verification code before calling.
+     *
+     * The default implementation uses a single httplib::SSLClient with
+     * httpPost/httpGet, polling on the same connection with
+     * set_keep_alive(false).
+     *
+     * @param url The server base URL
+     * @param post_path Path for the initial POST (e.g. "/sid/authenticate")
+     * @param request_body Pre-constructed JSON request body
+     * @param request_headers Headers for the initial POST (session token etc.)
+     * @param poll_path_prefix Path prefix for polling (e.g. "/sid/session/")
+     * @param response_body Output: final response body (COMPLETE state)
+     * @param response_headers Output: final response headers
+     * @return Error code or OK
+     */
+    virtual result_t getSignResponse(const std::string& url, const std::string& post_path,
+        const std::string& request_body, const std::map<std::string, std::string>& request_headers,
+        const std::string& poll_path_prefix,
+        std::string& response_body, std::map<std::string, std::string>& response_headers);
+
+    /**
      * @brief Get a session token and certificate for share authentication
      *
      * Implementation may cache the session token and certificate if appropriate
@@ -243,20 +294,6 @@ struct CDOC_EXPORT NetworkBackend {
     virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
         const std::string& session_token, const std::string& session_cert, const std::string& auth_token, const std::vector<uint8_t>& auth_cert, const std::map<std::string, std::string>& auth_params);
 
-    /**
-     * @brief Fetch the server's public signing keys (JWKS)
-     *
-     * GET <url>/.well-known/jwks.jws and return the JWK Set JSON. The
-     * response may be a plain JWK Set or a JWS compact serialization whose
-     * payload is the JWK Set; both are handled. The JWS signature is not
-     * verified - the pinned TLS channel is the trust anchor (and the keys
-     * are cross-checked by the share servers).
-     *
-     * @param dst a container for the JWK Set JSON
-     * @param url server url (RP server)
-     * @return error code or OK
-     */
-    virtual result_t fetchWellKnownKeys(std::string& dst, const std::string& url);
 #endif
 
     /**

@@ -392,10 +392,33 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 // server RFC9421 HTTP countersignature. The RP signing keys
                 // are fetched from its well-known endpoint.
                 std::string jwks;
-                if (auto rv = network->fetchWellKnownKeys(jwks, rp_url); rv != OK) {
-                    setLastError(network->getLastErrorStr(rv));
-                    LOG_ERROR("{}", last_error);
-                    return rv;
+                {
+                    std::string jwks_url = rp_url + "/.well-known/jwks.jws";
+                    std::map<std::string, std::string> headers;
+                    std::vector<uint8_t> body;
+                    if (auto rv = network->get(jwks_url, body, headers, false); rv != OK) {
+                        setLastError(network->getLastErrorStr(rv));
+                        LOG_ERROR("{}", last_error);
+                        return rv;
+                    }
+                    jwks.assign(body.begin(), body.end());
+
+                    // The endpoint name says .jws: accept both a plain JWK
+                    // Set (what the servers currently return) and a JWS
+                    // compact serialization (header64.payload64.signature64)
+                    // whose payload is the JWK Set.
+                    if (jwks.find("\"keys\"") == std::string::npos) {
+                        std::vector<std::string> parts = split(jwks, '.');
+                        if (parts.size() == 3) {
+                            std::vector<uint8_t> payload = fromBase64URL(parts[1]);
+                            jwks.assign(payload.begin(), payload.end());
+                        }
+                    }
+                    if (jwks.find("\"keys\"") == std::string::npos) {
+                        setLastError("Well-known keys response is not a JWK Set");
+                        LOG_ERROR("{}", last_error);
+                        return libcdoc::DATA_FORMAT_ERROR;
+                    }
                 }
                 if (auto rv = validateAuthTicketMID(crypto, rcpt_id, auth_tokens[0], auth.cert, auth.params, jwks, v_err); rv != OK) {
                     setLastError(v_err);
