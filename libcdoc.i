@@ -218,6 +218,19 @@
     }
 };
 
+// The params map is exposed through accessors so that language-specific
+// map typemaps (Java: java.util.Map<String,String>) apply. Wrapping the
+// member directly would produce an unusable opaque-pointer proxy.
+%ignore libcdoc::NetworkBackend::SessionData::params;
+%extend libcdoc::NetworkBackend::SessionData {
+    std::map<std::string, std::string> getParams() const {
+        return $self->params;
+    }
+    void setParams(const std::map<std::string, std::string>& params) {
+        $self->params = params;
+    }
+};
+
 // Enable director support for classes with virtual methods
 %feature("director") libcdoc::DataSource;
 %feature("director") libcdoc::CryptoBackend;
@@ -500,17 +513,15 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 
 %typemap(out) std::map<std::string, std::string> %{
     jclass map_class = jenv->FindClass("java/util/Hashtable");
-    std::cerr << "Map class:" << (void *) map_class << std::endl;
     jmethodID mid_new = jenv->GetMethodID(map_class, "<init>", "()V");
-    std::cerr << "Mid_new:" << mid_new << std::endl;
     jmethodID mid_put = jenv->GetMethodID(map_class, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    std::cerr << "Mid_put:" << mid_put << std::endl;
     jobject map = jenv->NewObject(map_class, mid_new);
-    std::cerr << "Map:" << (void *) map << std::endl;
     for(auto pair : *(&result)) {
         jstring key = jenv->NewStringUTF(pair.first.c_str());
         jstring val = jenv->NewStringUTF(pair.second.c_str());
         jenv->CallObjectMethod(map, mid_put, key, val);
+        jenv->DeleteLocalRef(key);
+        jenv->DeleteLocalRef(val);
     }
     jresult = map;
 %}

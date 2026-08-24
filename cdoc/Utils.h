@@ -329,6 +329,25 @@ struct restoreFlags {
     ~restoreFlags() { os.flags(f); }
 };
 
+/**
+ * @brief Join a base URL with a path suffix, handling trailing slashes.
+ *
+ * The @p base may or may not end with '/'; the @p suffix must start with
+ * '/'. The result always has exactly one '/' between base and suffix.
+ *
+ * @param base the base URL (e.g. "https://host" or "https://host/")
+ * @param suffix the path suffix (e.g. "/key-capsules")
+ * @return the joined URL
+ */
+[[nodiscard]] inline std::string joinUrl(std::string_view base, std::string_view suffix)
+{
+    std::string result(base);
+    if (!result.empty() && result.back() == '/')
+        result.pop_back();
+    result.append(suffix);
+    return result;
+}
+
 [[nodiscard]] constexpr auto range_to_sv(auto begin, auto end) noexcept {
     if (begin == end)
         return std::string_view();

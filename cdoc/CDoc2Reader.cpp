@@ -328,7 +328,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         // Get nonces
         for (auto& share : shares) {
             std::vector<uint8_t> nonce;
-            result_t result = network->fetchNonce(nonce, share.base_url, share.share_id, session.token, session.cert);
+            result_t result = network->fetchNonce(nonce, share.base_url, share.share_id, session);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
                 LOG_ERROR("Cannot fetch nonce {} from server {}", share.share_id, share.base_url);
@@ -393,7 +393,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 // are fetched from its well-known endpoint.
                 std::string jwks;
                 {
-                    std::string jwks_url = rp_url + "/.well-known/jwks.jws";
+                    std::string jwks_url = joinUrl(rp_url, "/.well-known/jwks.jws");
                     std::map<std::string, std::string> headers;
                     std::vector<uint8_t> body;
                     if (auto rv = network->get(jwks_url, body, headers, false); rv != OK) {
@@ -429,9 +429,15 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         }
         std::vector<uint8_t>& kek_build = kek.getTarget(32);
         std::fill(kek_build.begin(), kek_build.end(), 0);
+        // Build the auth SessionData once (cert and params are shared);
+        // only the per-share ticket token changes between requests.
+        NetworkBackend::SessionData auth_session;
+        auth_session.cert = toBase64URL(auth.cert);
+        auth_session.params = auth.params;
         for (unsigned int i = 0; i < auth_tokens.size(); i++) {
             NetworkBackend::ShareInfo share;
-            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, session.token, session.cert, auth_tokens[i], auth.cert, auth.params);
+            auth_session.token = auth_tokens[i];
+            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, session, auth_session);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
                 LOG_ERROR("Cannot fetch share {}", i);

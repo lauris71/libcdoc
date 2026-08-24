@@ -1499,6 +1499,34 @@ BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE(JoinUrl)
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithoutTrailingSlash)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443", "/key-capsules"),
+                      "https://host:443/key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithTrailingSlash)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443/", "/key-capsules"),
+                      "https://host:443/key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithMultipleTrailingSlashes)
+{
+    // Only one trailing slash is stripped; the rest is part of the path.
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443//", "/key-capsules"),
+                      "https://host:443//key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsEmptyBase)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("", "/key-capsules"), "/key-capsules");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 BOOST_AUTO_TEST_SUITE(XMLReaderEntityHandling)
 
 BOOST_AUTO_TEST_CASE(ReadsPlainXml)
