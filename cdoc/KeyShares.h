@@ -106,25 +106,32 @@ struct Signer {
     std::string rcpt_id;
     /**
      * @brief After successful signing holds the user certificate value
-     * 
+     *
      */
     std::vector<uint8_t> cert;
     std::map<std::string, std::string> params;
     /**
+     * @brief The text shown on the user's device in the confirmation dialog
+     *
+     * Maps to the Smart-ID displayText200 and Mobile-ID displayText fields.
+     */
+    std::string text;
+    /**
      * @brief The text of last error
-     * 
+     *
      */
     std::string error;
 protected:
     NetworkBackend *network;
     /**
      * @brief Construct a new Signer object
-     * 
+     *
      * @param _session Full session data (token and certificate)
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
      * @param _algo_name Signing algorithm name (RS256/ES256)
+     * @param _text The text shown on the user's device in the confirmation dialog
      */
-    Signer(const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, const std::string& _algo_name, NetworkBackend *_network) : session(_session), rcpt_id(_rcpt_id), algo_name(_algo_name), network(_network) {}
+    Signer(const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, const std::string& _algo_name, NetworkBackend *_network, const std::string& _text) : session(_session), rcpt_id(_rcpt_id), algo_name(_algo_name), text(_text), network(_network) {}
 };
 
 /**
@@ -140,13 +147,14 @@ struct SIDSigner : public Signer {
 
     /**
      * @brief Construct a new SIDSigner object
-     * 
+     *
      * @param _url SmartID gateway url
      * @param _session Full session data (token and certificate)
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
+     * @param _text The text shown on the user's device in the confirmation dialog
      */
-    SIDSigner(const std::string& _url, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_session, _rcpt_id, "RSASSA-PSS+ACSP_V2", network), url(_url) {}
+    SIDSigner(const std::string& _url, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network, const std::string& _text)
+    : Signer(_session, _rcpt_id, "RSASSA-PSS+ACSP_V2", network, _text), url(_url) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };
@@ -168,12 +176,13 @@ struct MIDSigner : public Signer {
     const std::string phone;
     /**
      * @brief Construct a new MIDSigner object
-     * 
+     *
      * @param _url Mobile ID gateway url
      * @param _rcpt_id Recipient full id in etsi format (ets/PNOEE-XYZXYZXYZXY)
+     * @param _text The text shown on the user's device in the confirmation dialog
      */
-    MIDSigner(const std::string& _url, const std::string& _phone, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network)
-    : Signer(_session, _rcpt_id, "ES256", network), url(_url), phone(_phone) {}
+    MIDSigner(const std::string& _url, const std::string& _phone, const NetworkBackend::SessionData& _session, const std::string& _rcpt_id, NetworkBackend *network, const std::string& _text)
+    : Signer(_session, _rcpt_id, "ES256", network, _text), url(_url), phone(_phone) {}
 
     result_t signDigest(std::vector<uint8_t>& dst, const std::vector<uint8_t>& digest) final;
 };

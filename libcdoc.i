@@ -74,6 +74,7 @@
 %ignore libcdoc::Configuration::RP_UUID;
 %ignore libcdoc::Configuration::RP_NAME;
 %ignore libcdoc::Configuration::PHONE_NUMBER;
+%ignore libcdoc::Configuration::DISPLAY_TEXT;
 %ignore libcdoc::Configuration::CDOC1_MAX_DECOMPRESSED_SIZE;
 %ignore libcdoc::Configuration::CDOC2_MAX_DECOMPRESSED_SIZE;
 

@@ -350,8 +350,12 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         AuthenticationData auth;
         result_t result = NOT_IMPLEMENTED;
 
+        // The text shown on the user's device in the SID/MID confirmation
+        // dialog (Smart-ID displayText200 / Mobile-ID displayText).
+        std::string display_text = conf ? conf->getValue(libcdoc::Configuration::DISPLAY_TEXT) : std::string{};
+
         if (!mid) {
-            SIDSigner signer(rp_url, session, rcpt_id, network);
+            SIDSigner signer(rp_url, session, rcpt_id, network, display_text);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);
@@ -360,7 +364,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
                 auth.params = std::move(signer.params);
             }
         } else {
-            MIDSigner signer(rp_url, phone, session, rcpt_id, network);
+            MIDSigner signer(rp_url, phone, session, rcpt_id, network, display_text);
             result = signer.generateTickets(auth_tokens, shares);
             if (result != OK) {
                 setLastError(signer.error);

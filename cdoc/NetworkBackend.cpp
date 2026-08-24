@@ -45,6 +45,13 @@
 
 #define CDOC_SSL_TIMEOUT 30
 
+// The default confirmation text shown on the user's device in SID/MID
+// dialogs when no DISPLAY_TEXT configuration value is set. Overridable at
+// compile time (e.g. -DCDOC2_DEFAULT_DISPLAY_TEXT="...").
+#ifndef CDOC2_DEFAULT_DISPLAY_TEXT
+#define CDOC2_DEFAULT_DISPLAY_TEXT "Do you want to decrypt the CDoc container?"
+#endif
+
 using namespace std::literals::chrono_literals;
 
 using EC_KEY_sign = int (*)(int type, const unsigned char *dgst, int dlen, unsigned char *sig, unsigned int *siglen, const BIGNUM *kinv, const BIGNUM *r, EC_KEY *eckey);
@@ -583,6 +590,101 @@ hashAlgorithmToMidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
     return {};
 }
 
+// Decode the next UTF-8 codepoint from sv at pos, advancing pos past it.
+// Returns false on malformed input (bad continuation bytes, truncated
+// sequence, invalid lead byte). Overlong encodings and surrogates are not
+// specially rejected - the input is a localised UI string from
+// configuration, not a security boundary.
+static bool
+decodeUtf8Char(std::string_view sv, size_t& pos, uint32_t& cp) noexcept
+{
+    uint8_t c = uint8_t(sv[pos]);
+    if (c < 0x80) {
+        cp = c;
+        pos += 1;
+        return true;
+    }
+    size_t extra;
+    uint32_t val;
+    if ((c & 0xE0) == 0xC0) { extra = 1; val = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { extra = 2; val = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { extra = 3; val = c & 0x07; }
+    else return false;
+    if (pos + extra >= sv.size()) return false;
+    for (size_t i = 1; i <= extra; i++) {
+        uint8_t cc = uint8_t(sv[pos + i]);
+        if ((cc & 0xC0) != 0x80) return false;
+        val = (val << 6) | (cc & 0x3F);
+    }
+    cp = val;
+    pos += extra + 1;
+    return true;
+}
+
+// Classify a Unicode codepoint against the GSM 03.38 alphabet used by the
+// Mobile-ID displayText field:
+//   0 - not representable in GSM-7
+//   1 - GSM-7 basic charset (1 septet)
+//   2 - GSM-7 extension table (2 septets)
+static constexpr int
+gsm7CharClass(uint32_t cp) noexcept
+{
+    switch (cp) {
+    // Extension table: ^ { } \ [ ] ~ | € and FF (page break)
+    case 0x005E: case 0x007B: case 0x007D: case 0x005C: case 0x005B:
+    case 0x005D: case 0x007E: case 0x007C: case 0x20AC: case 0x000C:
+        return 2;
+    default:
+        break;
+    }
+    if (cp == 0x60) return 0;                 // '`' has no GSM-7 mapping
+    if (cp >= 0x20 && cp <= 0x7E) return 1;   // printable ASCII is in the basic set
+    switch (cp) {
+    case 0x000A: case 0x000D: case 0x001B:     // LF, CR, ESC
+    case 0x00A1: case 0x00A3: case 0x00A4: case 0x00A5: case 0x00A7: case 0x00BF:
+    case 0x00C4: case 0x00C5: case 0x00C6: case 0x00C7: case 0x00C9:
+    case 0x00D1: case 0x00D6: case 0x00D8: case 0x00DC: case 0x00DF:
+    case 0x00E0: case 0x00E4: case 0x00E5: case 0x00E6: case 0x00E8:
+    case 0x00E9: case 0x00EC: case 0x00F1: case 0x00F2: case 0x00F6:
+    case 0x00F8: case 0x00F9: case 0x00FC:
+    case 0x0393: case 0x0394: case 0x0398: case 0x039B: case 0x039E:
+    case 0x03A0: case 0x03A3: case 0x03A6: case 0x03A8: case 0x03A9:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+// Validate and classify the SID/MID display text. On success returns OK and
+// sets n_chars (Unicode codepoints), n_ext (chars from the GSM-7 extension
+// table), gsm7 (true if the whole text is GSM-7 representable) and bmp
+// (true if all codepoints fit in the Basic Multilingual Plane, i.e. are
+// representable in UCS-2).
+static libcdoc::result_t
+classifyDisplayText(std::string_view utf8, size_t& n_chars, size_t& n_ext, bool& gsm7, bool& bmp)
+{
+    n_chars = 0;
+    n_ext = 0;
+    gsm7 = true;
+    bmp = true;
+    for (size_t pos = 0; pos < utf8.size();) {
+        uint32_t cp = 0;
+        if (!decodeUtf8Char(utf8, pos, cp)) {
+            error = "Display text is not valid UTF-8";
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        n_chars++;
+        if (cp > 0xFFFF) bmp = false;
+        switch (gsm7CharClass(cp)) {
+        case 2: n_ext++; break;
+        case 0: gsm7 = false; break;
+        default: break;
+        }
+    }
+    return libcdoc::OK;
+}
+
 
 libcdoc::result_t
 libcdoc::NetworkBackend::getAuthResponse(const std::string& url, std::vector<uint8_t>& body,
@@ -1073,7 +1175,7 @@ libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 libcdoc::result_t
 libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
     const std::string& url, const SessionData& session,
-    const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
+    const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
     // Start authentication:
     //
@@ -1113,18 +1215,32 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         {"signatureAlgorithm", picojson::value("rsassa-pss")},
         {"signatureAlgorithmParameters", picojson::value(sap)}
     };
+
+    // The confirmation text shown on the user's device (displayText200).
+    // Fall back to the generic prompt when no text was configured.
+    const std::string display_text = text.empty() ? std::string(CDOC2_DEFAULT_DISPLAY_TEXT) : text;
+    // displayText200 allows at most 200 characters.
+    size_t n_chars = 0, n_ext = 0;
+    bool gsm7 = true, bmp = true;
+    result_t result = classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) return result;
+    if (n_chars > 200) {
+        error = FORMAT("Display text too long ({} characters, max 200)", n_chars);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
+    // Build the interactions array with picojson so the text is properly
+    // JSON-escaped.
     picojson::object inter = {
         {"type", picojson::value("confirmationMessageAndVerificationCodeChoice")},
-        {"displayText200", picojson::value("Do you want to decrypt the document")}
+        {"displayText200", picojson::value(display_text)}
     };
     picojson::array inter_arr = {
         picojson::value(inter)
     };
-    //std::string inter_str = picojson::value(inter_arr).serialize();
-    std::string inter_str = "[{\"type\":\"confirmationMessageAndVerificationCodeChoice\",\"displayText200\":\"Do you want to decrypt the document\"}]";
+    std::string inter_str = picojson::value(inter_arr).serialize();
     LOG_DBG("Interactions: {}", inter_str);
     inter_str = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
-    std::string inter_str_64 = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
     picojson::object obj = {
         {"semanticsIdentifier", picojson::value(semanticIdentifier)},
         {"certificateLevel", picojson::value(certificateLevel)},
@@ -1141,7 +1257,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     std::array<uint8_t, 32> b;
     SHA256(digest.data(), digest.size(), b.data());
     fb.code = ((b[30] << 8) | b[31]) % 10000;
-    result_t result = showFeedback(fb);
+    result = showFeedback(fb);
     if (result != OK) return result;
 
     std::string query_str = query.serialize();
@@ -1224,7 +1340,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
 libcdoc::result_t
 libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
     const std::string& url, const std::string& phone, const SessionData& session,
-    const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
+    const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
         //phoneNumber: '+3726234566'
         //nationalIdentityNumber: '38412319871'
@@ -1288,14 +1404,48 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     result_t result = showFeedback(fb);
     if (result != OK) return result;
 
+    // The confirmation text shown on the user's device (displayText).
+    // Fall back to the generic prompt when no text was configured.
+    const std::string display_text = text.empty() ? std::string(CDOC2_DEFAULT_DISPLAY_TEXT) : text;
+    // Choose the encoding: GSM-7 when the text is fully representable in
+    // the GSM 03.38 alphabet, UCS-2 otherwise. Per the MID API the field
+    // is limited to 100 characters in GSM-7 (of which at most 5 from the
+    // extension table) or 50 characters in UCS-2.
+    size_t n_chars = 0, n_ext = 0;
+    bool gsm7 = true, bmp = true;
+    result = classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) return result;
+    const char *text_format;
+    if (gsm7) {
+        if (n_chars > 100 || n_ext > 5) {
+            error = FORMAT("Display text too long for GSM-7 ({} characters, {} extension)", n_chars, n_ext);
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        text_format = "GSM-7";
+    } else {
+        if (!bmp) {
+            // UCS-2 cannot represent codepoints above U+FFFF.
+            error = "Display text contains characters not representable in UCS-2";
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        if (n_chars > 50) {
+            error = FORMAT("Display text too long for UCS-2 ({} characters, max 50)", n_chars);
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        text_format = "UCS-2";
+    }
+
     picojson::object qobj = {
         {"phoneNumber", picojson::value(phone)},
         {"nationalIdentityNumber", picojson::value(id_num)},
         {"hash", picojson::value(toBase64(digest))},
         {"hashType", picojson::value(std::string(algo_name))},
         {"language", picojson::value("ENG")},
-        {"displayText", picojson::value("Tahad dekryptida?")},
-        {"displayTextFormat", picojson::value("GSM-7")}
+        {"displayText", picojson::value(display_text)},
+        {"displayTextFormat", picojson::value(text_format)}
     };
     picojson::value query = picojson::value(qobj);
     LOG_DBG("JSON:{}", query.serialize());

@@ -65,6 +65,13 @@ struct CDOC_EXPORT Configuration {
      * @brief Mobile ID phone number
      */
     static constexpr char const *PHONE_NUMBER = "PHONE_NUMBER";
+    /**
+     * @brief Text shown on the user's device in SID/MID confirmation dialogs
+     *
+     * Maps to the Smart-ID displayText200 interaction field and the
+     * Mobile-ID displayText field.
+     */
+    static constexpr char const *DISPLAY_TEXT = "DISPLAY_TEXT";
 #endif
     /**
      * @brief Maximum decompressed payload size for CDoc1 zlib content (bytes).

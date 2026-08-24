@@ -379,13 +379,15 @@ struct CDOC_EXPORT NetworkBackend {
      * @param url SmartID gateway base URL
      * @param session session data (token and certificate)
      * @param rcpt_id recipient id (etsi/PNOEE-XYZXYZXYZXY)
+     * @param text the text shown on the user's device (displayText200,
+     *             max 200 characters)
      * @param digest digest to sign
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
     result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
         const std::string& url, const SessionData& session,
-        const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
+        const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 
     /**
      * @brief Sign digest with Mobile ID authentication key
@@ -396,13 +398,15 @@ struct CDOC_EXPORT NetworkBackend {
      * @param phone recipient's phone number
      * @param session session data (token and certificate)
      * @param rcpt_id recipient id (etsi/PNOEE-XYZXYZXYZXY)
+     * @param text the text shown on the user's device (displayText,
+     *             max 100 characters in GSM-7 or 50 in UCS-2 encoding)
      * @param digest digest to sign
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
     result_t signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
         const std::string& url, const std::string& phone, const SessionData& session,
-        const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
+        const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 #endif
 };
 
