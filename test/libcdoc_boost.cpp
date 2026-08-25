@@ -2091,6 +2091,111 @@ BOOST_AUTO_TEST_CASE(ShareUrlEncodesUntrustedParts)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// Unit tests for the SID/MID display-text helpers (decodeUtf8Char,
+// gsm7CharClass, classifyDisplayText) in Utils.h.
+BOOST_AUTO_TEST_SUITE(DisplayTextClassification)
+
+BOOST_AUTO_TEST_CASE(Utf8Decoding)
+{
+    size_t pos = 0;
+    uint32_t cp = 0;
+    // ASCII
+    BOOST_CHECK(libcdoc::decodeUtf8Char("A", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x41);
+    BOOST_CHECK_EQUAL(pos, 1u);
+    // 2-byte: õ (U+00F5)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xC3\xB5", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0xF5);
+    BOOST_CHECK_EQUAL(pos, 2u);
+    // 3-byte: € (U+20AC)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xE2\x82\xAC", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x20AC);
+    BOOST_CHECK_EQUAL(pos, 3u);
+    // 4-byte: 😀 (U+1F600)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xF0\x9F\x98\x80", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x1F600);
+    BOOST_CHECK_EQUAL(pos, 4u);
+    // Malformed: lone continuation byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\x80", pos, cp));
+    // Malformed: truncated multi-byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\xC3", pos, cp));
+    // Malformed: invalid lead byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\xFE", pos, cp));
+}
+
+BOOST_AUTO_TEST_CASE(Gsm7Classification)
+{
+    // Basic charset
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('A'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('z'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('0'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(' '), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00E4), 1);  // ä
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00F6), 1);  // ö
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00FC), 1);  // ü
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00C5), 1);  // Å
+    // Extension table
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x20AC), 2);  // €
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('^'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('{'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('}'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('\\'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('['), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(']'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('~'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('|'), 2);
+    // Not representable
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x60), 0);    // backtick
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00F5), 0);  // õ (Estonian)
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x1F600), 0); // emoji
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x4E2D), 0);  // CJK
+}
+
+BOOST_AUTO_TEST_CASE(ClassifyGsm7Text)
+{
+    size_t n_chars, n_ext;
+    bool gsm7, bmp;
+    // Pure ASCII
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("Hello", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 5u);
+    BOOST_CHECK_EQUAL(n_ext, 0u);
+    BOOST_CHECK(gsm7);
+    BOOST_CHECK(bmp);
+    // Estonian with ä ö ü (GSM-7 basic)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3\xA4\xC3\xB6\xC3\xBC", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 3u);
+    BOOST_CHECK(gsm7);
+    // Estonian with õ (not GSM-7)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3\xB5", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK(!gsm7);
+    BOOST_CHECK(bmp);
+    // Extension chars
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("a^b{c}", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 6u);
+    BOOST_CHECK_EQUAL(n_ext, 3u);
+    BOOST_CHECK(gsm7);
+    // Non-BMP (emoji)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xF0\x9F\x98\x80", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK(!gsm7);
+    BOOST_CHECK(!bmp);
+    // Invalid UTF-8
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\x80", n_chars, n_ext, gsm7, bmp), libcdoc::DATA_FORMAT_ERROR);
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3", n_chars, n_ext, gsm7, bmp), libcdoc::DATA_FORMAT_ERROR);
+    // Empty string
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 0u);
+    BOOST_CHECK(gsm7);
+    BOOST_CHECK(bmp);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // S11 regression: Crypto::extract must implement HKDF-Extract(salt, IKM)
 // with the arguments in (IKM, salt) order. The keyshare KEK derivation
 // depends on this convention (spec: KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i,

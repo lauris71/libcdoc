@@ -112,6 +112,20 @@ static std::string_view getMIDSIDDescription(libcdoc::result_t code);
 
 thread_local std::string error;
 
+// Normalize an HTTP header name to lowercase for case-insensitive lookup in
+// the std::map used by get()/post()/getAuthResponse()/getSignResponse().
+// HTTP/2 mandates lowercase header names; HTTP/1.1 servers vary. All
+// response headers are stored under their lowercase key, and all lookups
+// must use lowercase names.
+static std::string
+headerKey(std::string_view name)
+{
+    std::string out(name);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return out;
+}
+
 static std::string
 getJsonString(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
 {
@@ -331,8 +345,12 @@ libcdoc::NetworkBackend::get(const std::string& url, std::vector<uint8_t>& body,
         std::vector<uint8_t> cert;
         result = getClientTLSCertificate(cert);
         if (result != OK) return result;
+        // L1: an empty or unparseable client certificate must not produce a
+        // client with null credentials - reject before constructing the
+        // SSLClient.
+        if (cert.empty()) return CRYPTO_ERROR;
         std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
-        if (!cert.empty() && (!d->x509 || !d->pkey)) return CRYPTO_ERROR;
+        if (!d->x509 || !d->pkey) return CRYPTO_ERROR;
 
         httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
         if (result = applySSLTimeout(cli, this); result != OK) return result;
@@ -350,7 +368,7 @@ libcdoc::NetworkBackend::get(const std::string& url, std::vector<uint8_t>& body,
 
     headers.clear();
     for (const auto& hdr : rsp.headers) {
-        headers.insert({hdr.first, hdr.second});
+        headers.insert({headerKey(hdr.first), hdr.second});
     }
     body.assign(rsp.body.begin(), rsp.body.end());
 
@@ -375,8 +393,12 @@ libcdoc::NetworkBackend::post(const std::string& url, std::vector<uint8_t>& body
         std::vector<uint8_t> cert;
         result = getClientTLSCertificate(cert);
         if (result != OK) return result;
+        // L1: an empty or unparseable client certificate must not produce a
+        // client with null credentials - reject before constructing the
+        // SSLClient.
+        if (cert.empty()) return CRYPTO_ERROR;
         std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
-        if (!cert.empty() && (!d->x509 || !d->pkey)) return CRYPTO_ERROR;
+        if (!d->x509 || !d->pkey) return CRYPTO_ERROR;
 
         httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
         if (result = applySSLTimeout(cli, this); result != OK) return result;
@@ -394,7 +416,7 @@ libcdoc::NetworkBackend::post(const std::string& url, std::vector<uint8_t>& body
 
     headers.clear();
     for (const auto& hdr : rsp.headers) {
-        headers.insert({hdr.first, hdr.second});
+        headers.insert({headerKey(hdr.first), hdr.second});
     }
     body.assign(rsp.body.begin(), rsp.body.end());
 
@@ -425,7 +447,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     if (result != libcdoc::OK) return result;
 
     std::string location;
-    if (auto it = headers.find("Location"); it != headers.end())
+    if (auto it = headers.find("location"); it != headers.end())
         location = it->second;
     if (location.empty()) {
         error = FORMAT("No Location header in response");
@@ -590,102 +612,6 @@ hashAlgorithmToMidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
     return {};
 }
 
-// Decode the next UTF-8 codepoint from sv at pos, advancing pos past it.
-// Returns false on malformed input (bad continuation bytes, truncated
-// sequence, invalid lead byte). Overlong encodings and surrogates are not
-// specially rejected - the input is a localised UI string from
-// configuration, not a security boundary.
-static bool
-decodeUtf8Char(std::string_view sv, size_t& pos, uint32_t& cp) noexcept
-{
-    uint8_t c = uint8_t(sv[pos]);
-    if (c < 0x80) {
-        cp = c;
-        pos += 1;
-        return true;
-    }
-    size_t extra;
-    uint32_t val;
-    if ((c & 0xE0) == 0xC0) { extra = 1; val = c & 0x1F; }
-    else if ((c & 0xF0) == 0xE0) { extra = 2; val = c & 0x0F; }
-    else if ((c & 0xF8) == 0xF0) { extra = 3; val = c & 0x07; }
-    else return false;
-    if (pos + extra >= sv.size()) return false;
-    for (size_t i = 1; i <= extra; i++) {
-        uint8_t cc = uint8_t(sv[pos + i]);
-        if ((cc & 0xC0) != 0x80) return false;
-        val = (val << 6) | (cc & 0x3F);
-    }
-    cp = val;
-    pos += extra + 1;
-    return true;
-}
-
-// Classify a Unicode codepoint against the GSM 03.38 alphabet used by the
-// Mobile-ID displayText field:
-//   0 - not representable in GSM-7
-//   1 - GSM-7 basic charset (1 septet)
-//   2 - GSM-7 extension table (2 septets)
-static constexpr int
-gsm7CharClass(uint32_t cp) noexcept
-{
-    switch (cp) {
-    // Extension table: ^ { } \ [ ] ~ | € and FF (page break)
-    case 0x005E: case 0x007B: case 0x007D: case 0x005C: case 0x005B:
-    case 0x005D: case 0x007E: case 0x007C: case 0x20AC: case 0x000C:
-        return 2;
-    default:
-        break;
-    }
-    if (cp == 0x60) return 0;                 // '`' has no GSM-7 mapping
-    if (cp >= 0x20 && cp <= 0x7E) return 1;   // printable ASCII is in the basic set
-    switch (cp) {
-    case 0x000A: case 0x000D: case 0x001B:     // LF, CR, ESC
-    case 0x00A1: case 0x00A3: case 0x00A4: case 0x00A5: case 0x00A7: case 0x00BF:
-    case 0x00C4: case 0x00C5: case 0x00C6: case 0x00C7: case 0x00C9:
-    case 0x00D1: case 0x00D6: case 0x00D8: case 0x00DC: case 0x00DF:
-    case 0x00E0: case 0x00E4: case 0x00E5: case 0x00E6: case 0x00E8:
-    case 0x00E9: case 0x00EC: case 0x00F1: case 0x00F2: case 0x00F6:
-    case 0x00F8: case 0x00F9: case 0x00FC:
-    case 0x0393: case 0x0394: case 0x0398: case 0x039B: case 0x039E:
-    case 0x03A0: case 0x03A3: case 0x03A6: case 0x03A8: case 0x03A9:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-// Validate and classify the SID/MID display text. On success returns OK and
-// sets n_chars (Unicode codepoints), n_ext (chars from the GSM-7 extension
-// table), gsm7 (true if the whole text is GSM-7 representable) and bmp
-// (true if all codepoints fit in the Basic Multilingual Plane, i.e. are
-// representable in UCS-2).
-static libcdoc::result_t
-classifyDisplayText(std::string_view utf8, size_t& n_chars, size_t& n_ext, bool& gsm7, bool& bmp)
-{
-    n_chars = 0;
-    n_ext = 0;
-    gsm7 = true;
-    bmp = true;
-    for (size_t pos = 0; pos < utf8.size();) {
-        uint32_t cp = 0;
-        if (!decodeUtf8Char(utf8, pos, cp)) {
-            error = "Display text is not valid UTF-8";
-            LOG_WARN("{}", error);
-            return libcdoc::DATA_FORMAT_ERROR;
-        }
-        n_chars++;
-        if (cp > 0xFFFF) bmp = false;
-        switch (gsm7CharClass(cp)) {
-        case 2: n_ext++; break;
-        case 0: gsm7 = false; break;
-        default: break;
-        }
-    }
-    return libcdoc::OK;
-}
-
-
 libcdoc::result_t
 libcdoc::NetworkBackend::getAuthResponse(const std::string& url, std::vector<uint8_t>& body,
     std::map<std::string, std::string>& headers)
@@ -717,7 +643,11 @@ libcdoc::NetworkBackend::getAuthResponse(const std::string& url, std::vector<uin
         error = FORMAT("No Location header in response");
         return NETWORK_ERROR;
     }
-    constexpr std::string_view prefix = "/auth/status/";
+    // M3: the Location header path includes the server base path (from the
+    // configured URL), so prefix-check against path + "/auth/status/" rather
+    // than a hardcoded root-relative path. parseURL strips the trailing '/'
+    // from path, so path + "/auth/status/" is always well-formed.
+    const std::string prefix = path + "/auth/status/";
     if (location.compare(0, prefix.size(), prefix) != 0) {
         error = FORMAT("Unexpected Location header value");
         return NETWORK_ERROR;
@@ -806,7 +736,7 @@ libcdoc::NetworkBackend::getAuthResponse(const std::string& url, std::vector<uin
         body.assign(poll_rsp.body.cbegin(), poll_rsp.body.cend());
         headers.clear();
         for (const auto& h : poll_rsp.headers) {
-            headers.insert({h.first, h.second});
+            headers.insert({headerKey(h.first), h.second});
         }
         error = {};
         return OK;
@@ -909,7 +839,7 @@ libcdoc::NetworkBackend::getSignResponse(const std::string& url, const std::stri
         body.assign(poll_rsp.body.cbegin(), poll_rsp.body.cend());
         headers.clear();
         for (const auto& h : poll_rsp.headers) {
-            headers.insert({h.first, h.second});
+            headers.insert({headerKey(h.first), h.second});
         }
         error = {};
         return OK;
@@ -941,7 +871,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     if (result != libcdoc::OK) return result;
 
     std::string location;
-    if (auto it = headers.find("Location"); it != headers.end())
+    if (auto it = headers.find("location"); it != headers.end())
         location = it->second;
     if (location.empty()) {
         error = FORMAT("No Location header in response");
@@ -1031,11 +961,11 @@ libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std
     std::string aud = parts[1];
     for (size_t i = 2; i < parts.size(); i++) {
         auto v = parts[i];
-        LOG_DBG("Session token part {} ({}) : {}", i, v.size(), v);
-        if (i > 0) {
-            std::vector<uint8_t> decoded_part = fromBase64URL(v);
-            LOG_DBG("Decoded part {} ({}): {}", i, decoded_part.size(), std::string(decoded_part.begin(), decoded_part.end()));
-        }
+        // L2: session token disclosures are session-scoped credentials
+        // (they authorize specific share servers) - trace level only.
+        LOG_TRACE("Session token part {} ({}) : {}", i, v.size(), v);
+        std::vector<uint8_t> decoded_part = fromBase64URL(v);
+        LOG_TRACE("Decoded part {} ({}): {}", i, decoded_part.size(), std::string(decoded_part.begin(), decoded_part.end()));
     }
 
     auto decoded = decodeTicket(jwt);
@@ -1222,8 +1152,12 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     // displayText200 allows at most 200 characters.
     size_t n_chars = 0, n_ext = 0;
     bool gsm7 = true, bmp = true;
-    result_t result = classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
-    if (result != OK) return result;
+    result_t result = libcdoc::classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) {
+        error = "Display text is not valid UTF-8";
+        LOG_WARN("{}", error);
+        return result;
+    }
     if (n_chars > 200) {
         error = FORMAT("Display text too long ({} characters, max 200)", n_chars);
         LOG_WARN("{}", error);
@@ -1413,8 +1347,12 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     // extension table) or 50 characters in UCS-2.
     size_t n_chars = 0, n_ext = 0;
     bool gsm7 = true, bmp = true;
-    result = classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
-    if (result != OK) return result;
+    result = libcdoc::classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) {
+        error = "Display text is not valid UTF-8";
+        LOG_WARN("{}", error);
+        return result;
+    }
     const char *text_format;
     if (gsm7) {
         if (n_chars > 100 || n_ext > 5) {
@@ -1506,8 +1444,8 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     };
     params[X_RP_SIGNED_HASH] = get_hdr("x-rp-signed-hash");
     params[X_RP_NAME] = get_hdr("x-rp-name");
-    params[HDR_SIGNATURE_INPUT] = get_hdr("Signature-Input");
-    params[HDR_SIGNATURE] = get_hdr("Signature");
+    params[HDR_SIGNATURE_INPUT] = get_hdr("signature-input");
+    params[HDR_SIGNATURE] = get_hdr("signature");
 
     LOG_DBG("x-rp-signed-hash: {}", params[X_RP_SIGNED_HASH]);
     LOG_DBG("x-rp-name: {}", params[X_RP_NAME]);

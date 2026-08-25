@@ -42,9 +42,6 @@
 #include <openssl/core_names.h>
 #include <openssl/params.h>
 
-#if OPENSSL_VERSION_NUMBER >= 0x30200000L
-#endif
-
 #include <array>
 #include <chrono>
 #include <cstring>

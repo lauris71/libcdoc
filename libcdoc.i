@@ -66,13 +66,12 @@
 
 %ignore libcdoc::Configuration::KEYSERVER_SEND_URL;
 %ignore libcdoc::Configuration::KEYSERVER_FETCH_URL;
+%ignore libcdoc::Configuration::AUTH_SERVER;
+%ignore libcdoc::Configuration::RP_SERVER;
 %ignore libcdoc::Configuration::SHARE_SERVER_URLS;
 %ignore libcdoc::Configuration::SHARE_SIGNER;
-%ignore libcdoc::Configuration::SID_DOMAIN;
-%ignore libcdoc::Configuration::MID_DOMAIN;
-%ignore libcdoc::Configuration::BASE_URL;
-%ignore libcdoc::Configuration::RP_UUID;
-%ignore libcdoc::Configuration::RP_NAME;
+%ignore libcdoc::Configuration::SHARE_SIGNER_SID;
+%ignore libcdoc::Configuration::SHARE_SIGNER_MID;
 %ignore libcdoc::Configuration::PHONE_NUMBER;
 %ignore libcdoc::Configuration::DISPLAY_TEXT;
 %ignore libcdoc::Configuration::CDOC1_MAX_DECOMPRESSED_SIZE;
@@ -742,14 +741,14 @@ static jobject SWIG_StringMapToJavaMap(JNIEnv *jenv, const std::map<std::string,
 %typemap(javacode) libcdoc::Configuration %{
     public static final String KEYSERVER_SEND_URL = "KEYSERVER_SEND_URL";
     public static final String KEYSERVER_FETCH_URL = "KEYSERVER_FETCH_URL";
+    public static final String AUTH_SERVER = "AUTH_SERVER";
+    public static final String RP_SERVER = "RP_SERVER";
     public static final String SHARE_SERVER_URLS = "SHARE_SERVER_URLS";
     public static final String SHARE_SIGNER = "SHARE_SIGNER";
-    public static final String SID_DOMAIN = "SMART_ID";
-    public static final String MID_DOMAIN = "MOBILE_ID";
-    public static final String BASE_URL = "BASE_URL";
-    public static final String RP_UUID = "RP_UUID";
-    public static final String RP_NAME = "RP_NAME";
+    public static final String SHARE_SIGNER_SID = "SMART_ID";
+    public static final String SHARE_SIGNER_MID = "MOBILE_ID";
     public static final String PHONE_NUMBER = "PHONE_NUMBER";
+    public static final String DISPLAY_TEXT = "DISPLAY_TEXT";
     public static final String CDOC1_MAX_DECOMPRESSED_SIZE = "CDOC1_MAX_DECOMPRESSED_SIZE";
     public static final String CDOC2_MAX_DECOMPRESSED_SIZE = "CDOC2_MAX_DECOMPRESSED_SIZE";
 %}

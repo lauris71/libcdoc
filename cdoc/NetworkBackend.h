@@ -288,8 +288,10 @@ struct CDOC_EXPORT NetworkBackend {
      * @param url The auth server base URL
      * @param body Input: pre-constructed request body.
      *             Output: final response body (COMPLETE state).
+     *             On error the value may or may not have changed.
      * @param headers Input: request headers (may be empty).
      *                Output: final response headers.
+     *                On error the value may or may not have changed.
      * @return Error code or OK
      */
     virtual result_t getAuthResponse(const std::string& url, std::vector<uint8_t>& body,
@@ -313,8 +315,10 @@ struct CDOC_EXPORT NetworkBackend {
      * @param post_path Path for the initial POST (e.g. "/sid/authenticate")
      * @param body Input: pre-constructed request body.
      *             Output: final response body (COMPLETE state).
+     *             On error the value may or may not have changed.
      * @param headers Input: headers for the initial POST (session token etc.).
      *                Output: final response headers.
+     *                On error the value may or may not have changed.
      * @param poll_path_prefix Path prefix for polling (e.g. "/sid/session/")
      * @return Error code or OK
      */
