@@ -39,9 +39,10 @@
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 
-#if OPENSSL_VERSION_NUMBER >= 0x30200000L
 #include <openssl/core_names.h>
 #include <openssl/params.h>
+
+#if OPENSSL_VERSION_NUMBER >= 0x30200000L
 #endif
 
 #include <array>
