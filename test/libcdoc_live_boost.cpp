@@ -54,11 +54,12 @@ namespace utf = boost::unit_test;
 
 namespace {
 
-// The RIA test servers (default). The dev environment can be selected via
-// environment variables, e.g.:
-//   LIBCDOC_LIVE_SHARE_SERVERS="https://cdoc2-shares.dev.riaint.ee,https://cdoc2-sharesexternal.dev.riaint.ee" \
-//   LIBCDOC_LIVE_AUTH_SERVER=https://cdoc2-auth.dev.riaint.ee \
-//   LIBCDOC_LIVE_RP_SERVER=https://cdoc2-rp.dev.riaint.ee \
+// The RIA dev servers (default - the test environment's MID endpoint is
+// currently broken). The test environment can be selected via environment
+// variables, e.g.:
+//   LIBCDOC_LIVE_SHARE_SERVERS="https://cdoc2-shares.test.riaint.ee,https://cdoc2-sharesexternal.test.riaint.ee" \
+//   LIBCDOC_LIVE_AUTH_SERVER=https://cdoc2-auth.test.riaint.ee \
+//   LIBCDOC_LIVE_RP_SERVER=https://cdoc2-rp.test.riaint.ee \
 //   LIBCDOC_LIVE_TESTS=1 ./unittests --run_test=LiveSidMid
 std::string
 envOr(const char *name, const char *fallback)
@@ -68,9 +69,9 @@ envOr(const char *name, const char *fallback)
 }
 
 const std::string SHARE_SERVERS = envOr("LIBCDOC_LIVE_SHARE_SERVERS",
-    "https://cdoc2-shares.test.riaint.ee,https://cdoc2-sharesexternal.test.riaint.ee");
-const std::string AUTH_SERVER = envOr("LIBCDOC_LIVE_AUTH_SERVER", "https://cdoc2-auth.test.riaint.ee");
-const std::string RP_SERVER = envOr("LIBCDOC_LIVE_RP_SERVER", "https://cdoc2-rp.test.riaint.ee");
+    "https://cdoc2-shares.dev.riaint.ee,https://cdoc2-sharesexternal.dev.riaint.ee");
+const std::string AUTH_SERVER = envOr("LIBCDOC_LIVE_AUTH_SERVER", "https://cdoc2-auth.dev.riaint.ee");
+const std::string RP_SERVER = envOr("LIBCDOC_LIVE_RP_SERVER", "https://cdoc2-rp.dev.riaint.ee");
 
 constexpr const char *SERVER_ID = "test-shares";
 
