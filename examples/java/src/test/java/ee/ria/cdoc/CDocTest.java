@@ -108,6 +108,83 @@ public class CDocTest {
         assertEquals(CDoc.OK, rdr.finishDecryption());
     }
 
+    /**
+     * Labels and file names with characters that JNI's modified UTF-8
+     * (CESU-8) cannot represent as standard UTF-8 must round-trip intact:
+     * supplementary characters (above U+FFFF) and characters needing
+     * multi-byte encoding.
+     */
+    @Test
+    void utf8Strings() throws Exception {
+        // Contains supplementary characters (𝔘𝕟𝕚, 🚀) and BMP multi-byte
+        // characters (õ, ü, é)
+        final String label = "Jõgeva 𝔘𝕟𝕚 🚀 üé";
+        final String fileName = "põder-🚀-文件.txt";
+        final String password = "pässw0rd-🔑";
+
+        Recipient rcpt = Recipient.makeSymmetric(label, 1000);
+        assertTrue(rcpt.validate());
+
+        File container = new File(tempDir, "utf8.cdoc2");
+        TestCrypto crypto = new TestCrypto(password);
+        CDocWriter wrtr = CDocWriter.createWriter(2, container.getAbsolutePath(), null, crypto, null);
+        assertEquals(CDoc.OK, wrtr.addRecipient(rcpt));
+        assertEquals(CDoc.OK, wrtr.beginEncryption());
+        byte[] payload = {9, 8, 7};
+        assertEquals(CDoc.OK, wrtr.addFile(fileName, payload.length));
+        assertEquals(CDoc.OK, wrtr.writeData(payload));
+        assertEquals(CDoc.OK, wrtr.finishEncryption());
+
+        // The label must be stored in the container as standard UTF-8.
+        // Under JNI modified UTF-8, '🚀' would be stored as the 6-byte
+        // surrogate pair ED A0 BD ED B2 80 instead of F0 9F 9A 80.
+        byte[] containerBytes = java.nio.file.Files.readAllBytes(container.toPath());
+        byte[] labelUtf8 = label.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(containsSubarray(containerBytes, labelUtf8),
+                "container should contain the standard UTF-8 encoding of the label");
+
+        // The label and file name must come back exactly as written
+        CDocReader rdr = CDocReader.createReader(container.getAbsolutePath(), null, crypto, null);
+        LockVector locks = rdr.getLocks();
+        assertEquals(1, locks.size());
+        assertEquals(label, locks.get(0).getLabel());
+
+        byte[] fmk = rdr.getFMK(0);
+        assertEquals(CDoc.OK, rdr.beginDecryption(fmk));
+        FileInfo fi = new FileInfo();
+        assertEquals(CDoc.OK, rdr.nextFile(fi));
+        assertEquals(fileName, fi.getName());
+        byte[] data = new byte[(int) fi.getSize()];
+        assertEquals(payload.length, rdr.readData(data));
+        assertArrayEquals(payload, data);
+        assertEquals(CDoc.END_OF_STREAM, rdr.nextFile(fi));
+        assertEquals(CDoc.OK, rdr.finishDecryption());
+
+        // Labels parsed back into a Map must also carry standard UTF-8.
+        // Use an auto-generated (machine-readable) label for parseLabel:
+        // a recipient with an explicit user label returns it verbatim.
+        Recipient autoRcpt = Recipient.makeSymmetric("", 1000);
+        autoRcpt.setLabelValue("label", label);
+        String generated = autoRcpt.getLabel(Map.of());
+        Map<String, String> parsed = Lock.parseLabel(generated);
+        assertEquals(label, parsed.get("label"));
+
+        // Extra map values also round-trip as standard UTF-8
+        String withExtra = autoRcpt.getLabel(Map.of("file", fileName));
+        assertEquals(fileName, Lock.parseLabel(withExtra).get("file"));
+    }
+
+    private static boolean containsSubarray(byte[] haystack, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= haystack.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
+    }
+
     private static class TestCrypto extends CryptoBackend {
         private final byte[] secret;
 

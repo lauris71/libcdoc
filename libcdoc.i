@@ -314,7 +314,9 @@
 
 #ifdef SWIGJAVA
 %include "arrays_java.i"
+%include "std_string_utf8.i"
 %include "std_string_view.i"
+%include "std_map.i"
 %include "std_map_string_view.i"
 %include "enums.swg"
 %javaconst(1);
@@ -497,33 +499,6 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %typemap(javain) std::vector<std::string>& "$javainput"
 
 //
-// std::map<std::string, std::string> -> java.util.Map<String,String>
-//
-
-%typemap(out) std::map<std::string, std::string> %{
-    jclass map_class = jenv->FindClass("java/util/Hashtable");
-    std::cerr << "Map class:" << (void *) map_class << std::endl;
-    jmethodID mid_new = jenv->GetMethodID(map_class, "<init>", "()V");
-    std::cerr << "Mid_new:" << mid_new << std::endl;
-    jmethodID mid_put = jenv->GetMethodID(map_class, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    std::cerr << "Mid_put:" << mid_put << std::endl;
-    jobject map = jenv->NewObject(map_class, mid_new);
-    std::cerr << "Map:" << (void *) map << std::endl;
-    for(auto pair : *(&result)) {
-        jstring key = jenv->NewStringUTF(pair.first.c_str());
-        jstring val = jenv->NewStringUTF(pair.second.c_str());
-        jenv->CallObjectMethod(map, mid_put, key, val);
-    }
-    jresult = map;
-%}
-%typemap(jtype) std::map<std::string, std::string> "java.util.Map<String,String>"
-%typemap(jstype) std::map<std::string, std::string> "java.util.Map<String,String>"
-%typemap(jni) std::map<std::string, std::string> "jobject"
-%typemap(javaout) std::map<std::string, std::string> {
-    return $jnicall;
-}
-
-//
 // std::vector<std::vector<uint8_t>> <- CertificateList
 //
 
@@ -569,35 +544,8 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     $javacall
 %}
 
-//
-// std::string_view -> String
-//
-
-%typemap(in) std::string_view %{
-    const char *$1_utf8 = jenv->GetStringUTFChars($input, nullptr);
-    $1 = $1_utf8;
-%}
-%typemap(freearg) std::string_view %{
-    jenv->ReleaseStringUTFChars($input, $1_utf8);
-%}
-//%typemap(out) std::string_view %{
-//    std::string $1_str(*(&result));
-//    jresult = jenv->NewStringUtf($1_str.c_str());
-//%}
-%typemap(jtype) std::string_view "String"
-%typemap(jstype) std::string_view "String"
-%typemap(jni) std::string_view "jstring"
-%typemap(javain) std::string_view "$javainput"
-//%typemap(javaout) std::string_view %{
-//    return $jnicall;
-//%}
-%typemap(directorin,descriptor="Ljava/lang/String;") std::string_view %{
-    std::string $1_str($1);
-    $input = jenv->NewStringUTF($1_str.c_str());
-%}
-// No return of std::string_view so no directorout
-%typemap(javadirectorin) std::string_view "$jniinput"
-// No return of std::string_view so no javadirectorout
+// std::string_view <-> String typemaps are in std_string_view.i
+// (standard UTF-8 via byte[] transport, see std_string_utf8.i)
 
 // CDocReader
 
