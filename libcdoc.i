@@ -148,7 +148,11 @@
 
 %ignore libcdoc::Recipient::rcpt_key;
 %ignore libcdoc::Recipient::cert;
+// getLabel(std::map<std::string_view, std::string_view>) requires the
+// Java typemaps from std_map_string_view.i; other languages keep it ignored
+#ifndef SWIGJAVA
 %ignore libcdoc::Recipient::getLabel;
+#endif
 %extend libcdoc::Recipient {
     std::vector<uint8_t> getRcptKey() {
         return $self->rcpt_key;
@@ -311,6 +315,7 @@
 #ifdef SWIGJAVA
 %include "arrays_java.i"
 %include "std_string_view.i"
+%include "std_map_string_view.i"
 %include "enums.swg"
 %javaconst(1);
 

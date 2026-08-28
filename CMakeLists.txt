@@ -69,6 +69,11 @@ if(LIBCDOC_WITH_DOCS)
 endif()
 
 add_subdirectory(cdoc)
+# Binary dir of the cdoc sub-build; used by examples/CMakeLists.txt to locate
+# the SWIG-generated Java bindings. Correct also when libcdoc is included as
+# a subproject of a larger build.
+set(CDOC_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/cdoc)
+add_subdirectory(examples)
 
 find_package(Boost COMPONENTS unit_test_framework QUIET)
 if (TARGET Boost::unit_test_framework)

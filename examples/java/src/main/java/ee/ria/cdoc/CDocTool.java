@@ -40,7 +40,7 @@ public class CDocTool {
         System.out.println("Starting app...");
 
         LogLevel log_level = LogLevel.LEVEL_INFO;
-        String library = "../../build/macos/cdoc/libcdoc_javad.jnilib";
+        String library = null;
         Action action = Action.INVALID;
         ArrayList<String> files = new ArrayList<>();
         int version = 2;
@@ -133,8 +133,7 @@ public class CDocTool {
             }
         }
 
-        File lib = new File(library);
-        System.load(lib.getAbsolutePath());
+        loadLibrary(library);
         System.out.println("Library loaded");
 
         logger =  new JavaLogger();
@@ -169,6 +168,98 @@ public class CDocTool {
             case TEST:
                 test();
                 break;
+        }
+    }
+
+    // Library file names produced by the CMake cdoc_java target: platform
+    // suffix (jnilib/dylib/so/dll), with and without the debug postfix 'd'
+    // (CMAKE_DEBUG_POSTFIX).
+    private static final String[] JNI_LIB_NAMES = {
+        "libcdoc_java.jnilib", "libcdoc_javad.jnilib",
+        "libcdoc_java.dylib", "libcdoc_javad.dylib",
+        "libcdoc_java.so", "libcdoc_javad.so",
+        "cdoc_java.dll", "cdoc_javad.dll"
+    };
+
+    private static String findLibraryInDir(File dir) {
+        for (String name : JNI_LIB_NAMES) {
+            File f = new File(dir, name);
+            if (f.isFile()) {
+                return f.getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Locate and load the JNI library built by the project's CMake build.
+     *
+     * Resolution order:
+     *   1. --library command line argument (explicit file)
+     *   2. -Dcdoc.library=<file> system property
+     *   3. jni.properties resource baked into the jar by Gradle
+     *      (records the JNI library directory of the build)
+     *   4. Well-known CMake build directories relative to the working dir
+     *   5. java.library.path (System.loadLibrary)
+     */
+    static void loadLibrary(String library) {
+        if (library != null) {
+            System.load(new File(library).getAbsolutePath());
+            return;
+        }
+        String prop = System.getProperty("cdoc.library");
+        if (prop != null) {
+            System.load(new File(prop).getAbsolutePath());
+            return;
+        }
+        try (InputStream is = CDocTool.class.getResourceAsStream("jni.properties")) {
+            if (is != null) {
+                java.util.Properties props = new java.util.Properties();
+                props.load(is);
+                String dir = props.getProperty("jniLibDir");
+                if (dir != null) {
+                    String lib = findLibraryInDir(new File(dir));
+                    if (lib != null) {
+                        System.load(lib);
+                        return;
+                    }
+                }
+            }
+        } catch (IOException exc) {
+            // Fall through to directory scan
+        }
+        String[] candidates = {
+            "../../build/macos/cdoc",
+            "../../build/macos-debug/cdoc",
+            "../../build/ninja/cdoc",
+            "../../build/linux/cdoc",
+            "../../build/cdoc",
+            "../../../build/cdoc"
+        };
+        for (String d : candidates) {
+            String lib = findLibraryInDir(new File(d));
+            if (lib != null) {
+                System.load(lib);
+                return;
+            }
+        }
+        // Glob fallback: ../../build/<preset>/cdoc
+        File[] presets = new File("../../build").listFiles();
+        if (presets != null) {
+            java.util.Arrays.sort(presets);
+            for (File p : presets) {
+                String lib = findLibraryInDir(new File(p, "cdoc"));
+                if (lib != null) {
+                    System.load(lib);
+                    return;
+                }
+            }
+        }
+        // Last resort: search java.library.path
+        try {
+            System.loadLibrary("cdoc_java");
+        } catch (UnsatisfiedLinkError err) {
+            System.loadLibrary("cdoc_javad"); // debug build
         }
     }
 
@@ -269,7 +360,17 @@ public class CDocTool {
         NetworkBackend network = new ToolNetwork();
         CDocWriter wrtr = CDocWriter.createWriter(2, file, conf, null, network);
         try {
-            Recipient rcpt = Recipient.makeShare(label, server_id, "PNOEE-" + personal_code);
+            // Recipient.makeShare exists only when libcdoc is built with HAS_KEYSHARES;
+            // invoke it reflectively so this example compiles against plain builds too.
+            Recipient rcpt;
+            try {
+                java.lang.reflect.Method m = Recipient.class.getMethod("makeShare", String.class, String.class, String.class);
+                rcpt = (Recipient) m.invoke(null, label, server_id, "PNOEE-" + personal_code);
+            } catch (NoSuchMethodException e) {
+                throw new UnsupportedOperationException("libcdoc was built without keyshare (HAS_KEYSHARES) support");
+            } catch (IllegalAccessException | java.lang.reflect.InvocationTargetException e) {
+                throw new RuntimeException("Failed to invoke Recipient.makeShare", e);
+            }
             long result = wrtr.addRecipient(rcpt);
             result = wrtr.beginEncryption();
             System.out.format("beginEncryption: %d\n", result);

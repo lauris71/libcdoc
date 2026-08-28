@@ -1,17 +1,208 @@
 plugins {
     id 'java'
 }
+
 group 'ee.ria'
-sourceSets.main.java.srcDirs += ['../../build/macos/cdoc/java', '../../../../build/client/libcdoc/cdoc/java']
+
+/*
+ * Robust build for the CDocTool Java example.
+ *
+ * The SWIG-generated Java bindings are produced by the CMake build of the
+ * parent project and are not checked into the repository. This build script
+ * locates them using, in order of precedence:
+ *
+ *   1. -PswigJavaDir=<path>        (Gradle project property)
+ *   2. LIBCDOC_SWIG_JAVA_DIR env   (environment variable)
+ *   3. Auto-detection              (scans well-known CMake build directories)
+ *
+ * The native JNI library directory (used by the 'run' task) can be set with:
+ *
+ *   1. -PjniLibDir=<path>          (Gradle project property)
+ *   2. LIBCDOC_JNI_LIB_DIR env     (environment variable)
+ *   3. Auto-detection              (same scan as above)
+ */
+
+def projectDir = layout.projectDirectory.asFile
+
+static File findSwigJavaDir(File root) {
+    // Scan well-known CMake build directory layouts for the SWIG output.
+    // Paths are relative to examples/java, i.e. two levels below the
+    // libcdoc project root.
+    def candidates = [
+        '../../build/macos/cdoc/java',
+        '../../build/macos-debug/cdoc/java',
+        '../../build/ninja/cdoc/java',
+        '../../build/linux/cdoc/java',
+        '../../build/cdoc/java',
+        '../../../build/cdoc/java',
+        '../../../build/client/libcdoc/cdoc/java',
+    ]
+    for (String rel : candidates) {
+        File dir = new File(root, rel)
+        if (new File(dir, 'CDoc.java').isFile()) {
+            return dir.canonicalFile
+        }
+    }
+    // Fall back to glob over <root>/build/*/cdoc/java
+    def buildRoot = new File(root, '../../build')
+    if (buildRoot.isDirectory()) {
+        def found = buildRoot.listFiles()?.findAll { b ->
+            new File(b, 'cdoc/java/CDoc.java').isFile()
+        }
+        if (found && !found.isEmpty()) {
+            return new File(found.sort().first(), 'cdoc/java').canonicalFile
+        }
+    }
+    return null
+}
+
+static File findJniLibDir(File root) {
+    def names = ['libcdoc_java.jnilib', 'libcdoc_javad.jnilib',
+                 'libcdoc_java.so', 'libcdoc_javad.so',
+                 'cdoc_java.dll', 'cdoc_javad.dll']
+    def candidates = [
+        '../../build/macos/cdoc',
+        '../../build/macos-debug/cdoc',
+        '../../build/ninja/cdoc',
+        '../../build/linux/cdoc',
+        '../../build/cdoc',
+        '../../../build/cdoc',
+    ]
+    for (String rel : candidates) {
+        for (String name : names) {
+            if (new File(root, "$rel/$name").isFile()) {
+                return new File(root, rel).canonicalFile
+            }
+        }
+    }
+    def buildRoot = new File(root, '../../build')
+    if (buildRoot.isDirectory()) {
+        def found = buildRoot.listFiles()?.findAll { b ->
+            names.any { new File(b, "cdoc/$it").isFile() }
+        }
+        if (found && !found.isEmpty()) {
+            return new File(found.sort().first(), 'cdoc').canonicalFile
+        }
+    }
+    return null
+}
+
+File swigJavaDir = findProperty('swigJavaDir')?.with { file(it) }
+    ?: System.getenv('LIBCDOC_SWIG_JAVA_DIR')?.with { file(it) }
+    ?: findSwigJavaDir(projectDir)
+
+File jniLibDir = findProperty('jniLibDir')?.with { file(it) }
+    ?: System.getenv('LIBCDOC_JNI_LIB_DIR')?.with { file(it) }
+    ?: findJniLibDir(projectDir)
+
+if (swigJavaDir == null) {
+    throw new GradleException("""
+        |Could not locate SWIG-generated Java bindings.
+        |
+        |Build the libcdoc CMake project first (it must be configured with
+        |SWIG and Java/JNI available), then either:
+        |  * pass -PswigJavaDir=<cmake-build>/cdoc/java, or
+        |  * set LIBCDOC_SWIG_JAVA_DIR=<cmake-build>/cdoc/java
+        |
+        |Searched under: $projectDir
+        """.stripMargin())
+}
+
+if (!new File(swigJavaDir, 'CDoc.java').isFile()) {
+    throw new GradleException(
+        "swigJavaDir '$swigJavaDir' does not contain CDoc.java. " +
+        "Make sure the CMake build with SWIG/Java has been run.")
+}
+
+logger.lifecycle("Using SWIG Java sources: $swigJavaDir")
+if (jniLibDir != null) {
+    logger.lifecycle("Using JNI library directory: $jniLibDir")
+} else {
+    logger.lifecycle("JNI library directory not found - 'run' task will need -PjniLibDir")
+}
+
+// Generate ee/ria/cdoc/jni.properties with the build-time JNI library
+// directory. CDocTool reads this resource at runtime and loads the project's
+// compiled JNI library from there, so no --library flag is needed.
+def jniResourcesDir = layout.buildDirectory.dir('generated/resources/jni')
+
+tasks.register('generateJniProperties') {
+    def propsFile = jniResourcesDir.map { it.file('ee/ria/cdoc/jni.properties') }
+    inputs.property('jniLibDir', jniLibDir?.absolutePath ?: '')
+    outputs.file(propsFile)
+    doLast {
+        File f = propsFile.get().asFile
+        f.parentFile.mkdirs()
+        Properties props = new Properties()
+        if (jniLibDir != null) {
+            props.setProperty('jniLibDir', jniLibDir.absolutePath)
+        }
+        f.withOutputStream { props.store(it, 'Generated by build.gradle') }
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java', swigJavaDir.absolutePath]
+        }
+        output.dir(jniResourcesDir.get().asFile, builtBy: 'generateJniProperties')
+    }
+}
+
 java {
     targetCompatibility JavaVersion.VERSION_17
     sourceCompatibility JavaVersion.VERSION_17
 }
+
 base {
     archivesName = 'CDocTool'
 }
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Resolve the actual JNI library file (with debug postfix and platform
+// suffix) for the benefit of tests, which load it via -Dcdoc.library.
+def jniLibFile = jniLibDir == null ? null : (
+    ['libcdoc_java.jnilib', 'libcdoc_javad.jnilib',
+     'libcdoc_java.dylib', 'libcdoc_javad.dylib',
+     'libcdoc_java.so', 'libcdoc_javad.so',
+     'cdoc_java.dll', 'cdoc_javad.dll']
+        .collect { new File(jniLibDir, it) }
+        .find { it.isFile() })
+
 jar {
     manifest {
         attributes 'Main-Class': 'ee.ria.cdoc.CDocTool'
+    }
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    if (jniLibFile != null) {
+        systemProperty 'cdoc.library', jniLibFile.absolutePath
+    } else if (jniLibDir != null) {
+        systemProperty 'java.library.path', jniLibDir.absolutePath
+    }
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+    }
+}
+
+tasks.register('run', JavaExec) {
+    description = 'Runs CDocTool (requires the JNI library to be built by CMake)'
+    group = 'application'
+    mainClass = 'ee.ria.cdoc.CDocTool'
+    classpath = sourceSets.main.runtimeClasspath
+    if (jniLibDir != null) {
+        systemProperty 'java.library.path', jniLibDir.absolutePath
     }
 }
