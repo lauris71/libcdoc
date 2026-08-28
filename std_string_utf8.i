@@ -90,12 +90,9 @@ static std::string SWIG_JavaJstringToUtf8(JNIEnv *jenv, jstring jstr) {
      jenv->ReleaseByteArrayElements($input, $1_buf, JNI_ABORT);
    } %}
 
-%typemap(directorin,descriptor="[B") std::string
+%typemap(directorin,descriptor="Ljava/lang/String;") std::string
 %{ $input = jenv->NewByteArray((jsize) $1.size());
-   if ($input) {
-     jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data());
-     Swig::LocalRefGuard $1_refguard(jenv, $input);
-   } %}
+   if ($input) jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data()); %}
 
 %typemap(out) std::string
 %{ $result = jenv->NewByteArray((jsize) $1.size());
@@ -145,12 +142,9 @@ static std::string SWIG_JavaJstringToUtf8(JNIEnv *jenv, jstring jstr) {
      jenv->ReleaseByteArrayElements($input, $1_buf, JNI_ABORT);
    } %}
 
-%typemap(directorin,descriptor="[B") const std::string &
+%typemap(directorin,descriptor="Ljava/lang/String;") const std::string &
 %{ $input = jenv->NewByteArray((jsize) $1.size());
-   if ($input) {
-     jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data());
-     Swig::LocalRefGuard $1_refguard(jenv, $input);
-   } %}
+   if ($input) jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data()); %}
 
 %typemap(out) const std::string &
 %{ $result = jenv->NewByteArray((jsize) $1->size());

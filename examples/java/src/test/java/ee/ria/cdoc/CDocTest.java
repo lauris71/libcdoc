@@ -28,6 +28,34 @@ public class CDocTest {
     }
 
     /**
+     * The Logger installed via CDoc.setLogger must stay alive even when the
+     * caller drops its reference and the GC runs: the C++ side keeps only a
+     * raw pointer, so the Java binding must pin the proxy object.
+     */
+    @Test
+    void loggerSurvivesGC() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger messages = new java.util.concurrent.atomic.AtomicInteger();
+        // Install the logger and drop the reference immediately
+        CDoc.setLogger(new Logger() {
+            @Override
+            protected void logMessage(LogLevel level, String file, int line, String msg) {
+                messages.incrementAndGet();
+            }
+        });
+        CDoc.setLogLevel(LogLevel.LEVEL_DEBUG);
+
+        // Try hard to make the GC collect the logger proxy
+        for (int i = 0; i < 10; i++) {
+            System.gc();
+            System.runFinalization();
+        }
+
+        // Trigger a C++ -> Java log callback; crashes if the logger was collected
+        CDoc.log(LogLevel.LEVEL_INFO, "CDocTest", 0, "logger GC test");
+        assertTrue(messages.get() > 0, "logger callback should have been invoked after GC");
+    }
+
+    /**
      * Creates a password-based Recipient, validates it and checks the
      * automatically generated (machine-readable) lock label.
      */

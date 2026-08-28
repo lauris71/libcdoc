@@ -271,7 +271,7 @@ public class CDocTool {
         try {
             ToolConf conf = new ToolConf();
             IStreamSource src = new IStreamSource(new FileInputStream(file));
-            CDocReader rdr = CDocReader.createReader(src, false, conf, null, null);
+            CDocReader rdr = CDocReader.createReaderFromSource(src, false, conf, null, null);
 
             LockVector locks = rdr.getLocks();
             System.err.println("Num locks " + locks.size());
@@ -302,7 +302,7 @@ public class CDocTool {
 
             IStreamSource src = new IStreamSource(new FileInputStream(file));
 
-            CDocReader rdr = CDocReader.createReader(src, false, conf, crypto, null);
+            CDocReader rdr = CDocReader.createReaderFromSource(src, false, conf, crypto, null);
             System.out.format("Reader created (version %d)\n", rdr.getVersion());
 
             LockVector locks = rdr.getLocks();

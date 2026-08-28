@@ -63,12 +63,9 @@ class string_view;
      jenv->ReleaseByteArrayElements($input, $1_buf, JNI_ABORT);
    } %}
 
-%typemap(directorin,descriptor="[B") string_view
+%typemap(directorin,descriptor="Ljava/lang/String;") string_view
 %{ $input = jenv->NewByteArray((jsize) $1.size());
-   if ($input) {
-     jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data());
-     Swig::LocalRefGuard $1_refguard(jenv, $input);
-   } %}
+   if ($input) jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data()); %}
 
 %typemap(out) string_view
 %{ $result = jenv->NewByteArray((jsize) $1.size());
@@ -124,12 +121,9 @@ class string_view;
      jenv->ReleaseByteArrayElements($input, $1_buf, JNI_ABORT);
    } %}
 
-%typemap(directorin,descriptor="[B") const string_view &
-%{ $input = jenv->NewByteArray((jsize) $1.size());
-   if ($input) {
-     jenv->SetByteArrayRegion($input, 0, (jsize) $1.size(), (const jbyte *) $1.data());
-     Swig::LocalRefGuard $1_refguard(jenv, $input);
-   } %}
+%typemap(directorin,descriptor="Ljava/lang/String;") const string_view &
+%{ $input = jenv->NewByteArray((jsize) $1->size());
+   if ($input) jenv->SetByteArrayRegion($input, 0, (jsize) $1->size(), (const jbyte *) $1->data()); %}
 
 %typemap(out) const string_view &
 %{ $result = jenv->NewByteArray((jsize) $1->size());

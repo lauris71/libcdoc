@@ -321,6 +321,21 @@
 %include "enums.swg"
 %javaconst(1);
 
+// CDoc.setLogger: keep a Java reference to the Logger. The C++ side stores
+// the raw pointer in a static global without ownership, and the SWIG director
+// only holds a weak reference to the Java proxy - so without this reference
+// the GC could collect the Logger while the library still calls into it.
+%rename("setLoggerInternal") libcdoc::setLogger;
+%pragma(java) modulecode=%{
+    // Java reference pinning the Logger installed via setLogger
+    private static Logger currentLogger;
+
+    public static void setLogger(Logger logger) {
+        currentLogger = logger;
+        setLoggerInternal(logger);
+    }
+%}
+
 %typemap(javaout, throws="CDocException") libcdoc::result_t %{
 {
     long result = $jnicall;
@@ -554,6 +569,7 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     private Configuration config;
     private CryptoBackend crypto;
     private NetworkBackend network;
+    private DataSource source;
 
     public void readFile(java.io.OutputStream ofs) throws CDocException, java.io.IOException {
         byte[] buf = new byte[1024];
@@ -562,6 +578,11 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
             ofs.write(buf, 0, (int) result);
             result = readData(buf);
         }
+    }
+
+    // Called by the createReader(DataSource,...) overload to pin the source
+    void setSource(DataSource src) {
+        source = src;
     }
 %}
 
@@ -573,6 +594,30 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     rdr.config = conf;
     rdr.crypto = crypto;
     rdr.network = network;
+    return rdr;
+}
+
+// The DataSource overload of createReader is re-exposed under a distinct
+// name so that its javaout typemap can also pin the source reference (C++
+// takes ownership via take_ownership, so the Java proxy must not be GC'd
+// while the reader is alive). SWIG javaout typemaps cannot be specialized
+// by parameter types, so a separate %extend function is used.
+%ignore libcdoc::CDocReader::createReader(libcdoc::DataSource *src, bool take_ownership, libcdoc::Configuration *conf, libcdoc::CryptoBackend *crypto, libcdoc::NetworkBackend *network);
+%extend libcdoc::CDocReader {
+    static libcdoc::CDocReader *createReaderFromSource(libcdoc::DataSource *src, bool take_ownership, libcdoc::Configuration *conf, libcdoc::CryptoBackend *crypto, libcdoc::NetworkBackend *network) {
+        return libcdoc::CDocReader::createReader(src, take_ownership, conf, crypto, network);
+    }
+}
+
+%typemap(javaout) libcdoc::CDocReader * libcdoc::CDocReader::createReaderFromSource {
+    long cPtr = $jnicall;
+    if (cPtr == 0) return null;
+    CDocReader rdr = new CDocReader(cPtr, true);
+    // Set Java references
+    rdr.config = conf;
+    rdr.crypto = crypto;
+    rdr.network = network;
+    rdr.source = src;
     return rdr;
 }
 
