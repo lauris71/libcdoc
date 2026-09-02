@@ -43,22 +43,6 @@ static std::string tostring(pcxmlChar tmp)
     return result;
 }
 
-#if LIBXML_VERSION < 21300
-static xmlParserInputPtr
-nullExternalEntityLoader(const char *, const char *, xmlParserCtxtPtr)
-{
-    return nullptr;
-}
-
-struct XmlInit {
-    XmlInit() {
-        xmlSetExternalEntityLoader(nullExternalEntityLoader);
-        xmlSubstituteEntitiesDefault(0);
-    }
-};
-static XmlInit xmlInit;
-#endif
-
 XMLReader::XMLReader(libcdoc::DataSource &src)
     : d(xmlReaderForIO([](void *context, char *buffer, int len) -> int {
         auto *src = reinterpret_cast<DataSource *>(context);
