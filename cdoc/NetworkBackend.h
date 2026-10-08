@@ -234,6 +234,9 @@ struct CDOC_EXPORT NetworkBackend {
 
     /**
      * @brief sign TLS digest with client's private key
+     *
+     * An ECDSA signature is returned as r || s, an RSA signature as is. RSA keys sign with RSASSA-PSS
+     * (salt as long as the digest, MGF1 with the same hash): the connection requires TLS 1.3, which allows only PSS.
      * @param dst a destination container for signature
      * @param algorithm signing algorithm
      * @param digest data to be signed
