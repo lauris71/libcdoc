@@ -55,6 +55,7 @@ print_usage(ostream& ofs)
     ofs << "    [label]:share:ID                  - keyshares with given ID (personal code)" << endl;
     ofs << "  --v1                      - creates CDOC1 version container. Supported only for encryption with certificate." << endl;
     ofs << "  --genlabel                - Generate machine-readable label." << endl;
+    ofs << "  --allow-pathnames         - Allow full pathnames in container filenames (default: strip to basename)." << endl;
     ofs << endl;
     ofs << "cdoc-tool decrypt ARGUMENTS FILE [OUTPU_DIR]" << endl;
     ofs << "  Decrypt CDoc container using lock specified by label or number" << endl;
@@ -186,6 +187,9 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
         return 1;
     } else if (arg == "--genlabel") {
         conf.gen_label = true;
+        return 1;
+    } else if (arg == "--allow-pathnames") {
+        conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
         return 1;
     }
     return 0;

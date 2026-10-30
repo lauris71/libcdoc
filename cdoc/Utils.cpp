@@ -88,17 +88,51 @@ timeToISO(time_t time)
 bool
 isValidUtf8 (std::string str)
 {
+    // Enforce the well-formed UTF-8 byte sequences from RFC 3629 / Unicode
+    // Standard 3.9 (Table 3-7). In particular this rejects overlong
+    // encodings (e.g. 0xC0 0xAF for '/'), UTF-16 surrogate halves
+    // (U+D800..U+DFFF) and code points above U+10FFFF - all of which are
+    // ill-formed and can be used to bypass filters that decode differently.
     const uint8_t *s = (const uint8_t *) str.data();
     const uint8_t *e = s + str.size();
     while (s < e) {
         size_t s_len = e - s;
         if ((s[0] & 0x80) == 0x0) {
+            // 1-byte: U+0000..U+007F
             s += 1;
-        } else if (((s[0] & 0xe0) == 0xc0) && (s_len >= 2) && ((s[1] & 0xc0) == 0x80)) {
+        } else if ((s[0] & 0xe0) == 0xc0) {
+            // 2-byte: U+0080..U+07FF; lead 0xC0/0xC1 would be overlong
+            if (s[0] < 0xc2 || s_len < 2 || (s[1] & 0xc0) != 0x80)
+                return false;
             s += 2;
-        } else if (((*s & 0xf0) == 0xe0) && (s_len >= 3) && ((s[1] & 0xc0) == 0x80) && ((s[2] & 0xc0) == 0x80)) {
+        } else if ((s[0] & 0xf0) == 0xe0) {
+            // 3-byte: U+0800..U+FFFF
+            // E0 requires second byte A0..BF (overlong otherwise)
+            // ED requires second byte 80..9F (surrogates otherwise)
+            if (s_len < 3)
+                return false;
+            if (s[0] == 0xe0 && s[1] < 0xa0)
+                return false;
+            if (s[0] == 0xed && s[1] > 0x9f)
+                return false;
+            if ((s[1] & 0xc0) != 0x80 || (s[2] & 0xc0) != 0x80)
+                return false;
             s += 3;
-        } else if (((*s & 0xf8) == 0xf0) && (s_len >= 4) && ((s[1] & 0xc0) == 0x80) && ((s[2] & 0xc0) == 0x80) && ((s[3] & 0xc0) == 0x80)) {
+        } else if ((s[0] & 0xf8) == 0xf0) {
+            // 4-byte: U+10000..U+10FFFF
+            // F0 requires second byte 90..BF (overlong otherwise)
+            // F4 requires second byte 80..8F (above U+10FFFF otherwise)
+            // F5..F7 are always invalid
+            if (s_len < 4)
+                return false;
+            if (s[0] == 0xf0 && s[1] < 0x90)
+                return false;
+            if (s[0] > 0xf4)
+                return false;
+            if (s[0] == 0xf4 && s[1] > 0x8f)
+                return false;
+            if ((s[1] & 0xc0) != 0x80 || (s[2] & 0xc0) != 0x80 || (s[3] & 0xc0) != 0x80)
+                return false;
             s += 4;
         } else {
             return false;

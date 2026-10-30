@@ -278,6 +278,18 @@ CDoc1Reader::nextFile(std::string& name, int64_t& size)
     }
     name = d->files[d->f_pos].name;
     size = d->files[d->f_pos].data.size();
+    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
+        std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
+        if (sanitized.empty()) {
+            setLastError("Filename rejected by sanitizer");
+            LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        if (sanitized != name) {
+            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
+            name = std::move(sanitized);
+        }
+    }
     d->src = std::make_unique<libcdoc::VectorSource>(d->files[d->f_pos].data);
     return libcdoc::OK;
 }

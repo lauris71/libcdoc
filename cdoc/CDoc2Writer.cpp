@@ -497,7 +497,15 @@ CDoc2Writer::addFile(const std::string& name, size_t size)
         FAIL("Invalid file name", libcdoc::DATA_FORMAT_ERROR);
     if (constexpr size_t MAX_SIZE = 8ULL * 1024 * 1024 * 1024; size > MAX_SIZE)
         FAIL("Invalid file size", libcdoc::WRONG_ARGUMENTS);
-    if(auto rv = tar->open(name, size); rv < 0)
+    std::string stored_name = name;
+    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
+        stored_name = libcdoc::sanitiseExtractedFilename(name);
+        if (stored_name.empty())
+            FAIL("Filename rejected by sanitizer", libcdoc::DATA_FORMAT_ERROR);
+        if (stored_name != name)
+            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
+    }
+    if(auto rv = tar->open(stored_name, size); rv < 0)
         FAIL(tar->getLastErrorStr(rv), rv);
     return libcdoc::OK;
 }

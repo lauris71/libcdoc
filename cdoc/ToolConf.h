@@ -8,6 +8,7 @@
 
 #include "Utils.h"
 
+#include <map>
 #include <sstream>
 
 namespace libcdoc {
@@ -62,7 +63,16 @@ struct ToolConf : public JSONConfiguration {
      */
     std::vector<std::vector<uint8_t>> accept_certs;
 
+    /**
+     * @brief Generic key/value overrides (e.g. ALLOW_PATHNAMES from --allow-pathnames)
+     */
+    std::map<std::string, std::string> params;
+
     std::string getValue(std::string_view domain, std::string_view param) const final {
+        if (domain.empty()) {
+            auto it = params.find(std::string(param));
+            if (it != params.end()) return it->second;
+        }
         for (auto& sdata : servers) {
             if (sdata.ID == domain) {
                 if (param == Configuration::KEYSERVER_SEND_URL) {

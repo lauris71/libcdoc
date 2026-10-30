@@ -4,6 +4,7 @@
 #include "CDoc1Writer.h"
 
 #include "Certificate.h"
+#include "Configuration.h"
 #include "Crypto.h"
 #include "DDocWriter.h"
 #include "Recipient.h"
@@ -273,7 +274,14 @@ CDoc1Writer::addFile(const std::string& name, size_t size)
     if(!d)
         return WORKFLOW_ERROR;
     if (name.empty() || !libcdoc::isValidUtf8(name)) return libcdoc::DATA_FORMAT_ERROR;
-	d->files.push_back({name, size, {}});
+    std::string stored_name = name;
+    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
+        stored_name = libcdoc::sanitiseExtractedFilename(name);
+        if (stored_name.empty()) return libcdoc::DATA_FORMAT_ERROR;
+        if (stored_name != name)
+            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
+    }
+	d->files.push_back({stored_name, size, {}});
 	return libcdoc::OK;
 }
 
