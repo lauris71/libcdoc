@@ -1438,6 +1438,9 @@ public:
 
   void set_decompress(bool on);
 
+  // Backported from cpp-httplib 0.32.0
+  void set_payload_max_length(size_t length);
+
   void set_interface(const std::string &intf);
 
   void set_proxy(const std::string &host, int port);
@@ -1551,6 +1554,9 @@ protected:
 
   bool compress_ = false;
   bool decompress_ = true;
+
+  size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool has_payload_max_length_ = false;
 
   std::string interface_;
 
@@ -1870,6 +1876,9 @@ public:
   void set_compress(bool on);
 
   void set_decompress(bool on);
+
+  // Backported from cpp-httplib 0.32.0
+  void set_payload_max_length(size_t length);
 
   void set_interface(const std::string &intf);
 
@@ -7288,6 +7297,8 @@ inline void ClientImpl::copy_settings(const ClientImpl &rhs) {
   socket_options_ = rhs.socket_options_;
   compress_ = rhs.compress_;
   decompress_ = rhs.decompress_;
+  payload_max_length_ = rhs.payload_max_length_;
+  has_payload_max_length_ = rhs.has_payload_max_length_;
   interface_ = rhs.interface_;
   proxy_host_ = rhs.proxy_host_;
   proxy_port_ = rhs.proxy_port_;
@@ -7988,6 +7999,12 @@ inline bool ClientImpl::process_request(Stream &strm, Request &req,
                     if (res.body.size() + n > res.body.max_size()) {
                       return false;
                     }
+                    // Backported from cpp-httplib 0.32.0
+                    if (payload_max_length_ > 0 &&
+                        (res.body.size() >= payload_max_length_ ||
+                         n > payload_max_length_ - res.body.size())) {
+                      return false;
+                    }
                     res.body.append(buf, n);
                     return true;
                   });
@@ -8003,12 +8020,22 @@ inline bool ClientImpl::process_request(Stream &strm, Request &req,
       if (!req.content_receiver) {
         auto len = std::min<size_t>(res.get_header_value_u64("Content-Length"),
                                     res.body.max_size());
+        // Backported from cpp-httplib 0.43.0: cap the reservation by
+        // payload_max_length_ to avoid OOM when a hostile or malformed server
+        // sends an enormous Content-Length.
+        if (payload_max_length_ > 0 && len > payload_max_length_) {
+          len = payload_max_length_;
+        }
         if (len > 0) { res.body.reserve(len); }
       }
     }
 
     int dummy_status;
-    if (!detail::read_content(strm, res, (std::numeric_limits<size_t>::max)(),
+    // Backported from cpp-httplib 0.32.0
+    auto max_length = (!has_payload_max_length_ && req.content_receiver)
+                          ? (std::numeric_limits<size_t>::max)()
+                          : payload_max_length_;
+    if (!detail::read_content(strm, res, max_length,
                               dummy_status, std::move(progress), std::move(out),
                               decompress_)) {
       if (error != Error::Canceled) { error = Error::Read; }
@@ -8776,6 +8803,11 @@ inline void ClientImpl::set_compress(bool on) { compress_ = on; }
 
 inline void ClientImpl::set_decompress(bool on) { decompress_ = on; }
 
+inline void ClientImpl::set_payload_max_length(size_t length) {
+  payload_max_length_ = length;
+  has_payload_max_length_ = true;
+}
+
 inline void ClientImpl::set_interface(const std::string &intf) {
   interface_ = intf;
 }
@@ -8874,7 +8906,7 @@ inline SSL *ssl_new(socket_t sock, SSL_CTX *ctx, std::mutex &ctx_mutex,
   if (ssl) {
     //set_nonblocking(sock, true);
     auto bio = BIO_new_socket(static_cast<int>(sock), BIO_NOCLOSE);
-    auto r1 = BIO_set_nbio(bio, 1);
+    BIO_set_nbio(bio, 1);
     SSL_set_bio(ssl, bio, bio);
 
     if (!setup(ssl) || SSL_connect_or_accept(ssl) != 1) {
@@ -8886,7 +8918,7 @@ inline SSL *ssl_new(socket_t sock, SSL_CTX *ctx, std::mutex &ctx_mutex,
       set_nonblocking(sock, false);
       return nullptr;
     }
-    auto r3 = BIO_set_nbio(bio, 0);
+    BIO_set_nbio(bio, 0);
     set_nonblocking(sock, false);
   }
 
@@ -8937,9 +8969,7 @@ bool ssl_connect_or_accept_nonblocking(socket_t sock, SSL *ssl,
     case SSL_ERROR_WANT_WRITE:
       if (select_write(sock, timeout_sec, timeout_usec) > 0) { continue; }
       break;
-    default:
-        std::cerr << ERR_error_string(ERR_get_error(), NULL) << std::endl;
-        break;
+    default: break;
     }
     return false;
   }
@@ -9487,7 +9517,7 @@ inline bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
 #else
         // NOTE: Direct call instead of using the OpenSSL macro to suppress
         // -Wold-style-cast warning
-        long result = SSL_ctrl(ssl2, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name,
+        SSL_ctrl(ssl2, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name,
                  static_cast<void *>(const_cast<char *>(host_.c_str())));
 #endif
         return true;
@@ -10181,6 +10211,10 @@ inline void Client::set_url_encode(bool on) { cli_->set_url_encode(on); }
 inline void Client::set_compress(bool on) { cli_->set_compress(on); }
 
 inline void Client::set_decompress(bool on) { cli_->set_decompress(on); }
+
+inline void Client::set_payload_max_length(size_t length) {
+  cli_->set_payload_max_length(length);
+}
 
 inline void Client::set_interface(const std::string &intf) {
   cli_->set_interface(intf);

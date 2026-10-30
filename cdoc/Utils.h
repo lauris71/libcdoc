@@ -83,7 +83,7 @@ static constexpr bool fromHex(auto pos, auto end, auto& val)
 static std::vector<uint8_t>
 fromHex(std::string_view hex) {
     std::vector<uint8_t> val;
-    if((hex.size() % 2) != 0)
+    if((hex.size() % 2) != 0 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos)
         return val;
     val.resize(hex.size() / 2);
     auto p = val.begin();
@@ -238,6 +238,16 @@ struct urlEncode {
     friend std::ostream& operator<<(std::ostream& escaped, urlEncode src);
 };
 
+/**
+ * @brief Percent-encode a string for use as a URL path segment or query value
+ *
+ * RFC 3986 unreserved characters (A-Z a-z 0-9 - _ . ~) are kept as-is,
+ * everything else (including space) is percent-encoded. Used to safely
+ * interpolate untrusted values (share ids, nonces, transaction ids) into
+ * request URLs (S12).
+ */
+std::string urlEncodeComponent(std::string_view value);
+
 std::vector<uint8_t> toUint8Vector(const auto* data)
 {
     return {data->cbegin(), data->cend()};
@@ -283,6 +293,25 @@ struct restoreFlags {
     CDOC_DISABLE_MOVE_COPY(restoreFlags)
     ~restoreFlags() { os.flags(f); }
 };
+
+/**
+ * @brief Join a base URL with a path suffix, handling trailing slashes.
+ *
+ * The @p base may or may not end with '/'; the @p suffix must start with
+ * '/'. The result always has exactly one '/' between base and suffix.
+ *
+ * @param base the base URL (e.g. "https://host" or "https://host/")
+ * @param suffix the path suffix (e.g. "/key-capsules")
+ * @return the joined URL
+ */
+[[nodiscard]] inline std::string joinUrl(std::string_view base, std::string_view suffix)
+{
+    std::string result(base);
+    if (!result.empty() && result.back() == '/')
+        result.pop_back();
+    result.append(suffix);
+    return result;
+}
 
 [[nodiscard]] constexpr auto range_to_sv(auto begin, auto end) noexcept {
     if (begin == end)

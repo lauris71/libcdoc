@@ -40,6 +40,8 @@ DDOCReader::parse(MultiDataConsumer *dst)
         if (auto rv = dst->close(); rv != libcdoc::OK)
             return rv;
     }
+    if (hasError())
+        return libcdoc::DATA_FORMAT_ERROR;
     return (dst->isError()) ? libcdoc::IO_ERROR : libcdoc::OK;
 }
 
