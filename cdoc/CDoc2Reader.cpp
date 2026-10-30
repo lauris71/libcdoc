@@ -525,6 +525,18 @@ CDoc2Reader::nextFile(std::string& name, int64_t& size)
             return libcdoc::DATA_FORMAT_ERROR;
         }
     }
+    if (result == OK && (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false))) {
+        std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
+        if (sanitized.empty()) {
+            setLastError("Filename rejected by sanitizer");
+            LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        if (sanitized != name) {
+            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
+            name = std::move(sanitized);
+        }
+    }
     LOG_DBG("CDoc2Reader::nextFile: result: {}, name: {} size: {}", result, name, size);
     return result;
 }
