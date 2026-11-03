@@ -417,26 +417,40 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     picojson::value req_json(obj);
     std::string req_str = req_json.serialize();
 
-    std::string full = joinUrl(url, "/key-capsules");
-    std::map<std::string, std::string> headers;
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    result = setPeerCertificates(cli, this, buildURL(host, port));
+    if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    std::string full = path + "/key-capsules";
+    httplib::Headers hdrs;
     if (expiry_ts) {
         std::string expiry_str = timeToISO(expiry_ts);
         LOG_DBG("Expiry time: {}", expiry_str);
-        headers.emplace("x-expiry-time", expiry_str);
+        hdrs.emplace("x-expiry-time", expiry_str);
     }
-    std::vector<uint8_t> body(req_str.begin(), req_str.end());
-    result_t result = post(full, body, headers, false);
+    httplib::Response rsp;
+    result = httpPost(cli, full, hdrs, req_str, rsp);
     if (result != libcdoc::OK) return result;
+    // The key server answers 201 Created with the capsule Location
+    if (rsp.status != 201) {
+        error = FORMAT("Http status {}", rsp.status);
+        return NETWORK_ERROR;
+    }
 
-    std::string location;
-    if (auto it = headers.find("location"); it != headers.end())
-        location = it->second;
+    std::string location = rsp.get_header_value("Location");
     if (location.empty()) {
         error = FORMAT("No Location header in response");
         return NETWORK_ERROR;
     }
     constexpr std::string_view prefix = "/key-capsules/";
-    if (location.compare(0, prefix.size(), prefix) != 0) {
+    if (!location.starts_with(prefix) || location.size() == prefix.size()) {
         error = FORMAT("Unexpected Location header value");
         return NETWORK_ERROR;
     }
@@ -444,9 +458,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     location.erase(0, prefix.size());
     dst.transaction_id = std::move(location);
 
-    std::string expiry_str;
-    if (auto it = headers.find("x-expiry-time"); it != headers.end())
-        expiry_str = it->second;
+    std::string expiry_str = rsp.get_header_value("x-expiry-time");
     LOG_DBG("Server expiry: {}", expiry_str);
     if (expiry_str.empty()) {
         dst.expiry_time = expiry_ts;
@@ -468,28 +480,49 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id)
 {
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    std::vector<uint8_t> cert;
+    result = getClientTLSCertificate(cert);
+    if (result != OK) return result;
+    if (cert.empty()) return CRYPTO_ERROR;
+    std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
+    if (!cert.empty() && (!d->x509 || !d->key)) return CRYPTO_ERROR;
+
+    httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+    SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    result = setPeerCertificates(cli, this, buildURL(host, port));
+    if (result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
     // S12: transaction_id comes from the (untrusted) container
-    std::string full = joinUrl(url, "/key-capsules/") + urlEncodeComponent(transaction_id);
-    std::map<std::string, std::string> headers;
-    std::vector<uint8_t> body;
-    result_t result = get(full, body, headers, true);
+    // Dots are not encoded, a dot segment would leave the key-capsules path
+    if (transaction_id.find_first_not_of('.') == std::string::npos) {
+        error = "Invalid transaction id";
+        LOG_WARN("{}", error);
+        return DATA_FORMAT_ERROR;
+    }
+    std::string full = joinUrl(path, "/key-capsules/") + urlEncodeComponent(transaction_id);
+    httplib::Headers hdrs;
+    httplib::Response rsp;
+    result = httpGet(cli, hdrs, full, rsp);
     if (result != libcdoc::OK) return result;
 
     picojson::value rsp_json;
-    std::string parse_err = picojson::parse(rsp_json, std::string(body.begin(), body.end()));
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
-    if (!rsp_json.is<picojson::object>()) {
-        error = "Invalid Authentication response";
-        LOG_ERROR("{}", error);
-        return NetworkBackend::NETWORK_ERROR;
-    }
 
-    std::string ks = getJsonString(rsp_json, "ephemeral_key_material", result);
-    if (result != libcdoc::OK) return NETWORK_ERROR;
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string ks = getJsonString(rsp_json, "ephemeral_key_material", rv);
+    if (rv != libcdoc::OK) return NETWORK_ERROR;
     dst = fromBase64(ks);
     if (dst.empty()) {
         error = FORMAT("Invalid base64 in 'ephemeral_key_material'");

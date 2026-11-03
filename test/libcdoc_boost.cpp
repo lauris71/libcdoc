@@ -375,6 +375,44 @@ gen_random_filename()
     return utf16_to_utf8(u16);
 }
 
+BOOST_AUTO_TEST_CASE(KeyCapsulesUseProviderTransport)
+{
+    struct Network final : libcdoc::NetworkBackend {
+        bool getCalled = false;
+        bool postCalled = false;
+
+        libcdoc::result_t get(const std::string&, std::vector<uint8_t>&,
+            std::map<std::string, std::string>&, bool) final
+        {
+            getCalled = true;
+            return libcdoc::NOT_IMPLEMENTED;
+        }
+        libcdoc::result_t post(const std::string&, std::vector<uint8_t>&,
+            std::map<std::string, std::string>&, bool) final
+        {
+            postCalled = true;
+            return libcdoc::NOT_IMPLEMENTED;
+        }
+        libcdoc::result_t getClientTLSCertificate(std::vector<uint8_t>& cert) final
+        {
+            cert.clear();
+            return libcdoc::OK;
+        }
+        libcdoc::result_t getPeerTLSCertificates(std::vector<std::vector<uint8_t>>&) final
+        {
+            // Stop before any connection is attempted.
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+    } network;
+    std::vector<uint8_t> key;
+    BOOST_CHECK_EQUAL(network.fetchKey(key, "https://localhost", "capsule"), libcdoc::CRYPTO_ERROR);
+    BOOST_CHECK(!network.getCalled);
+    libcdoc::NetworkBackend::CapsuleInfo capsule;
+    BOOST_CHECK_EQUAL(network.sendKey(capsule, "https://localhost", {}, {}, "rsa", 0),
+        libcdoc::CONFIGURATION_ERROR);
+    BOOST_CHECK(!network.postCalled);
+}
+
 BOOST_AUTO_TEST_SUITE(ToolFilenames)
 
 BOOST_FIXTURE_TEST_CASE(DuplicateBasenamesRoundTrip, FixtureBase)
