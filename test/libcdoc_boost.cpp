@@ -23,6 +23,7 @@
 #include <fstream>
 #include <CDocCipher.h>
 #include <CryptoBackend.h>
+#include <DDocReader.h>
 #include <Lock.h>
 #include <Recipient.h>
 #include <Tar.h>
@@ -373,6 +374,110 @@ gen_random_filename()
     for (int i = 0; i < len; i++) u16[i] = std::rand() % 10000 + 32;
     return utf16_to_utf8(u16);
 }
+
+BOOST_AUTO_TEST_SUITE(ToolFilenames)
+
+BOOST_FIXTURE_TEST_CASE(DuplicateBasenamesRoundTrip, FixtureBase)
+{
+    fs::path root = tmpDataPath / "duplicate-basenames";
+    fs::create_directories(root / "a");
+    fs::create_directories(root / "b");
+    const std::vector<std::string> inputs {
+        (root / "a" / "x.txt").string(),
+        (root / "b" / "x.txt").string(),
+        (root / "a" / "x (1).txt").string()
+    };
+    const std::vector<std::string> contents {"first", "second", "third"};
+    const std::vector<std::string> names {"x.txt", "x (1).txt", "x (1) (1).txt"};
+    for (size_t i = 0; i < inputs.size(); ++i)
+        std::ofstream(inputs[i], std::ios::binary) << contents[i];
+
+    for (unsigned int version : {1u, 2u}) {
+        BOOST_TEST_INFO("CDoc version=" << version);
+        std::string container = (root / ("files-" + std::to_string(version) + ".cdoc")).string();
+        std::vector<libcdoc::RcptInfo> recipients {
+            {libcdoc::RcptInfo::CERT, {}, fetchDataFile(RSACertFile)}
+        };
+        encrypt(version, inputs, container, recipients);
+        fs::path extracted = root / ("extracted-" + std::to_string(version));
+        fs::create_directories(extracted);
+        decrypt(names, container, extracted.string(), fetchDataFile(RSAPrivKeyFile));
+        for (size_t i = 0; i < names.size(); ++i) {
+            auto data = libcdoc::readAllBytes((extracted / names[i]).string());
+            BOOST_CHECK_EQUAL(std::string(data.begin(), data.end()), contents[i]);
+        }
+    }
+    fs::remove_all(root);
+}
+
+BOOST_FIXTURE_TEST_CASE(LongDuplicateNamesKeepSuffix, FixtureBase)
+{
+    fs::path root = tmpDataPath / "long-duplicate-names";
+#ifdef _WIN32
+    root = fs::path(L"\\\\?\\" + fs::absolute(root).native());
+#endif
+    fs::create_directories(root / "a");
+    fs::create_directories(root / "b");
+    std::string filename(245, 'a');
+    filename += "\xF0\x9F\x98\x80.txt";
+    const std::vector<std::string> files {
+        libcdoc::decodeName(root / "a" / libcdoc::encodeName(filename)),
+        libcdoc::decodeName(root / "b" / libcdoc::encodeName(filename))
+    };
+    for (const auto& file : files)
+        std::ofstream(fs::path(libcdoc::encodeName(file))) << "content";
+    {
+        libcdoc::FileListSource source({}, files);
+        std::string first, second;
+        int64_t size;
+        BOOST_REQUIRE_EQUAL(source.next(first, size), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(source.next(second, size), libcdoc::OK);
+        BOOST_CHECK_NE(first, second);
+        BOOST_CHECK(second.ends_with(" (1).txt"));
+        BOOST_CHECK_LE(second.size(), 255u);
+        BOOST_CHECK(libcdoc::isValidUtf8(second));
+    }
+    fs::remove_all(root);
+}
+
+BOOST_FIXTURE_TEST_CASE(FailedEncryptionRemovesPartialOutput, FixtureBase)
+{
+    for (unsigned int version : {1u, 2u}) {
+        BOOST_TEST_INFO("CDoc version=" << version);
+        libcdoc::ToolConf conf;
+        conf.cdocVersion = version;
+        conf.out = formTargetFile("failed-encryption.cdoc");
+        conf.input_files = {(tmpDataPath / "missing-directory" / "missing-file.txt").string()};
+        std::vector<libcdoc::RcptInfo> recipients {
+            {libcdoc::RcptInfo::CERT, {}, fetchDataFile(RSACertFile)}
+        };
+        BOOST_CHECK_NE(libcdoc::CDocCipher::Encrypt(conf, recipients), libcdoc::OK);
+        BOOST_CHECK(!fs::exists(conf.out));
+    }
+}
+
+#ifndef _WIN32
+BOOST_FIXTURE_TEST_CASE(ColonNameIsRejectedWithoutPartialOutput, FixtureBase)
+{
+    std::string file = formTargetFile("a:b.txt");
+    std::ofstream(file) << "content";
+    for (unsigned int version : {1u, 2u}) {
+        BOOST_TEST_INFO("CDoc version=" << version);
+        libcdoc::ToolConf conf;
+        conf.cdocVersion = version;
+        conf.out = formTargetFile("colon-name.cdoc");
+        conf.input_files = {file};
+        std::vector<libcdoc::RcptInfo> recipients {
+            {libcdoc::RcptInfo::CERT, {}, fetchDataFile(RSACertFile)}
+        };
+        BOOST_CHECK_EQUAL(libcdoc::CDocCipher::Encrypt(conf, recipients), libcdoc::DATA_FORMAT_ERROR);
+        BOOST_CHECK(!fs::exists(conf.out));
+    }
+    fs::remove(file);
+}
+#endif
+
+BOOST_AUTO_TEST_SUITE_END()
 
 // CDoc2 password and label
 
@@ -1339,11 +1444,19 @@ BOOST_AUTO_TEST_CASE(ParsesValidISO)
     BOOST_CHECK(rv > 0);
 }
 
+BOOST_AUTO_TEST_CASE(ParsesFractionalSeconds)
+{
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2027-04-17T08:52:36.450774506Z"),
+        libcdoc::timeFromISO("2027-04-17T08:52:36Z"));
+}
+
 BOOST_AUTO_TEST_CASE(RejectsInvalidISO)
 {
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO("not-a-date"), -1);
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO(""), -1);
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-13-45T99:99:99Z"), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-08-18T12:00:00"), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-08-18T12:00:00.Z"), -1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1387,17 +1500,13 @@ BOOST_AUTO_TEST_CASE(RejectsTraversalAndEmpty)
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("a/b/"), "");
 }
 
-BOOST_AUTO_TEST_CASE(StripsWindowsDriveRelativeNames)
+BOOST_AUTO_TEST_CASE(RejectsWindowsDriveRelativeNames)
 {
-    // "C:foo" with NO slash is a drive-relative path on Windows. On POSIX
-    // it would normally pass through, but libcdoc applies the same filter
-    // on every platform so a malicious archive cannot rely on platform-
-    // specific quirks.
-    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "foo.txt");
-    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("z:bar"), "bar");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("a:b.txt"), "");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("z:bar"), "");
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:"), "");
-    // After a slash strip, the drive prefix on the leaf is also handled.
-    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("a/C:foo"), "foo");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("a/C:foo"), "");
 }
 
 BOOST_AUTO_TEST_CASE(RejectsControlCharsAndNul)
@@ -1472,20 +1581,30 @@ BOOST_AUTO_TEST_CASE(RejectsMalformedUtf8)
 
 BOOST_AUTO_TEST_CASE(TruncatesAtUtf8Boundary)
 {
-    // Build a name with 254 bytes of 'a' + a 2-byte UTF-8 char at position 254-255.
-    // Naive truncation at 255 would split the codepoint.
-    std::string name(254, 'a');
-    name += "\xC3\xB5"; // 'õ' - 2-byte UTF-8
-    name += ".txt";
-    auto result = libcdoc::sanitiseExtractedFilename(name);
-    // The 2-byte character at the boundary must not be split.
-    // Result should be <= 255 and the last bytes before .txt should not
-    // be a lone continuation byte.
-    BOOST_CHECK_LE(result.size(), 255u);
-    BOOST_CHECK(result.ends_with(".txt"));
-    // Extract the stem and verify it ends at a codepoint boundary
-    std::string stem = result.substr(0, result.size() - 4);
-    BOOST_CHECK(libcdoc::isValidUtf8(stem));
+    for (auto codepoint : {"\xC3\xB5"sv, "\xE2\x82\xAC"sv, "\xF0\x9F\x98\x80"sv}) {
+        for (auto extension : {""sv, ".txt"sv}) {
+            size_t limit = 255 - extension.size();
+            // Cut before, inside and immediately after a complete codepoint.
+            for (size_t offset = 0; offset <= codepoint.size(); ++offset) {
+                BOOST_TEST_INFO("codepoint bytes=" << codepoint.size()
+                                << ", extension=" << extension << ", offset=" << offset);
+                std::string prefix(limit - offset, 'a');
+                std::string name = prefix;
+                name += codepoint;
+                name += "padding";
+                name += extension;
+                std::string expected = prefix;
+                if (offset == codepoint.size())
+                    expected += codepoint;
+                expected += extension;
+
+                auto result = libcdoc::sanitiseExtractedFilename(name);
+                BOOST_CHECK_EQUAL(result, expected);
+                BOOST_CHECK(libcdoc::isValidUtf8(result));
+                BOOST_CHECK_LE(result.size(), 255u);
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
@@ -1493,8 +1612,7 @@ BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
     // NTFS ADS: "file.txt:stream" creates an alternate data stream on file.txt
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:evil.exe"), "");
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:stream"), "");
-    // Drive-relative is still handled (stripped, not rejected)
-    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "foo.txt");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1573,6 +1691,24 @@ BOOST_AUTO_TEST_CASE(RejectsExternalEntityInAttribute)
 BOOST_AUTO_TEST_CASE(RejectsExternalEntityInText)
 {
     rejectsUnsupportedXml("<!DOCTYPE root [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><root>&xxe;</root>");
+}
+
+BOOST_AUTO_TEST_CASE(DDocReadsDataFiles)
+{
+    XMLSource input("<SignedDoc><DataFile Filename=\"a.txt\">aGVsbG8=</DataFile></SignedDoc>");
+    std::vector<libcdoc::DDOCReader::File> files;
+    BOOST_CHECK_EQUAL(libcdoc::DDOCReader(input.source).files(files), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(files.size(), 1u);
+    BOOST_CHECK_EQUAL(files[0].name, "a.txt");
+}
+
+// A DDOC with an entity (e.g. an expansion bomb) must fail, not decrypt to an empty file list
+BOOST_AUTO_TEST_CASE(DDocRejectsEntities)
+{
+    XMLSource input("<!DOCTYPE SignedDoc [<!ENTITY a 'aaaa'>]><SignedDoc>"
+        "<DataFile Filename=\"a.txt\">&a;</DataFile></SignedDoc>");
+    std::vector<libcdoc::DDOCReader::File> files;
+    BOOST_CHECK_EQUAL(libcdoc::DDOCReader(input.source).files(files), libcdoc::DATA_FORMAT_ERROR);
 }
 
 BOOST_AUTO_TEST_CASE(DoesNotChangeGlobalExternalEntityLoader)

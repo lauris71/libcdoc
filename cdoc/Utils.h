@@ -113,7 +113,7 @@ parseBoundedUInt(std::string_view str, int max_value, int& out)
 static std::vector<uint8_t>
 fromHex(std::string_view hex) {
     std::vector<uint8_t> val;
-    if((hex.size() % 2) != 0)
+    if((hex.size() % 2) != 0 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos)
         return val;
     val.resize(hex.size() / 2);
     auto p = val.begin();

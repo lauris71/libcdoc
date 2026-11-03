@@ -41,6 +41,7 @@ add_library(cdoc
     Certificate.cpp Certificate.h
     Crypto.cpp Crypto.h
     Tar.cpp Tar.h
+    TLSKey.cpp TLSKey.h
     ZStream.h
     # Internal
     Utils.cpp Utils.h

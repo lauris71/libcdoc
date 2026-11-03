@@ -146,14 +146,6 @@ struct CDOC_EXPORT PKCS11Backend : public CryptoBackend {
      * @return error code or OK
      */
     virtual result_t connectToKey(int idx, bool priv) { return NOT_IMPLEMENTED; };
-    /**
-     * @brief whether to use PSS RSA padding
-     *
-     * A subclass should overwrite this to inform the backend about the correct padding.
-     * @param idx a lock idx
-     * @return true if PSS padding is used
-     */
-    virtual result_t usePSS(int idx) {return true;}
 
     virtual result_t deriveECDH1(std::vector<uint8_t>& dst, const std::vector<uint8_t> &public_key, unsigned int idx) override;
     virtual result_t decryptRSA(std::vector<uint8_t>& dst, const std::vector<uint8_t> &data, bool oaep, unsigned int idxl) override;

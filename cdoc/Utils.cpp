@@ -114,8 +114,16 @@ timeFromISO(const std::string& iso)
 {
     std::istringstream in{iso};
     std::tm t = {};
-    in >> std::get_time(&t, "%Y-%m-%dT%TZ");
+    in >> std::get_time(&t, "%Y-%m-%dT%T");
     if (in.fail()) return -1;
+    // The key server adds fractions of a second, e.g. 2027-04-17T08:52:36.450774506Z
+    auto isDigit = [&in] { return in.peek() >= '0' && in.peek() <= '9'; };
+    if (in.peek() == '.') {
+        in.get();
+        if (!isDigit()) return -1;
+        while (isDigit()) in.get();
+    }
+    if (in.get() != 'Z') return -1;
     return timegm(&t);
 }
 
@@ -312,19 +320,9 @@ sanitiseExtractedFilename(std::string_view name)
                                 ? name
                                 : name.substr(last_sep + 1);
 
-    // 3. Reject Windows drive-letter prefixes that survived the slash split
-    //    (e.g. "C:foo.txt" with no slash is drive-relative on Windows and
-    //    refers to the current directory of drive C:, NOT the current
-    //    working directory). We strip "X:" if the prefix looks like one.
-    if (base.size() >= 2 && base[1] == ':' &&
-        ((base[0] >= 'A' && base[0] <= 'Z') ||
-         (base[0] >= 'a' && base[0] <= 'z'))) {
-        base = base.substr(2);
-    }
-
-    // 3a. Reject any remaining ':' (NTFS Alternate Data Stream separator).
-    //     A name like "file.txt:evil.exe" would create the ADS "evil.exe"
-    //     on the file "file.txt" instead of a normal file.
+    // 3. Reject ':' rather than stripping a possible drive-letter prefix.
+    //    The Java reference implementation rejects colons too; on Windows
+    //    they can select a drive or an NTFS alternate data stream.
     if (base.find(':') != std::string_view::npos) return {};
 
     // 4. Trim trailing dots and whitespace. Windows silently strips these
@@ -375,7 +373,7 @@ sanitiseExtractedFilename(std::string_view name)
         // A continuation byte has the pattern 10xxxxxx (0x80-0xBF).
         auto utf8_boundary = [](std::string_view sv, size_t max_pos) -> size_t {
             size_t pos = std::min(max_pos, sv.size());
-            while (pos > 0 && (uint8_t(sv[pos - 1]) & 0xC0) == 0x80)
+            while (pos > 0 && pos < sv.size() && (uint8_t(sv[pos]) & 0xC0) == 0x80)
                 --pos;
             return pos;
         };

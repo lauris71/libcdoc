@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <unordered_set>
 #include <vector>
 
 namespace libcdoc {
@@ -336,6 +337,7 @@ protected:
 	const std::vector<std::string>& _files;
     int64_t _current = -1;
 	std::ifstream _ifs;
+	std::unordered_set<std::string> _names;
 };
 
 } // namespace libcdoc

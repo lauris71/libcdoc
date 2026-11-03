@@ -3,6 +3,7 @@ add_executable(unittests
     libcdoc_live_boost.cpp
     ../cdoc/Crypto.cpp
     ../cdoc/KeyShares.cpp
+    ../cdoc/DDocReader.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
     ../cdoc/Utils.cpp

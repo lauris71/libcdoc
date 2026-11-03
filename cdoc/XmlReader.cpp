@@ -49,6 +49,7 @@ XMLReader::XMLReader(libcdoc::DataSource &src)
         auto result = src->read((uint8_t *) buffer, len);
         return result >= OK ? result : -1;
     }, nullptr, &src, nullptr, nullptr, XML_READ_FLAGS))
+    , error(!d)
 {}
 
 XMLReader::~XMLReader() noexcept

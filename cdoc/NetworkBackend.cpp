@@ -21,14 +21,14 @@
 #include "Certificate.h"
 #include "Crypto.h"
 #include "CryptoBackend.h"
+#include "TLSKey.h"
 #include "Utils.h"
 #ifdef HAS_KEYSHARES
 #include "KeyShares.h"
 #endif
 
-#define OPENSSL_SUPPRESS_DEPRECATED
-
 #include <openssl/bio.h>
+#include <openssl/err.h>
 #include <openssl/http.h>
 #include <openssl/ssl.h>
 
@@ -37,6 +37,7 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 
+#include <array>
 #include <chrono>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -44,6 +45,8 @@
 #endif
 
 #define CDOC_SSL_TIMEOUT 30
+// Key server, share server and SID/MID responses are small JSON documents
+#define CDOC_MAX_RESPONSE_SIZE (64 * 1024)
 
 // The default confirmation text shown on the user's device in SID/MID
 // dialogs when no DISPLAY_TEXT configuration value is set. Overridable at
@@ -54,53 +57,14 @@
 
 using namespace std::literals::chrono_literals;
 
-using EC_KEY_sign = int (*)(int type, const unsigned char *dgst, int dlen, unsigned char *sig, unsigned int *siglen, const BIGNUM *kinv, const BIGNUM *r, EC_KEY *eckey);
-using EC_KEY_sign_setup = int (*)(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp);
-
-static ECDSA_SIG* ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM *inv, const BIGNUM *rp, EC_KEY *eckey);
-static int rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const ::RSA *rsa);
-
 struct Private {
     libcdoc::Certificate x509;
-    EVP_PKEY *pkey = nullptr;
-
-    RSA_METHOD *rsamethod = nullptr;
-    EC_KEY_METHOD *ecmethod = nullptr;
+    libcdoc::unique_ptr_t<EVP_PKEY_free> key = libcdoc::make_unique_ptr<EVP_PKEY_free>(nullptr);
 
     explicit Private(libcdoc::NetworkBackend *backend, const std::vector<uint8_t> &client_cert)
         : x509(client_cert)
     {
-        if (!x509) return;
-        pkey = X509_get_pubkey(x509.handle());
-        if (!pkey) return;
-        int id = EVP_PKEY_get_id(pkey);
-        if (id == EVP_PKEY_EC) {
-            ecmethod = EC_KEY_METHOD_new(EC_KEY_get_default_method());
-            EC_KEY_sign sign = nullptr;
-            EC_KEY_sign_setup sign_setup = nullptr;
-            EC_KEY_METHOD_get_sign(ecmethod, &sign, &sign_setup, nullptr);
-            EC_KEY_METHOD_set_sign(ecmethod, sign, sign_setup, ecdsa_do_sign);
-
-            auto *ec = (EC_KEY *) EVP_PKEY_get1_EC_KEY(pkey);
-            EC_KEY_set_method(ec, ecmethod);
-            EC_KEY_set_ex_data(ec, 0, backend);
-            EVP_PKEY_set1_EC_KEY(pkey, ec);
-        } else if (id == EVP_PKEY_RSA) {
-            rsamethod = RSA_meth_dup(RSA_get_default_method());
-            RSA_meth_set1_name(rsamethod, "libcdoc");
-            RSA_meth_set_sign(rsamethod, rsa_sign);
-
-            RSA *rsa = (RSA *) EVP_PKEY_get1_RSA(pkey);
-            RSA_set_method(rsa, rsamethod);
-            RSA_set_ex_data(rsa, 0, backend);
-            EVP_PKEY_set1_RSA(pkey, rsa);
-        }
-    }
-
-    ~Private() {
-        if (pkey) EVP_PKEY_free(pkey);
-        if (rsamethod) RSA_meth_free(rsamethod);
-        if (ecmethod) EC_KEY_METHOD_free(ecmethod);
+        if (x509) key = libcdoc::createTLSKey(backend, x509.handle());
     }
 };
 
@@ -252,6 +216,18 @@ setProxy(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
     }
 }
 
+static void
+logRequestError(const httplib::Result& res)
+{
+    LOG_DBG("Request failed: {}", httplib::to_string(res.error()));
+    while (unsigned long err = ERR_get_error()) {
+        std::array<char, 256> buf{};
+        ERR_error_string_n(err, buf.data(), buf.size());
+        LOG_DBG("    {}", buf.data());
+    }
+}
+
+
 //
 // Set SSL timeouts
 //
@@ -261,6 +237,7 @@ applySSLTimeout(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
     cli.set_connection_timeout(CDOC_SSL_TIMEOUT);
     cli.set_read_timeout(CDOC_SSL_TIMEOUT);
     cli.set_write_timeout(CDOC_SSL_TIMEOUT);
+    cli.set_payload_max_length(CDOC_MAX_RESPONSE_SIZE);
     return libcdoc::OK;
 }
 
@@ -278,6 +255,7 @@ httpPost(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdr
     }
     httplib::Result res = cli.Post(path, hdrs, req, "application/json");
     if (!res) {
+        logRequestError(res);
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
@@ -309,6 +287,7 @@ httpGet(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path
     }
     httplib::Result res = cli.Get(path, hdrs);
     if (!res) {
+        logRequestError(res);
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
@@ -318,7 +297,8 @@ httpGet(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path
     for (auto h : res->headers) {
         LOG_TRACE("    Header {}: {}", h.first, h.second);
     }
-    if ((status < 200) || (status >= 300)) {
+    // GET requests return the resource with 200, any other success status is unexpected
+    if (status != 200) {
         error = FORMAT("Http status {}", status);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
@@ -350,9 +330,10 @@ libcdoc::NetworkBackend::get(const std::string& url, std::vector<uint8_t>& body,
         // SSLClient.
         if (cert.empty()) return CRYPTO_ERROR;
         std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
-        if (!d->x509 || !d->pkey) return CRYPTO_ERROR;
+        if (!d->x509 || !d->key) return CRYPTO_ERROR;
 
-        httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
+        httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+        SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
         if (result = applySSLTimeout(cli, this); result != OK) return result;
         if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
         if (result = setProxy(cli, this); result != OK) return result;
@@ -398,9 +379,10 @@ libcdoc::NetworkBackend::post(const std::string& url, std::vector<uint8_t>& body
         // SSLClient.
         if (cert.empty()) return CRYPTO_ERROR;
         std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
-        if (!d->x509 || !d->pkey) return CRYPTO_ERROR;
+        if (!d->x509 || !d->key) return CRYPTO_ERROR;
 
-        httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
+        httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+        SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
         if (result = applySSLTimeout(cli, this); result != OK) return result;
         if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
         if (result = setProxy(cli, this); result != OK) return result;
@@ -1458,54 +1440,3 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     return OK;
 }
 #endif
-
-ECDSA_SIG *
-ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
-{
-    auto *backend = (libcdoc::NetworkBackend *) EC_KEY_get_ex_data(eckey, 0);
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(dgst, dgst + dgst_len);
-    int result = backend->signTLS(dst, libcdoc::CryptoBackend::SHA_512, digest);
-    if (result != libcdoc::OK) {
-        return nullptr;
-    }
-    int size_2 = (int) dst.size() / 2;
-    ECDSA_SIG *sig = ECDSA_SIG_new();
-    ECDSA_SIG_set0(sig,
-                   BN_bin2bn(dst.data(), size_2, nullptr),
-                   BN_bin2bn(dst.data() + size_2, size_2, nullptr));
-    return sig;
-}
-
-int
-rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const RSA *rsa)
-{
-    auto *backend = (libcdoc::NetworkBackend *) RSA_get_ex_data(rsa, 0);
-    auto algo = libcdoc::CryptoBackend::SHA_512;
-    switch (type) {
-    case NID_sha224:
-        algo = libcdoc::CryptoBackend::SHA_224;
-        break;
-    case NID_sha256:
-        algo = libcdoc::CryptoBackend::SHA_256;
-        break;
-    case NID_sha384:
-        algo = libcdoc::CryptoBackend::SHA_384;
-        break;
-    case NID_sha512:
-        break;
-    default:
-        return 0;
-    }
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(m, m + m_len);
-    int result = backend->signTLS(dst, algo, digest);
-    if (result != libcdoc::OK) {
-        return 0;
-    }
-    if (sigret && (*siglen >= dst.size())) {
-        memcpy(sigret, dst.data(), dst.size());
-    }
-    *siglen = (unsigned int) dst.size();
-    return 1;
-}
