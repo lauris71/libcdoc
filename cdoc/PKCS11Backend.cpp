@@ -638,48 +638,32 @@ libcdoc::PKCS11Backend::sign(std::vector<uint8_t>& dst, HashAlgorithm algorithm,
     CK_ATTRIBUTE attribute { CKA_KEY_TYPE, &keyType, sizeof(keyType) };
     d->f->C_GetAttributeValue(d->session, d->key, &attribute, 1);
 
-    CK_RSA_PKCS_PSS_PARAMS pssParams { CKM_SHA256, CKG_MGF1_SHA256, 32 };
-    CK_MECHANISM mech { keyType == CKK_ECDSA ? CKM_ECDSA : CKM_RSA_PKCS, nullptr, 0 };
-    std::vector<uint8_t> data;
+    CK_RSA_PKCS_PSS_PARAMS pssParams {};
+    CK_MECHANISM mech { CKM_ECDSA, nullptr, 0 };
     if(keyType == CKK_RSA) {
         switch(algorithm) {
-        case libcdoc::CryptoBackend::HashAlgorithm::SHA_224:
-            data = libcdoc::fromHex("302d300d06096086480165030402040500041c");
-            pssParams = { CKM_SHA224, CKG_MGF1_SHA224, 24 };
-            break;
-        case libcdoc::CryptoBackend::HashAlgorithm::SHA_256:
-            data = libcdoc::fromHex("3031300d060960864801650304020105000420");
-            pssParams = { CKM_SHA256, CKG_MGF1_SHA256, 32 };
-            break;
-        case libcdoc::CryptoBackend::HashAlgorithm::SHA_384:
-            data = libcdoc::fromHex("3041300d060960864801650304020205000430");
-            pssParams = { CKM_SHA384, CKG_MGF1_SHA384, 48 };
-            break;
-        case libcdoc::CryptoBackend::HashAlgorithm::SHA_512:
-            data = libcdoc::fromHex("3051300d060960864801650304020305000440");
-            pssParams = { CKM_SHA512, CKG_MGF1_SHA512, 64 };
-            break;
+        case libcdoc::CryptoBackend::HashAlgorithm::SHA_224: pssParams = { CKM_SHA224, CKG_MGF1_SHA224, 24 }; break;
+        case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: pssParams = { CKM_SHA256, CKG_MGF1_SHA256, 32 }; break;
+        case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: pssParams = { CKM_SHA384, CKG_MGF1_SHA384, 48 }; break;
+        case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: pssParams = { CKM_SHA512, CKG_MGF1_SHA512, 64 }; break;
         default:
-            break;
+            d->logout();
+            return INVALID_PARAMS;
         }
-        if(usePSS(idx)) {
-            mech = { CKM_RSA_PKCS_PSS, &pssParams, sizeof(CK_RSA_PKCS_PSS_PARAMS) };
-            data.clear();
-        }
+        mech = { CKM_RSA_PKCS_PSS, &pssParams, sizeof(pssParams) };
     }
-    data.insert(data.end(), digest.begin(), digest.end());
 
     if(d->f->C_SignInit(d->session, &mech, d->key) != CKR_OK) {
     	d->logout();
         return PKCS11_ERROR;
     }
     CK_ULONG size = 0;
-    if(d->f->C_Sign(d->session, CK_BYTE_PTR(data.data()), CK_ULONG(data.size()), nullptr, &size) != CKR_OK) {
+    if(d->f->C_Sign(d->session, CK_BYTE_PTR(digest.data()), CK_ULONG(digest.size()), nullptr, &size) != CKR_OK) {
     	d->logout();
         return PKCS11_ERROR;
     }
     dst.resize(int(size));
-    if(d->f->C_Sign(d->session, CK_BYTE_PTR(data.data()), CK_ULONG(data.size()), CK_BYTE_PTR(dst.data()), &size) != CKR_OK) {
+    if(d->f->C_Sign(d->session, CK_BYTE_PTR(digest.data()), CK_ULONG(digest.size()), CK_BYTE_PTR(dst.data()), &size) != CKR_OK) {
     	d->logout();
         return PKCS11_ERROR;
     }
