@@ -63,9 +63,9 @@ public class CDocTest {
     void passwordRecipient() throws Exception {
         final String password = "JUnit test password";
         final String labelValue = "JUnit test";
-        // Small iteration count to keep the test fast; any kdf_iter > 0
+        // The smallest count libcdoc accepts for encryption; any kdf_iter > 0
         // makes the recipient password-based ("pw").
-        final int kdfIter = 1000;
+        final int kdfIter = CryptoBackend.KDF_ITER_MIN_ENCRYPT;
 
         // Create a password-based recipient with empty label, so that the
         // lock label is generated automatically.
@@ -150,7 +150,7 @@ public class CDocTest {
         final String fileName = "põder-🚀-文件.txt";
         final String password = "pässw0rd-🔑";
 
-        Recipient rcpt = Recipient.makeSymmetric(label, 1000);
+        Recipient rcpt = Recipient.makeSymmetric(label, CryptoBackend.KDF_ITER_MIN_ENCRYPT);
         assertTrue(rcpt.validate());
 
         File container = new File(tempDir, "utf8.cdoc2");
@@ -191,7 +191,7 @@ public class CDocTest {
         // Labels parsed back into a Map must also carry standard UTF-8.
         // Use an auto-generated (machine-readable) label for parseLabel:
         // a recipient with an explicit user label returns it verbatim.
-        Recipient autoRcpt = Recipient.makeSymmetric("", 1000);
+        Recipient autoRcpt = Recipient.makeSymmetric("", CryptoBackend.KDF_ITER_MIN_ENCRYPT);
         autoRcpt.setLabelValue("label", label);
         String generated = autoRcpt.getLabel(Map.of());
         Map<String, String> parsed = Lock.parseLabel(generated);
