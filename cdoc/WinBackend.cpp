@@ -399,7 +399,6 @@ libcdoc::WinBackend::sign(std::vector<uint8_t>& dst, HashAlgorithm algorithm, co
         default:
             return INVALID_PARAMS;
     }
-	BCRYPT_PKCS1_PADDING_INFO rsaPKCS1 { rsaPSS.pszAlgId };
 	DWORD size;
 	NCryptGetProperty(d->key, NCRYPT_ALGORITHM_GROUP_PROPERTY, nullptr, 0, &size, 0);
     std::wstring algo(5, 0);
@@ -408,12 +407,9 @@ libcdoc::WinBackend::sign(std::vector<uint8_t>& dst, HashAlgorithm algorithm, co
 	bool isRSA = (algo == L"RSA");
 	DWORD padding {};
 	PVOID paddingInfo {};
-	if(isRSA && usePSS(idx)) {
+	if(isRSA) {
 		padding = BCRYPT_PAD_PSS;
 		paddingInfo = &rsaPSS;
-	} else if(isRSA) {
-		padding = BCRYPT_PAD_PKCS1;
-		paddingInfo = &rsaPKCS1;
 	}
 	SECURITY_STATUS err = NCryptSignHash(d->key, paddingInfo, PBYTE(digest.data()), DWORD(digest.size()), nullptr, 0, &size, padding);
     if (err != ERROR_SUCCESS) return CRYPTO_ERROR;

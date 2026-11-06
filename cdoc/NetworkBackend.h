@@ -29,6 +29,10 @@ struct CDOC_EXPORT NetworkBackend {
      * 
      */
 	static constexpr int NETWORK_ERROR = -300;
+    // The key server did not find the requested capsule (HTTP 404).
+    static constexpr int CAPSULE_NOT_FOUND = -304;
+    // The key server returned an unsuccessful HTTP response.
+    static constexpr int SERVER_ERROR = -305;
 #ifdef HAS_KEYSHARES
     // MID/SID error codes
     // User refused the session
@@ -234,6 +238,9 @@ struct CDOC_EXPORT NetworkBackend {
 
     /**
      * @brief sign TLS digest with client's private key
+     *
+     * An ECDSA signature is returned as r || s, an RSA signature as is. RSA keys sign with RSASSA-PSS
+     * (salt as long as the digest, MGF1 with the same hash): the connection requires TLS 1.3, which allows only PSS.
      * @param dst a destination container for signature
      * @param algorithm signing algorithm
      * @param digest data to be signed
