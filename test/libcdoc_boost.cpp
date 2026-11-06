@@ -27,6 +27,7 @@
 #include <Recipient.h>
 #include <Tar.h>
 #include <Utils.h>
+#include <ZStream.h>
 #include <XmlReader.h>
 #include <cdoc/Crypto.h>
 
@@ -720,6 +721,9 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(EncryptWithPasswordAndLabel, FixtureBase, * u
     }
     BOOST_TEST(reader->nextFile(fi) == libcdoc::END_OF_STREAM);
     BOOST_TEST(reader->finishDecryption() == libcdoc::OK);
+
+    delete writer;
+    delete reader;
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -809,6 +813,51 @@ BOOST_AUTO_TEST_CASE(LabelParsingEmptyLabel)
             BOOST_CHECK_EQUAL(result_pair->second, value);
         }
     }
+}
+
+// N3 regression: the base64 decoder (jwt::base::decode) throws
+// std::runtime_error on malformed input. A crafted container label must
+// not crash the process; the label is reported as unparseable instead.
+BOOST_AUTO_TEST_CASE(Base64LabelParsingInvalidBase64)
+{
+    // Characters outside the base64 alphabet.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,###").empty());
+    // Valid alphabet but impossible length (single character).
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,A").empty());
+    // Too much padding.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,QQ===").empty());
+    // Same, with a media type part in front.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:application/x-www-form-urlencoded;base64,###").empty());
+    // Trailing garbage after otherwise valid base64.
+    BOOST_CHECK(libcdoc::Lock::parseLabel("data:;base64,dj0x###").empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// N3 regression: libcdoc::fromBase64 decodes untrusted data (key server
+// and share server responses). Malformed input must yield an empty vector,
+// not an exception.
+BOOST_AUTO_TEST_SUITE(FromBase64)
+
+BOOST_AUTO_TEST_CASE(ValidInput)
+{
+    // "hello world"
+    std::vector<uint8_t> expected {'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'};
+    BOOST_CHECK(libcdoc::fromBase64("aGVsbG8gd29ybGQ=") == expected);
+    BOOST_CHECK(libcdoc::fromBase64("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(InvalidInputReturnsEmpty)
+{
+    // Characters outside the alphabet.
+    BOOST_CHECK(libcdoc::fromBase64("###").empty());
+    BOOST_CHECK(libcdoc::fromBase64("aGVsbG8###").empty());
+    // Impossible lengths (not a multiple of 4 after padding rules).
+    BOOST_CHECK(libcdoc::fromBase64("A").empty());
+    // Excess padding.
+    BOOST_CHECK(libcdoc::fromBase64("QQ===").empty());
+    // Padding in the middle.
+    BOOST_CHECK(libcdoc::fromBase64("QQ==QQ==").empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -982,6 +1031,61 @@ BOOST_AUTO_TEST_CASE(AllowsReasonablePaxHeaderSize)
     BOOST_CHECK_NE(rv, libcdoc::DATA_FORMAT_ERROR);
 }
 
+// Regression for SecurityReview_Kilo_2026-07 N20: Header::getName ran
+// strlen on a 100-byte field that may contain no NUL, over-reading into
+// adjacent header fields. The fix uses memchr with an explicit bound.
+BOOST_AUTO_TEST_CASE(NameWithoutNulDoesNotOverread)
+{
+    // Build a tar header whose 100-byte name field has NO NUL terminator.
+    std::vector<uint8_t> block(512, 0);
+    // Fill name field with 'A' - no NUL anywhere in the 100 bytes.
+    std::fill(block.begin(), block.begin() + 100, uint8_t('A'));
+
+    // mode, uid, gid, size, mtime (valid octal, as in makeTarHeader)
+    auto write_octal_field = [&](size_t offset, size_t width, int64_t value) {
+        std::string s(width - 1, '0');
+        for (size_t i = 0; i < width - 1 && value > 0; ++i) {
+            s[width - 2 - i] = char('0' + (value & 7));
+            value >>= 3;
+        }
+        std::copy(s.begin(), s.end(), block.begin() + offset);
+    };
+    write_octal_field(100, 8, 0600);
+    write_octal_field(108, 8, 0);
+    write_octal_field(116, 8, 0);
+    write_octal_field(124, 12, 0);
+    write_octal_field(136, 12, 0);
+
+    // chksum: spaces during calculation
+    std::fill(block.begin() + 148, block.begin() + 156, uint8_t(' '));
+    block[156] = uint8_t('0'); // regular file
+    constexpr std::string_view magic{"ustar\0", 6};
+    std::copy(magic.begin(), magic.end(), block.begin() + 257);
+    block[263] = '0';
+    block[264] = '0';
+
+    int64_t sum = 0;
+    for (uint8_t b : block) sum += b;
+    std::string chk(7, '0');
+    for (size_t i = 0; i < 6 && sum > 0; ++i) {
+        chk[5 - i] = char('0' + (sum & 7));
+        sum >>= 3;
+    }
+    chk[6] = '\0';
+    std::copy(chk.begin(), chk.end(), block.begin() + 148);
+    block[155] = ' ';
+
+    libcdoc::VectorSource src(block);
+    libcdoc::TarSource tar_src(&src, false);
+    std::string name;
+    int64_t size = 0;
+    auto rv = tar_src.next(name, size);
+    // The name must be exactly 100 bytes (the full field), not longer.
+    BOOST_CHECK_EQUAL(rv, libcdoc::OK);
+    BOOST_CHECK_EQUAL(name.size(), 100);
+    BOOST_CHECK(name.find_first_not_of('A') == std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(StreamingDecryption)
@@ -1027,6 +1131,174 @@ BOOST_AUTO_TEST_CASE_TEMPLATE(constructor, Buf, BufTypes)
 
         BOOST_CHECK_EQUAL_COLLECTIONS(plaintext.begin(), plaintext.end(), decrypted_text.begin(), decrypted_text.end());
     }
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N7: ZSource had no limit on
+// total decompressed output, so a few-KB compressed container could expand
+// to gigabytes of memory (CDoc1) or disk (CDoc2). The reader must cap the
+// total inflated size and fail with IO_ERROR past the limit.
+BOOST_AUTO_TEST_SUITE(ZSourceLimit)
+
+// A zlib stream of repeating zeros compresses to almost nothing; without
+// a cap the reader would happily inflate unlimited attacker-controlled
+// output.
+BOOST_AUTO_TEST_CASE(EnforcesMaxDecompressedSize)
+{
+    // Build a compressed stream that expands well past the cap.
+    // 1 MiB of zeros compresses to ~1 KiB.
+    const size_t PLAIN_SIZE = 1024 * 1024;
+    std::vector<uint8_t> plain(PLAIN_SIZE, 0);
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+    BOOST_REQUIRE(compressed.size() < plain.size() / 100); // sanity: it compressed
+
+    // Read with a 64 KiB cap — must fail with IO_ERROR, not return the full MiB.
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 64 * 1024);
+    std::vector<uint8_t> buf(4096);
+    libcdoc::result_t total = 0;
+    while (true) {
+        auto rv = zsrc.read(buf.data(), buf.size());
+        if (rv < 0) {
+            BOOST_CHECK_EQUAL(rv, libcdoc::IO_ERROR);
+            break;
+        }
+        if (rv == 0) break;
+        total += rv;
+    }
+    BOOST_CHECK(zsrc.isError());
+    // The limited read should have produced less than the full payload.
+    BOOST_CHECK(total < PLAIN_SIZE);
+}
+
+// Without a cap (max_size = 0) the stream must succeed as before.
+BOOST_AUTO_TEST_CASE(UnlimitedWhenCapIsZero)
+{
+    const std::vector<uint8_t> plain = {'h', 'e', 'l', 'l', 'o'};
+    std::vector<uint8_t> compressed;
+    libcdoc::VectorConsumer dst(compressed);
+    libcdoc::ZConsumer enc(&dst, false);
+    libcdoc::VectorSource src(plain);
+    src.readAll(enc);
+    BOOST_REQUIRE_EQUAL(enc.close(), libcdoc::OK);
+
+    libcdoc::VectorSource comp_src(compressed);
+    libcdoc::ZSource zsrc(&comp_src, false, 0); // no cap
+    std::vector<uint8_t> buf(plain.size());
+    auto rv = zsrc.read(buf.data(), buf.size());
+    BOOST_CHECK_EQUAL(rv, plain.size());
+    BOOST_CHECK_EQUAL_COLLECTIONS(buf.begin(), buf.end(), plain.begin(), plain.end());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N2: AES-CBC was only used by
+// CDoc 1.0, which is long expired, and the DecryptionSource CBC path was
+// broken anyway (the `size != out` invariant fails for padded CBC).
+// Support has been removed entirely; the Crypto::cipher lookup and the
+// CDoc1 reader's SUPPORTED_METHODS list must not let CBC methods through.
+BOOST_AUTO_TEST_SUITE(AesCbcRemoved)
+
+BOOST_AUTO_TEST_CASE(CipherLookupRejectsCbc)
+{
+    constexpr std::array cbcMethods {
+        "http://www.w3.org/2001/04/xmlenc#aes128-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes192-cbc",
+        "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
+    };
+    for (const char *m : cbcMethods) {
+        BOOST_CHECK(libcdoc::Crypto::cipher(m) == nullptr);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(CipherLookupStillAcceptsGcm)
+{
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES128GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES192GCM_MTH)) != nullptr);
+    BOOST_CHECK(libcdoc::Crypto::cipher(std::string(libcdoc::Crypto::AES256GCM_MTH)) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N8: PBKDF2 kdf_iterations
+// from the container is attacker-controlled int32. Without bounds it
+// enables both CPU-exhaustion DoS (huge iteration counts) and sign-wrap
+// confusion (values > INT32_MAX wrap negative and silently take the raw
+// symmetric-key path). The writer must enforce [100k, 10M] and the
+// reader must reject > 100M.
+BOOST_AUTO_TEST_SUITE(Pbkdf2IterationBounds)
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooFewIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 99'999);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMinimumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 100'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsMaximumIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'000);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterRejectsTooManyIterations)
+{
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 10'000'001);
+    BOOST_CHECK(!rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(WriterAcceptsZeroIterations)
+{
+    // kdf_iter == 0 means a raw symmetric key (no PBKDF2); valid.
+    auto rcpt = libcdoc::Recipient::makeSymmetric("test", 0);
+    BOOST_CHECK(rcpt.validate());
+}
+
+BOOST_AUTO_TEST_CASE(ReaderRejectsNegativeIterations)
+{
+    // Negative kdf_iter (possible from sign-wrap when the container's
+    // unsigned 4-byte field is read as signed int32) must be rejected
+    // before it silently takes the raw-key path.
+    TestCrypto crypto;
+    crypto.password = "test";
+    std::vector<uint8_t> kek_pm;
+    std::vector<uint8_t> salt(16, 0);
+    std::vector<uint8_t> pw_salt(16, 0);
+    auto rv = crypto.extractHKDF(kek_pm, salt, pw_salt, -1, 0);
+    BOOST_CHECK_EQUAL(rv, libcdoc::CryptoBackend::INVALID_PARAMS);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression for SecurityReview_Kilo_2026-07 N17: timeFromISO did not
+// check std::get_time failure, so a malformed server expiry produced
+// garbage time_t that was cast to uint64_t. The function now returns -1
+// on parse failure and the caller falls back to the client-supplied
+// expiry with a warning.
+BOOST_AUTO_TEST_SUITE(TimeFromISO)
+
+BOOST_AUTO_TEST_CASE(ParsesValidISO)
+{
+    double rv = libcdoc::timeFromISO("2026-08-18T12:00:00Z");
+    BOOST_CHECK(rv > 0);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInvalidISO)
+{
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("not-a-date"), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO(""), -1);
+    BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-13-45T99:99:99Z"), -1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1138,6 +1410,46 @@ BOOST_AUTO_TEST_CASE(TruncatesOverlongNames)
     // No-extension version simply truncates.
     auto truncated = libcdoc::sanitiseExtractedFilename(std::string(400, 'b'));
     BOOST_CHECK_EQUAL(truncated.size(), 255u);
+}
+
+// N24: UTF-8 validation, boundary-aware truncation, and NTFS ADS ':' rejection.
+BOOST_AUTO_TEST_CASE(RejectsMalformedUtf8)
+{
+    // Lone continuation byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\x80.txt")), "");
+    // Truncated multi-byte sequence
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xC3.txt")), "");
+    // Invalid lead byte
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename(std::string("\xFE.txt")), "");
+    // Valid UTF-8 still passes
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("\xC3\xB5.txt"), "\xC3\xB5.txt");
+}
+
+BOOST_AUTO_TEST_CASE(TruncatesAtUtf8Boundary)
+{
+    // Build a name with 254 bytes of 'a' + a 2-byte UTF-8 char at position 254-255.
+    // Naive truncation at 255 would split the codepoint.
+    std::string name(254, 'a');
+    name += "\xC3\xB5"; // 'õ' - 2-byte UTF-8
+    name += ".txt";
+    auto result = libcdoc::sanitiseExtractedFilename(name);
+    // The 2-byte character at the boundary must not be split.
+    // Result should be <= 255 and the last bytes before .txt should not
+    // be a lone continuation byte.
+    BOOST_CHECK_LE(result.size(), 255u);
+    BOOST_CHECK(result.ends_with(".txt"));
+    // Extract the stem and verify it ends at a codepoint boundary
+    std::string stem = result.substr(0, result.size() - 4);
+    BOOST_CHECK(libcdoc::isValidUtf8(stem));
+}
+
+BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
+{
+    // NTFS ADS: "file.txt:stream" creates an alternate data stream on file.txt
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:evil.exe"), "");
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:stream"), "");
+    // Drive-relative is still handled (stripped, not rejected)
+    BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "foo.txt");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1333,8 +1645,9 @@ BOOST_AUTO_TEST_CASE(RejectsNonDigitNationalId)
 {
     BOOST_CHECK(!libcdoc::parseEtsiRecipientId("etsi/PNOEE-30303039 14").valid());
     BOOST_CHECK(!libcdoc::parseEtsiRecipientId("etsi/PNOEE-3030303991a").valid());
-    // Embedded NUL.
-    BOOST_CHECK(!libcdoc::parseEtsiRecipientId(std::string("etsi/PNOEE-3030\0039914", 22)).valid());
+    // Embedded NUL. (sizeof - 1: the literal is 20 chars; a hard-coded
+    // length of 22 read 2 bytes past it - caught by ASan.)
+    BOOST_CHECK(!libcdoc::parseEtsiRecipientId(std::string("etsi/PNOEE-3030\0039914", sizeof("etsi/PNOEE-3030\0039914") - 1)).valid());
 }
 
 BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
@@ -1347,6 +1660,107 @@ BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
     BOOST_CHECK(!p33.valid());
     auto pHuge = libcdoc::parseEtsiRecipientId("etsi/PNOEE-" + std::string(1024, '1'));
     BOOST_CHECK(!pHuge.valid());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Regression coverage for the constant-time PKCS#1 v1.5 unpadding used by
+// the RSA implicit-rejection path (N1 in SecurityReview_Kilo_2026-07.md).
+// The index-clamping mask in unpadPKCS1v15CT was a single byte (0x00/0xFF)
+// instead of a full-width size_t mask, which spliced the low byte of the
+// source index with the high bits of (em.size() - 1) and read past the end
+// of the EM buffer for modulus lengths that are not a multiple of 256
+// bytes (e.g. the 384-byte EM of a 3072-bit RSA key, up to 128 bytes OOB).
+BOOST_AUTO_TEST_SUITE(RsaImplicitRejectUnpad)
+
+// Sweep the zero separator across the whole EM block: output must be the
+// real message exactly when the padding is valid (00 02 || PS>=8 || 00 ||
+// M of expected_len) and the synthetic plaintext in every other case.
+// Under ASAN this also fails on any out-of-bounds EM access.
+static void sweepSeparatorPositions(size_t em_len)
+{
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> synth(expected_len);
+    for (size_t i = 0; i < expected_len; i++)
+        synth[i] = uint8_t(0xA0 + i);
+
+    for (size_t sep = 2; sep < em_len; sep++) {
+        std::vector<uint8_t> em(em_len, 0x55);
+        em[0] = 0x00;
+        em[1] = 0x02;
+        em[sep] = 0x00;
+
+        std::vector<uint8_t> dst;
+        BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(dst.size(), expected_len);
+
+        const size_t msg_len = em_len - sep - 1;
+        const bool expect_real = (sep >= 10) && (msg_len == expected_len);
+        for (size_t i = 0; i < expected_len; i++) {
+            const uint8_t want = expect_real ? em[sep + 1 + i] : synth[i];
+            BOOST_CHECK_EQUAL(dst[i], want);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(SeparatorSweepAllModulusSizes)
+{
+    sweepSeparatorPositions(192);   // 1536-bit RSA
+    sweepSeparatorPositions(256);   // 2048-bit RSA
+    sweepSeparatorPositions(384);   // 3072-bit RSA (read up to +128 bytes OOB before the fix)
+    sweepSeparatorPositions(512);   // 4096-bit RSA
+}
+
+BOOST_AUTO_TEST_CASE(ValidPaddingReturnsMessage3072)
+{
+    // Valid-padding 3072-bit case (message at the end of the EM block);
+    // the old byte-wide mask happened to compute these indices correctly.
+    // The actual OOB reproducer is the separator sweep above: for 384-byte
+    // EMs, separator positions 127..254 made the old mask splice read past
+    // the buffer (padding is invalid there, so only ASAN observes it).
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    constexpr size_t sep = em_len - expected_len - 1;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x00;
+    em[1] = 0x02;
+    em[sep] = 0x00;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(dst.size(), expected_len);
+    for (size_t i = 0; i < expected_len; i++)
+        BOOST_CHECK_EQUAL(dst[i], em[sep + 1 + i]);
+}
+
+BOOST_AUTO_TEST_CASE(BadHeaderReturnsSynthetic)
+{
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x01;   // wrong leading byte
+    em[1] = 0x02;
+    em[em_len - expected_len - 1] = 0x00;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_CHECK(dst == synth);
+}
+
+BOOST_AUTO_TEST_CASE(NoSeparatorReturnsSynthetic)
+{
+    constexpr size_t em_len = 384;
+    constexpr size_t expected_len = 32;
+    std::vector<uint8_t> em(em_len, 0x55);
+    em[0] = 0x00;
+    em[1] = 0x02;
+    std::vector<uint8_t> synth(expected_len, 0xAA);
+
+    std::vector<uint8_t> dst;
+    BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
+    BOOST_CHECK(dst == synth);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

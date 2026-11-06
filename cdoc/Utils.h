@@ -162,9 +162,12 @@ std::string buildURL(const std::string& host, int port);
  *   - "." and ".." segments,
  *   - NUL bytes and other ASCII control characters,
  *   - leading/trailing whitespace and dots (Windows trims these silently),
- *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
- *   - excessively long names (capped at 255 bytes after sanitisation, the
- *     practical filename limit on every filesystem libcdoc supports).
+  *   - reserved Windows device names (CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9),
+  *   - NTFS Alternate Data Stream separator ':',
+  *   - malformed UTF-8,
+  *   - excessively long names (capped at 255 bytes after sanitisation, the
+  *     practical filename limit on every filesystem libcdoc supports;
+  *     truncation respects UTF-8 character boundaries).
  *
  * The returned string is a relative file name (no slashes), or empty if no
  * safe name could be derived. A caller that gets an empty return value MUST
@@ -181,7 +184,7 @@ std::string buildURL(const std::string& host, int port);
  * @return a relative file name guaranteed not to contain path-traversal
  *         elements, or an empty string when no safe name can be produced.
  */
-CDOC_EXPORT std::string sanitiseExtractedFilename(std::string_view name);
+std::string sanitiseExtractedFilename(std::string_view name);
 
 /**
  * @brief Parsed components of an ETSI Smart-ID / Mobile-ID recipient identifier.
@@ -228,7 +231,7 @@ struct EtsiRecipientId {
  * @param rcpt_id the recipient identifier to parse
  * @return parsed components; check @ref EtsiRecipientId::valid() to test
  */
-CDOC_EXPORT EtsiRecipientId parseEtsiRecipientId(std::string_view rcpt_id);
+EtsiRecipientId parseEtsiRecipientId(std::string_view rcpt_id);
 
 struct urlEncode {
     std::string_view src;
@@ -315,15 +318,15 @@ static inline void LogFormat(LogLevel level, std::string_view file, int line, st
 #define LOG_INFO(...) LogFormat(libcdoc::LEVEL_INFO, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_DBG(...) LogFormat(libcdoc::LEVEL_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 
-#ifdef NDEBUG
-#define LOG_TRACE(...)
-#else
-#define LOG_TRACE(...) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, __VA_ARGS__)
-#endif
-
+// LOG_TRACE and LOG_TRACE_KEY are compile-gated by LIBCDOC_CRYPTO_TRACE
+// (default OFF). They are intended for debugging cryptographic material and
+// other potentially sensitive data. Never use LOG_DBG for secrets — it is
+// runtime-gated only and may be enabled in production deployments.
 #ifdef LIBCDOC_CRYPTO_TRACE
+#define LOG_TRACE(...) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, __VA_ARGS__)
 #define LOG_TRACE_KEY(MSG, KEY) LogFormat(libcdoc::LEVEL_TRACE, __FILE__, __LINE__, MSG, toHex(KEY))
 #else
+#define LOG_TRACE(...)
 #define LOG_TRACE_KEY(MSG, KEY)
 #endif
 

@@ -89,9 +89,9 @@ For more information refer [doc/intro.md](doc/intro.md) document.
 
 1. Install dependencies and necessary tools from
 	* [Visual Studio Community 2022](https://www.visualstudio.com/downloads/)
-	* [CMake](http://www.cmake.org)
+	* [CMake](https://www.cmake.org)
 	* [vcpkg](https://vcpkg.io/)
-	* [Swig](http://swig.org/download.html) - Optional, for C# and Java bindings
+	* [Swig](https://swig.org/download.html) - Optional, for C# and Java bindings
 	* [Doxygen](https://www.doxygen.nl/download.html) - Optional, for generating documentation
 	* [Java](https://www.oracle.com/java/technologies/downloads/) - Optional, for Java bindings
 

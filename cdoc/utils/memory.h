@@ -191,6 +191,70 @@ public:
     }
 };
 
+//
+// A self-cleaning writable container for temporary secrets.
+//
+// We allow getting a reference to the actual content vector to be used in library calls, but
+// all existing contents will be cleansed first in that case.
+//
+
+class SecureTarget {
+    std::vector<uint8_t> data_;
+public:
+    using iterator = std::vector<uint8_t>::iterator;
+    using const_iterator = std::vector<uint8_t>::const_iterator;
+
+    SecureTarget() noexcept = default;
+
+    ~SecureTarget() {
+        cleanse();
+    }
+
+    SecureTarget(const SecureTarget& other) = delete;
+    SecureTarget(SecureTarget&& other) = delete;
+    SecureTarget& operator=(const SecureTarget& other) = delete;
+    SecureTarget& operator=(SecureTarget&& other) = delete;
+    // Need a plain constructor for declaration-initialisation case
+    SecureTarget(std::vector<uint8_t> v) noexcept : data_(std::move(v)) {}
+    // Assignment should first cleanse and then copy/move
+    SecureTarget& operator=(const std::vector<uint8_t>& v) {
+        cleanse();
+        data_ = v;
+        return *this;
+    }
+    SecureTarget& operator=(std::vector<uint8_t>&& v) {
+        cleanse();
+        data_ = std::move(v);
+        return *this;
+    }
+
+    [[nodiscard]] bool empty() const noexcept { return data_.empty(); }
+    [[nodiscard]] size_t size() const noexcept { return data_.size(); }
+    [[nodiscard]] const uint8_t* data() const noexcept { return data_.data(); }
+    [[nodiscard]] const_iterator cbegin() const noexcept { return data_.cbegin(); }
+    [[nodiscard]] const_iterator cend() const noexcept { return data_.cend(); }
+    [[nodiscard]] const_iterator begin() const noexcept { return data_.begin(); }
+    [[nodiscard]] const_iterator end() const noexcept { return data_.end(); }
+
+    [[nodiscard]] operator const std::vector<uint8_t>&() const noexcept { return data_; }
+
+    // Get writable vector
+    // Any secret, if present, is cleansed first to avoid leaking previous contents
+    std::vector<uint8_t>& getTarget() {
+        cleanse();
+        return data_;
+    }
+    std::vector<uint8_t>& getTarget(size_t size) {
+        cleanse(size);
+        return data_;
+    }
+
+    void cleanse(size_t size = 0) noexcept {
+        ::libcdoc::cleanse(data_);
+        data_.resize(size);
+    }
+};
+
 /**
  * @brief Scope guard that wipes a contiguous secret on destruction.
  *

@@ -144,7 +144,10 @@ result_t FileListConsumer::open(const std::string &name, int64_t size) {
     }
 
     ofs.open(target, std::ios_base::binary);
-    return ofs.bad() ? OUTPUT_STREAM_ERROR : OK;
+    // N23: ofs.bad() misses failbit set by a failed open() (e.g. permission
+    // denied, read-only filesystem). Check fail() instead so extraction
+    // reports the error instead of "succeeding" with nothing written.
+    return ofs.fail() ? OUTPUT_STREAM_ERROR : OK;
 }
 
 FileListSource::FileListSource(const std::string& base, const std::vector<std::string>& files)

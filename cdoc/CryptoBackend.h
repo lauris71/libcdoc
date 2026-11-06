@@ -45,6 +45,22 @@ struct CDOC_EXPORT CryptoBackend {
 
 	static constexpr int ECC_KEY_LEN = 32;
 
+    // N8: PBKDF2 iteration bounds.
+    //
+    // The container carries an attacker-controlled int32 kdf_iterations
+    // field. Without bounds a malicious container can either:
+    //   - set kdf_iterations = 2^31-1 → CPU DoS (hours of PBKDF2 per attempt)
+    //   - set kdf_iterations > INT32_MAX → sign-wrap to negative → the raw
+    //     symmetric-key path is taken instead of the password path
+    //
+    // Encryption limits (writer side): passwords must use at least
+    // KDF_ITER_MIN_ENCRYPT iterations and at most KDF_ITER_MAX_ENCRYPT.
+    // Decryption limit (reader side): containers with more than
+    // KDF_ITER_MAX_DECRYPT iterations are rejected outright.
+    static constexpr int32_t KDF_ITER_MIN_ENCRYPT = 100000;
+    static constexpr int32_t KDF_ITER_MAX_ENCRYPT = 10000000;
+    static constexpr int32_t KDF_ITER_MAX_DECRYPT = 100000000;
+
     enum HashAlgorithm : uint32_t {
         SHA_224,
         SHA_256,

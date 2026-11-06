@@ -115,7 +115,7 @@ endif()
 
 if(WIN32)
     list(APPEND PUBLIC_HEADERS WinBackend.h)
-    add_compile_definitions(UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_definitions(cdoc PUBLIC $<BUILD_INTERFACE:UNICODE WIN32_LEAN_AND_MEAN NOMINMAX>)
     target_link_libraries(cdoc PRIVATE Crypt32 NCrypt cryptui)
 endif()
 

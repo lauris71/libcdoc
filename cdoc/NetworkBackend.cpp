@@ -206,7 +206,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
         error = FORMAT("Cannot get peer certificate list: {}", result);
         return result;
     }
-    libcdoc::LOG_DBG("Num TLS certs {}", certs.size());
+    LOG_DBG("Num TLS certs {}", certs.size());
     if (!certs.empty()) {
         SSL_CTX *ctx = cli.ssl_context();
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
@@ -274,7 +274,7 @@ static libcdoc::result_t
 post(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, const std::string& req, httplib::Response& rsp)
 {
     // Capture TLS and HTTP errors
-    libcdoc::LOG_DBG("POST: {} {}", path, req);
+    LOG_TRACE("POST: {} {}", path, req);
     httplib::Result res = cli.Post(path, hdrs, req, "application/json");
     if (!res) {
         error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
@@ -316,7 +316,7 @@ get(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, pi
 libcdoc::result_t
 libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, const std::vector<uint8_t>& rcpt_key, const std::vector<uint8_t> &key_material, const std::string& type, uint64_t expiry_ts)
 {
-    LOG_DBG("Sendkey");
+    LOG_DBG("NetworkBackend::Sendkey");
     picojson::object obj = {
         {"recipient_id", picojson::value(libcdoc::toBase64(rcpt_key))},
         {"ephemeral_key_material", picojson::value(libcdoc::toBase64(key_material))},
@@ -367,7 +367,13 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         dst.expiry_time = expiry_ts;
         LOG_DBG("Given expiry timestamp: {}", dst.expiry_time);
     } else {
-        dst.expiry_time = uint64_t(timeFromISO(expiry_str));
+        double parsed = timeFromISO(expiry_str);
+        if (parsed < 0) {
+            LOG_WARN("Invalid server expiry '{}', using client-supplied expiry", expiry_str);
+            dst.expiry_time = expiry_ts;
+        } else {
+            dst.expiry_time = uint64_t(parsed);
+        }
         LOG_DBG("Server expiry timestamp: {}", dst.expiry_time);
     }
 
@@ -385,8 +391,8 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     };
     picojson::value req_json(obj);
     std::string req_str = req_json.serialize();
-    LOG_DBG("POST keyshare to: {}", url);
-    LOG_DBG("{}", req_str);
+    LOG_TRACE("POST keyshare to: {}", url);
+    LOG_TRACE("{}", req_str);
 
     std::string host, path;
     int port;
@@ -418,7 +424,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     error = {};
 
     dst.assign(location.cbegin() + prefix.size(), location.cend());
-    LOG_DBG("Share: {}", std::string((const char *) dst.data(), dst.size()));
+    LOG_TRACE("Share: {}", std::string((const char *) dst.data(), dst.size()));
 
     return OK;
 }
@@ -458,6 +464,10 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     error = {};
     std::string ks = v.get<std::string>();
     dst = fromBase64(ks);
+    if (dst.empty()) {
+        error = FORMAT("Invalid base64 in 'ephemeral_key_material'");
+        return NETWORK_ERROR;
+    }
 
     return libcdoc::OK;
 }
@@ -466,14 +476,14 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id)
 {
-    LOG_DBG("Get nonce from: {}", url);
+    LOG_TRACE("Get nonce from: {}", url);
 
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -486,7 +496,7 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     result = post(cli, full, hdrs, "", rsp);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", rsp.body);
     picojson::value rsp_json;
     std::string parse_err = picojson::parse(rsp_json, rsp.body);
     if (!parse_err.empty()) {
@@ -507,14 +517,14 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& ticket, const std::vector<uint8_t>& cert)
 {
-    LOG_DBG("Get share from: {}", url);
+    LOG_TRACE("Get share from: {}", url);
 
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
 
@@ -523,7 +533,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     if (result = setProxy(cli, this); result != OK) return result;
 
     std::string full = path + "/key-shares/" + share_id;
-    LOG_DBG("Share url: {}", full);
+    LOG_TRACE("Share url: {}", full);
     httplib::Headers hdrs;
     hdrs.insert({"x-cdoc2-auth-ticket", ticket});
     hdrs.insert({"x-cdoc2-auth-x5c", std::string("-----BEGIN CERTIFICATE-----") + toBase64(cert) + "-----END CERTIFICATE-----"});
@@ -537,7 +547,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
         return NETWORK_ERROR;
     }
     std::string share64 = v.get<std::string>();
-    LOG_DBG("Share64: {}", share64);
+    LOG_TRACE("Share64: {}", share64);
     v = rsp_json.get("recipient");
     if (!v.is<std::string>()) {
         error = FORMAT("No 'recipient' in response");
@@ -549,7 +559,7 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
         error = FORMAT("Invalid share size: expected 32, got {}", shareval.size());
         return NETWORK_ERROR;
     }
-    LOG_DBG("Share: {}", toHex(shareval));
+    LOG_TRACE("Share: {}", toHex(shareval));
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }
@@ -636,7 +646,7 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
 
     double end = libcdoc::getTime() + seconds;
     std::string full = path + session_id + "?timeoutMs=" + std::to_string((int) (seconds * 1000));
-    LOG_DBG("SID/MID session query path: {}", full);
+    LOG_TRACE("SID/MID session query path: {}", full);
     while (libcdoc::getTime() < end) {
         picojson::value rsp;
         result_t result = get(cli, hdrs, full, rsp);
@@ -760,18 +770,18 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         {"nonce", picojson::value(nonce)}
     };
     picojson::value query(obj);
-    LOG_DBG("JSON:{}", query.serialize());
+    LOG_TRACE("JSON:{}", query.serialize());
 
     std::string host, path;
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    LOG_DBG("URL:{}", url);
-    LOG_DBG("HOST:{}", host);
-    LOG_DBG("PORT:{}", port);
-    LOG_DBG("PATH:{}", path);
+    LOG_TRACE("URL:{}", url);
+    LOG_TRACE("HOST:{}", host);
+    LOG_TRACE("PORT:{}", port);
+    LOG_TRACE("PATH:{}", path);
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -782,14 +792,14 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     // Let user choose certificate (if multiple)
     //
     std::string full = path + "/certificatechoice/" + rcpt_id;
-    LOG_DBG("SmartID path: {}", full);
+    LOG_TRACE("SmartID path: {}", full);
     httplib::Headers hdrs;
     httplib::Response rsp;
     result = post(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
 
 
-    LOG_DBG("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", rsp.body);
     picojson::value v;
     std::string parse_err = picojson::parse(v, rsp.body);
     if (!parse_err.empty()) {
@@ -809,12 +819,12 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         return NetworkBackend::NETWORK_ERROR;
     }
     std::string sessionID  = w.get<std::string>();
-    LOG_DBG("SessionID: {}", sessionID);
+    LOG_TRACE("SessionID: {}", sessionID);
 
     SIDResponse sidrsp;
     result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
     if (result != OK) return result;
-    LOG_DBG("Certificate: {}", sidrsp.cert);
+    LOG_TRACE("Certificate: {}", sidrsp.cert);
 
     //
     // Sign
@@ -857,15 +867,15 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         }
     };
     query = picojson::value(qobj);
-    LOG_DBG("JSON:{}", query.serialize());
+    LOG_TRACE("JSON:{}", query.serialize());
     //
     // Sign digest
     //
     full = path + "/authentication/" + rcpt_id;
-    LOG_DBG("SmartID path: {}", full);
+    LOG_TRACE("SmartID path: {}", full);
     result = post(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
-    LOG_DBG("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", rsp.body);
     parse_err = picojson::parse(v, rsp.body);
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
@@ -884,13 +894,13 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         return NetworkBackend::NETWORK_ERROR;
     }
     sessionID  = w.get<std::string>();
-    LOG_DBG("SessionID: {}", sessionID);
+    LOG_TRACE("SessionID: {}", sessionID);
 
     sidrsp = {};
     result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
     if (result != OK) return result;
-    LOG_DBG("Certificate: {}", sidrsp.cert);
-    LOG_DBG("Signature: {}", sidrsp.signature);
+    LOG_TRACE("Certificate: {}", sidrsp.cert);
+    LOG_TRACE("Signature: {}", sidrsp.signature);
 
     dst = fromBase64(sidrsp.signature);
     cert = fromBase64(sidrsp.cert);
@@ -938,12 +948,12 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     int port;
     int result = libcdoc::parseURL(url, host, port, path);
     if (result != libcdoc::OK) return result;
-    LOG_DBG("URL:{}", url);
-    LOG_DBG("HOST:{}", host);
-    LOG_DBG("PORT:{}", port);
-    LOG_DBG("PATH:{}", path);
+    LOG_TRACE("URL:{}", url);
+    LOG_TRACE("HOST:{}", host);
+    LOG_TRACE("PORT:{}", port);
+    LOG_TRACE("PATH:{}", path);
 
-    LOG_DBG("Starting client: {} {}", host, port);
+    LOG_TRACE("Starting client: {} {}", host, port);
     httplib::SSLClient cli(host, port);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
@@ -978,17 +988,17 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         {"displayTextFormat", picojson::value("GSM-7")}
     };
     picojson::value query = picojson::value(qobj);
-    LOG_DBG("JSON:{}", query.serialize());
+    LOG_TRACE("JSON:{}", query.serialize());
     //
     // Sign digest
     //
     std::string full = path + "/authentication";
-    LOG_DBG("Mobile ID path: {}", full);
+    LOG_TRACE("Mobile ID path: {}", full);
     httplib::Headers hdrs;
     httplib::Response rsp;
     result = post(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
-    LOG_DBG("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", rsp.body);
 
     picojson::value v;
     parse_err = picojson::parse(v, rsp.body);
@@ -1009,14 +1019,14 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         return NetworkBackend::NETWORK_ERROR;
     }
     std::string sessionID  = w.get<std::string>();
-    LOG_DBG("SessionID: {}", sessionID);
+    LOG_TRACE("SessionID: {}", sessionID);
 
     SIDResponse sidrsp;
     result = waitForResult(sidrsp, cli, path + "/authentication/session/", sessionID, 60, false);
     if (result != OK) return result;
 
-    LOG_DBG("Certificate: {}", sidrsp.cert);
-    LOG_DBG("Signature: {}", sidrsp.signature);
+    LOG_TRACE("Certificate: {}", sidrsp.cert);
+    LOG_TRACE("Signature: {}", sidrsp.signature);
 
     dst = fromBase64(sidrsp.signature);
     cert = fromBase64(sidrsp.cert);

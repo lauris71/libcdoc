@@ -83,8 +83,16 @@ Lock::parseLabel(const std::string& label)
         base64IndPos != std::string::npos)
     {
         std::string base64_label(label_wo_prefix.substr(base64IndPos + CDoc2::LABELBASE64IND.size()));
-        decodedBase64 = jwt::base::decode<jwt::alphabet::base64>(base64_label);
-        label_to_prcss = decodedBase64;
+        // jwt::base::decode throws std::runtime_error on malformed base64.
+        // The label comes from the (untrusted) container, so a malformed
+        // label must not crash the process - treat it as unparseable.
+        try {
+            decodedBase64 = jwt::base::decode<jwt::alphabet::base64>(base64_label);
+            label_to_prcss = decodedBase64;
+        } catch (const std::exception &e) {
+            LOG_WARN("The label '{}' contains invalid base64: {}", label, e.what());
+            return parsed_label;
+        }
     } else if (label_wo_prefix.starts_with(",")) {
         label_to_prcss = label_wo_prefix.substr(1);
     } else {

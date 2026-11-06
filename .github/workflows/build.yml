@@ -14,7 +14,7 @@ jobs:
     container: ubuntu:${{ matrix.container }}
     strategy:
       matrix:
-        container: ['22.04', '24.04', '26.04']
+        container: ['22.04', '24.04', '26.04', '26.10']
         arch: ['amd64', 'arm64']
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -64,7 +64,7 @@ jobs:
         echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
         echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
     - name: Cache vcpkg
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ${{ github.workspace }}/vcpkg_cache
         key: vcpkg-${{ matrix.target }}-${{ hashFiles('vcpkg.json') }}
@@ -83,7 +83,7 @@ jobs:
           libcdoc.${{ matrix.target }}
   macos:
     name: Build on macOS for ${{ matrix.target }}
-    runs-on: macos-latest
+    runs-on: xcode-27
     strategy:
       matrix:
         target: [macos, iphoneos, iphonesimulator]
@@ -97,7 +97,7 @@ jobs:
         brew update
         brew install --formula swig doxygen
     - name: Cache vcpkg
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ${{ github.workspace }}/vcpkg_cache
         key: vcpkg-${{ matrix.target }}-${{ hashFiles('vcpkg.json') }}
@@ -118,6 +118,20 @@ jobs:
       with:
         name: ${{ matrix.target }}
         path: ${{ env.DEST }}
+  sanitizers:
+    name: Run unit tests with ASan+UBSan
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install dependencies
+      run: sudo apt update -qq && sudo apt install --no-install-recommends -y ninja-build libboost-test-dev ${UBUNTU_DEPS}
+    - name: Configure
+      run: cmake --preset sanitize
+    - name: Build
+      run: cmake --build --preset sanitize --target unittests
+    - name: Test
+      run: ctest --test-dir build/sanitize --output-on-failure
   windows:
     name: Build on Windows
     runs-on: ${{ matrix.image }}
@@ -133,7 +147,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v6
     - name: Cache vcpkg
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ${{ github.workspace }}/vcpkg_cache
         key: vcpkg-${{ matrix.image }}-${{ matrix.platform }}-${{ hashFiles('vcpkg.json') }}

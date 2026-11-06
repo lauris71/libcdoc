@@ -3,6 +3,7 @@ add_executable(unittests
     ../cdoc/Crypto.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
+    ../cdoc/Utils.cpp
 )
 
 target_link_libraries(unittests
@@ -10,6 +11,7 @@ target_link_libraries(unittests
     LibXml2::LibXml2
     cdoc
     Boost::unit_test_framework
+    ZLIB::ZLIB
 )
 
 add_test(NAME runtest
