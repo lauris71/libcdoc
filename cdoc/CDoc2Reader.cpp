@@ -525,37 +525,6 @@ CDoc2Reader::nextFile(std::string& name, int64_t& size)
             return libcdoc::DATA_FORMAT_ERROR;
         }
     }
-    if (result == OK) {
-        bool raw_paths = conf && conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false);
-        if (!raw_paths) {
-            std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
-            if (sanitized.empty()) {
-                LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
-                if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
-                    setLastError("Crypto payload integrity check failed");
-                    return ir;
-                }
-                setLastError("Filename rejected by sanitizer");
-                return libcdoc::DATA_FORMAT_ERROR;
-            }
-            if (sanitized != name) {
-                LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
-                name = std::move(sanitized);
-            }
-        }
-        // Entry names must be unique (case-insensitively) in both modes:
-        // duplicates either corrupt the container semantics or clobber
-        // earlier entries on disk.
-        if (!priv->seen_names.emplace(libcdoc::filenameDedupKey(name), 1).second) {
-            LOG_ERROR("Duplicate filename in container: '{}'", name);
-            if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
-                setLastError("Crypto payload integrity check failed");
-                return ir;
-            }
-            setLastError("Duplicate filename in container");
-            return libcdoc::DATA_FORMAT_ERROR;
-        }
-    }
     LOG_DBG("CDoc2Reader::nextFile: result: {}, name: {} size: {}", result, name, size);
     return result;
 }
