@@ -14,6 +14,8 @@
 
 #include <openssl/x509.h>
 
+#include <map>
+
 using namespace libcdoc;
 
 #define RET_ERROR(F) if (auto rv = F; rv < 0) return rv
@@ -45,6 +47,9 @@ struct CDoc1Writer::Private final: public XMLWriter
     std::string documentFormat = "ENCDOC-XML|1.1";
     std::string &lastError;
     std::vector<FileEntry> files;
+    // Case-folded dedup keys of all filenames added so far; entry names must
+    // be unique (and must not collide on case-insensitive filesystems).
+    std::map<std::string, size_t> seen_names;
 
     int64_t writeDocument(bool use_ddoc, const std::vector<Recipient> &rcpts, const std::function<int64_t(DataConsumer&)> &f);
     int64_t writeRecipient(const std::vector<uint8_t> &recipient, const Crypto::Key& transportKey);
@@ -281,7 +286,12 @@ CDoc1Writer::addFile(const std::string& name, size_t size)
         if (stored_name != name)
             LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
     }
+    // Entry names must be unique, also on case-insensitive filesystems.
+    std::string dedup_key = libcdoc::filenameDedupKey(stored_name);
+    if (d->seen_names.contains(dedup_key))
+        return libcdoc::DATA_FORMAT_ERROR;
 	d->files.push_back({stored_name, size, {}});
+    d->seen_names.emplace(std::move(dedup_key), 1);
 	return libcdoc::OK;
 }
 

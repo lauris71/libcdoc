@@ -23,6 +23,8 @@
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 
+#include <map>
+
 // fixme: Placeholder
 #define t_(t) t
 
@@ -71,17 +73,38 @@ struct CDoc2Reader::Private {
     std::unique_ptr<libcdoc::ZSource> zsrc;
     std::unique_ptr<libcdoc::TarSource> tar;
 
+    // Case-folded dedup keys of all filenames returned by nextFile so far;
+    // the CDoc2 spec requires entry names to be unique.
+    std::map<std::string, size_t> seen_names;
+
+    // Drain the remainder of the encrypted payload and verify the AEAD tag.
+    // Safe to call multiple times: once the stream has been drained and
+    // closed this is a no-op returning OK.
     result_t decryptAllAndClose() {
+        if (!dec) return OK;
         std::array<uint8_t, 1024> buf;
         result_t rv = dec->read(buf.data(), buf.size());
-        while (rv == buf.size()) {
+        while (rv > 0) {
             rv = dec->read(buf.data(), buf.size());
         }
-        if (rv < 0) return rv;
         zsrc.reset();
         tar.reset();
-        rv = dec->close();
+        result_t close_rv = dec->close();
         dec.reset();
+        // A read error (truncated/corrupt payload) is an integrity failure
+        // as well; otherwise close() reports the AEAD tag verification.
+        return (rv < 0) ? rv : close_rv;
+    }
+
+    // Per the CDoc2 standard a payload integrity failure is always reported
+    // as the main error, overriding any other error encountered earlier
+    // during decryption. Callers run this on every mid-decryption failure
+    // path and report the local error only when this returns OK.
+    result_t verifyPayloadIntegrity() {
+        result_t rv = decryptAllAndClose();
+        if (rv != OK) {
+            LOG_WARN("Crypto payload integrity check failed");
+        }
         return rv;
     }
 
@@ -377,12 +400,24 @@ CDoc2Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer
     while (result == libcdoc::OK) {
         result = consumer->open(name, size);
         if (result != libcdoc::OK) {
+            // Payload integrity failure overrides the consumer error.
+            if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
+                setLastError("Crypto payload integrity check failed");
+                LOG_ERROR("{}", last_error);
+                return ir;
+            }
             setLastError(consumer->getLastErrorStr(result));
             LOG_ERROR("{}", last_error);
             return result;
         }
         result = consumer->writeAll(*priv->tar);
         if (result < 0) {
+            // Payload integrity failure overrides the consumer error.
+            if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
+                setLastError("Crypto payload integrity check failed");
+                LOG_ERROR("{}", last_error);
+                return ir;
+            }
             setLastError(consumer->getLastErrorStr(result));
             LOG_ERROR("{}", last_error);
             return result;
@@ -448,25 +483,46 @@ CDoc2Reader::nextFile(std::string& name, int64_t& size)
     }
     result_t result = priv->tar->next(name, size);
     if (result < 0) {
-        // According to specification payload integrity should be reported even if there are parsing errors
-        result_t sr = priv->decryptAllAndClose();
-        if (sr != OK) {
-            LOG_WARN("Crypto payload integrity check failed");
+        // Capture the parse error before draining: decryptAllAndClose()
+        // destroys the tar layer.
+        std::string tar_error = priv->tar->getLastErrorStr(result);
+        // Per the CDoc2 standard a payload integrity failure is reported
+        // as the main error, even when a parsing error was hit first.
+        if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
             setLastError("Crypto payload integrity check failed");
-            return sr;
+            return ir;
         }
-        setLastError(priv->tar->getLastErrorStr(result));
+        setLastError(tar_error);
     }
-    if (result == OK && (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false))) {
-        std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
-        if (sanitized.empty()) {
-            setLastError("Filename rejected by sanitizer");
-            LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
-            return libcdoc::DATA_FORMAT_ERROR;
+    if (result == OK) {
+        bool raw_paths = conf && conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false);
+        if (!raw_paths) {
+            std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
+            if (sanitized.empty()) {
+                LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
+                if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
+                    setLastError("Crypto payload integrity check failed");
+                    return ir;
+                }
+                setLastError("Filename rejected by sanitizer");
+                return libcdoc::DATA_FORMAT_ERROR;
+            }
+            if (sanitized != name) {
+                LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
+                name = std::move(sanitized);
+            }
         }
-        if (sanitized != name) {
-            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
-            name = std::move(sanitized);
+        // Entry names must be unique (case-insensitively) in both modes:
+        // duplicates either corrupt the container semantics or clobber
+        // earlier entries on disk.
+        if (!priv->seen_names.emplace(libcdoc::filenameDedupKey(name), 1).second) {
+            LOG_ERROR("Duplicate filename in container: '{}'", name);
+            if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
+                setLastError("Crypto payload integrity check failed");
+                return ir;
+            }
+            setLastError("Duplicate filename in container");
+            return libcdoc::DATA_FORMAT_ERROR;
         }
     }
     LOG_DBG("CDoc2Reader::nextFile: result: {}, name: {} size: {}", result, name, size);
@@ -483,14 +539,16 @@ CDoc2Reader::readData(uint8_t *dst, size_t size)
     }
     result_t result = priv->tar->read(dst, size);
     if (result < 0) {
-        // According to specification payload integrity should be reported even if there are parsing errors
-        result_t sr = priv->decryptAllAndClose();
-        if (sr != OK) {
-            LOG_WARN("Crypto payload integrity check failed");
+        // Capture the error before draining: decryptAllAndClose() destroys
+        // the tar layer.
+        std::string tar_error = priv->tar->getLastErrorStr(result);
+        // Per the CDoc2 standard a payload integrity failure is reported
+        // as the main error, even when a read error was hit first.
+        if (result_t ir = priv->verifyPayloadIntegrity(); ir != OK) {
             setLastError("Crypto payload integrity check failed");
-            return sr;
+            return ir;
         }
-        setLastError(priv->tar->getLastErrorStr(result));
+        setLastError(tar_error);
     }
     LOG_DBG("CDoc2Reader::readData: result {}", result);
     return result;

@@ -247,13 +247,15 @@ public:
 };
 
 static void
-encrypt(unsigned int version, const std::vector<std::string>& files, const std::string& container, std::vector<libcdoc::RcptInfo>& rcpts) {
+encrypt(unsigned int version, const std::vector<std::string>& files, const std::string& container, std::vector<libcdoc::RcptInfo>& rcpts, bool allow_pathnames = false) {
     libcdoc::ToolConf conf;
     for (auto file : files) {
         conf.input_files.push_back(file);
     }
     conf.out = container;
     conf.cdocVersion = version;
+    if (allow_pathnames)
+        conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
 
     libcdoc::CDocCipher cipher;
     BOOST_CHECK_EQUAL(cipher.Encrypt(conf, rcpts), 0);
@@ -366,6 +368,9 @@ BOOST_FIXTURE_TEST_CASE(DuplicateBasenamesRoundTrip, FixtureBase)
         (root / "a" / "x (1).txt").string()
     };
     const std::vector<std::string> contents {"first", "second", "third"};
+    // FileListSource renames clashing basenames before they reach the
+    // writer: "x.txt", "x.txt", "x (1).txt" become "x.txt", "x (1).txt",
+    // "x (1) (1).txt".
     const std::vector<std::string> names {"x.txt", "x (1).txt", "x (1) (1).txt"};
     for (size_t i = 0; i < inputs.size(); ++i)
         std::ofstream(inputs[i], std::ios::binary) << contents[i];
@@ -376,7 +381,9 @@ BOOST_FIXTURE_TEST_CASE(DuplicateBasenamesRoundTrip, FixtureBase)
         std::vector<libcdoc::RcptInfo> recipients {
             {libcdoc::RcptInfo::CERT, {}, fetchDataFile(RSACertFile)}
         };
-        encrypt(version, inputs, container, recipients);
+        // Keep full paths in the container so the writer's uniqueness check
+        // sees distinct names; the sanitizer/dedup runs on extraction.
+        encrypt(version, inputs, container, recipients, true);
         fs::path extracted = root / ("extracted-" + std::to_string(version));
         fs::create_directories(extracted);
         decrypt(names, container, extracted.string(), fetchDataFile(RSAPrivKeyFile));
@@ -384,6 +391,92 @@ BOOST_FIXTURE_TEST_CASE(DuplicateBasenamesRoundTrip, FixtureBase)
             auto data = libcdoc::readAllBytes((extracted / names[i]).string());
             BOOST_CHECK_EQUAL(std::string(data.begin(), data.end()), contents[i]);
         }
+    }
+    fs::remove_all(root);
+}
+
+// After sanitization, "a/x.txt" and "b/x.txt" both become "x.txt". The
+// writer (push mode) must reject the duplicate rather than store two
+// entries with the same name.
+BOOST_FIXTURE_TEST_CASE(DuplicateSanitizedNamesRejectedByWriter, FixtureBase)
+{
+    std::vector<uint8_t> cert = fetchDataFile(RSACertFile);
+    for (unsigned int version : {1u, 2u}) {
+        BOOST_TEST_INFO("CDoc version=" << version);
+        std::vector<uint8_t> out;
+        libcdoc::VectorConsumer dst(out);
+        libcdoc::CryptoBackend crypto;
+        libcdoc::ToolConf conf;
+        conf.cdocVersion = version;
+        std::unique_ptr<libcdoc::CDocWriter> wrt(
+            libcdoc::CDocWriter::createWriter(version, &dst, false, &conf, &crypto, nullptr));
+        BOOST_REQUIRE(wrt != nullptr);
+        libcdoc::Recipient rcpt = libcdoc::Recipient::makeCertificate("test", cert);
+        BOOST_REQUIRE_EQUAL(wrt->addRecipient(rcpt), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(wrt->beginEncryption(), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->addFile("a/x.txt", 4), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->writeData((const uint8_t*)"data", 4), libcdoc::OK);
+        // "b/x.txt" sanitizes to "x.txt" which is already taken.
+        BOOST_CHECK_EQUAL(wrt->addFile("b/x.txt", 4), libcdoc::DATA_FORMAT_ERROR);
+    }
+}
+
+// Case-insensitively: "A.txt" and "a.txt" must also be rejected.
+BOOST_FIXTURE_TEST_CASE(CaseInsensitiveDuplicateRejectedByWriter, FixtureBase)
+{
+    std::vector<uint8_t> cert = fetchDataFile(RSACertFile);
+    for (unsigned int version : {1u, 2u}) {
+        BOOST_TEST_INFO("CDoc version=" << version);
+        std::vector<uint8_t> out;
+        libcdoc::VectorConsumer dst(out);
+        libcdoc::CryptoBackend crypto;
+        libcdoc::ToolConf conf;
+        conf.cdocVersion = version;
+        std::unique_ptr<libcdoc::CDocWriter> wrt(
+            libcdoc::CDocWriter::createWriter(version, &dst, false, &conf, &crypto, nullptr));
+        BOOST_REQUIRE(wrt != nullptr);
+        libcdoc::Recipient rcpt = libcdoc::Recipient::makeCertificate("test", cert);
+        BOOST_REQUIRE_EQUAL(wrt->addRecipient(rcpt), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(wrt->beginEncryption(), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->addFile("A.txt", 4), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->writeData((const uint8_t*)"data", 4), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->addFile("a.txt", 4), libcdoc::DATA_FORMAT_ERROR);
+    }
+}
+
+// A container with two identical raw paths (ALLOW_PATHNAMES=true on write)
+// must still be rejected by the reader on decryption.
+BOOST_FIXTURE_TEST_CASE(DuplicateRawNamesRejectedByReader, FixtureBase)
+{
+    fs::path root = tmpDataPath / "dup-raw-reader";
+    fs::create_directories(root);
+    // Build a container with raw pathnames where both entries are the same
+    // name after stripping: writer with allow_pathnames accepts them since
+    // full paths differ; but with identical raw names the writer rejects
+    // too. So instead build via CDoc2Writer directly with raw names.
+    std::string container = (root / "out.cdoc").string();
+    {
+        std::vector<uint8_t> cert = fetchDataFile(RSACertFile);
+        std::vector<uint8_t> out;
+        libcdoc::VectorConsumer dst(out);
+        libcdoc::CryptoBackend crypto;
+        // ALLOW_PATHNAMES so no sanitization; write two entries with the
+        // same name -> writer dedup must reject the second addFile.
+        libcdoc::ToolConf conf;
+        conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
+        std::unique_ptr<libcdoc::CDocWriter> wrt(
+            libcdoc::CDocWriter::createWriter(2, &dst, false, &conf, &crypto, nullptr));
+        BOOST_REQUIRE(wrt != nullptr);
+        libcdoc::Recipient rcpt = libcdoc::Recipient::makeCertificate("test", cert);
+        BOOST_REQUIRE_EQUAL(wrt->addRecipient(rcpt), libcdoc::OK);
+        BOOST_REQUIRE_EQUAL(wrt->beginEncryption(), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->addFile("x.txt", 4), libcdoc::OK);
+        BOOST_CHECK_EQUAL(wrt->writeData((const uint8_t*)"data", 4), libcdoc::OK);
+        // Second addFile with the same name must fail.
+        BOOST_CHECK_EQUAL(wrt->addFile("x.txt", 4), libcdoc::DATA_FORMAT_ERROR);
+        // Case-insensitive variant must fail too.
+        BOOST_CHECK_EQUAL(wrt->addFile("X.TXT", 4), libcdoc::DATA_FORMAT_ERROR);
+        BOOST_CHECK_EQUAL(wrt->finishEncryption(), libcdoc::OK);
     }
     fs::remove_all(root);
 }
@@ -455,6 +548,98 @@ BOOST_FIXTURE_TEST_CASE(ColonNameIsRejectedWithoutPartialOutput, FixtureBase)
 }
 #endif
 
+// With --allow-pathnames the source preserves clean relative paths in the
+// container, but rejects absolute paths and ".." components.
+BOOST_FIXTURE_TEST_CASE(AllowPathnamesPreservesRelativePaths, FixtureBase)
+{
+    // Minimal password-based crypto for the round-trip.
+    struct PwCrypto : public libcdoc::CryptoBackend {
+        libcdoc::result_t getSecret(std::vector<uint8_t>& dst, unsigned int) override {
+            dst = Password;
+            return libcdoc::OK;
+        }
+    } crypto;
+
+    fs::path root = tmpDataPath / "allow-paths";
+    fs::create_directories(root / "a" / "b");
+    std::ofstream((root / "a" / "b" / "file.txt").string(), std::ios::binary) << "nested";
+    std::ofstream((root / "a" / "top.txt").string(), std::ios::binary) << "top";
+
+    // Encrypt from within root so the paths are relative.
+    libcdoc::ToolConf conf;
+    conf.input_files = {"a/b/file.txt", "a/top.txt"};
+    conf.out = fs::absolute(root / "out.cdoc").string();
+    conf.cdocVersion = 2;
+    conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
+    std::vector<libcdoc::RcptInfo> rcpts {
+        {libcdoc::RcptInfo::PASSWORD, "pw", {}, Password}
+    };
+    // Run with root as cwd so relative paths resolve.
+    fs::path saved_cwd = fs::current_path();
+    fs::current_path(fs::absolute(root));
+    int result = libcdoc::CDocCipher::Encrypt(conf, rcpts);
+    fs::current_path(saved_cwd);
+    BOOST_REQUIRE_EQUAL(result, 0);
+
+    // Read back raw (ALLOW_PATHNAMES) and check the stored names.
+    std::vector<uint8_t> container = libcdoc::readAllBytes(conf.out);
+    libcdoc::VectorSource src(container);
+    struct RawConf : public libcdoc::Configuration {
+        std::string getValue(std::string_view, std::string_view p) const override {
+            if (p == ALLOW_PATHNAMES) return "true";
+            return {};
+        }
+    } rawConf;
+    std::unique_ptr<libcdoc::CDocReader> rdr(
+        libcdoc::CDocReader::createReader(&src, false, &rawConf, &crypto, nullptr));
+    BOOST_REQUIRE(rdr != nullptr);
+    std::vector<uint8_t> fmk;
+    BOOST_REQUIRE_EQUAL(rdr->getFMK(fmk, 0), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(rdr->beginDecryption(fmk), libcdoc::OK);
+    libcdoc::FileInfo fi;
+    std::vector<std::string> names;
+    while (rdr->nextFile(fi) == libcdoc::OK) {
+        names.push_back(fi.name);
+        std::vector<uint8_t> buf(fi.size);
+        rdr->readData(buf.data(), buf.size());
+    }
+    std::sort(names.begin(), names.end());
+    BOOST_REQUIRE_EQUAL(names.size(), 2u);
+    BOOST_CHECK_EQUAL(names[0], "a/b/file.txt");
+    BOOST_CHECK_EQUAL(names[1], "a/top.txt");
+    fs::remove_all(root);
+}
+
+BOOST_FIXTURE_TEST_CASE(AllowPathnamesRejectsAbsoluteAndTraversal, FixtureBase)
+{
+    fs::path root = tmpDataPath / "reject-paths";
+    fs::create_directories(root / "sub");
+    std::ofstream((root / "sub" / "file.txt").string(), std::ios::binary) << "x";
+
+    libcdoc::ToolConf conf;
+    conf.cdocVersion = 2;
+    conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
+    std::vector<libcdoc::RcptInfo> rcpts {
+        {libcdoc::RcptInfo::PASSWORD, "pw", {}, Password}
+    };
+
+    fs::path saved_cwd = fs::current_path();
+    fs::current_path(fs::absolute(root));
+
+    // Absolute path must fail.
+    conf.input_files = {fs::absolute(root / "sub" / "file.txt").string()};
+    conf.out = "abs.cdoc";
+    BOOST_CHECK_NE(libcdoc::CDocCipher::Encrypt(conf, rcpts), 0);
+
+    // ".." component must fail.
+    conf.input_files = {"../reject-paths/sub/file.txt"};
+    conf.out = "dotdot.cdoc";
+    BOOST_CHECK_NE(libcdoc::CDocCipher::Encrypt(conf, rcpts), 0);
+
+    fs::current_path(saved_cwd);
+    fs::remove_all(root);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // CDoc2 password and label
@@ -513,14 +698,14 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(CDoc2EncryptErrors, EncryptFixture,
     // Errors
     BOOST_TEST(wrt->addRecipient(rcpt) == libcdoc::WORKFLOW_ERROR);
     BOOST_TEST(wrt->beginEncryption() == libcdoc::WORKFLOW_ERROR);
-    BOOST_TEST(wrt->addFile("testfile", 1024) == libcdoc::WORKFLOW_ERROR);
+    BOOST_TEST(wrt->addFile("testfile2", 1024) == libcdoc::WORKFLOW_ERROR);
 
     // Write data
     for (int i = 0; i < 256; i++) test_data[i] = uint8_t(rand() & 0xff);
     BOOST_TEST(wrt->writeData(test_data, 256) == libcdoc::OK);
     BOOST_TEST(wrt->addRecipient(rcpt) == libcdoc::WORKFLOW_ERROR);
     BOOST_TEST(wrt->beginEncryption() == libcdoc::WORKFLOW_ERROR);
-    BOOST_TEST(wrt->addFile("testfile", 1024) == libcdoc::WORKFLOW_ERROR);
+    BOOST_TEST(wrt->addFile("testfile3", 1024) == libcdoc::WORKFLOW_ERROR);
     for (int i = 0; i < 256; i++) test_data[i] = uint8_t(rand() & 0xff);
     BOOST_TEST(wrt->writeData(test_data, 256) == libcdoc::OK);
     for (int i = 0; i < 256; i++) test_data[i] = uint8_t(rand() & 0xff);
@@ -623,6 +808,119 @@ BOOST_FIXTURE_TEST_CASE_WITH_DECOR(CDoc2DecryptErrors, DecryptFixture,
     BOOST_TEST(((rv == 255) || (rv == libcdoc::HASH_MISMATCH)));
     BOOST_TEST(rdr->finishDecryption() == libcdoc::WORKFLOW_ERROR);
     delete rdr;
+}
+
+// Helper for the integrity-priority tests: builds a two-file container
+// (in memory, password-encrypted) with the given file names, optionally
+// keeping full pathnames.
+static std::vector<uint8_t>
+buildContainer(const std::string& name1, const std::string& name2, bool allow_pathnames)
+{
+    struct RawPathConf : public libcdoc::Configuration {
+        std::string getValue(std::string_view, std::string_view param) const override {
+            if (param == ALLOW_PATHNAMES) return "true";
+            return {};
+        }
+    } rawConf;
+    std::vector<uint8_t> container;
+    libcdoc::VectorConsumer dst(container);
+    TestCrypto crypto; crypto.password = "test-password";
+    std::unique_ptr<libcdoc::CDocWriter> wrt(
+        libcdoc::CDocWriter::createWriter(2, &dst, false,
+                                          allow_pathnames ? &rawConf : nullptr,
+                                          &crypto, nullptr));
+    BOOST_REQUIRE(wrt != nullptr);
+    libcdoc::Recipient rcpt = libcdoc::Recipient::makeSymmetric("test", 600000);
+    BOOST_REQUIRE_EQUAL(wrt->addRecipient(rcpt), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(wrt->beginEncryption(), libcdoc::OK);
+    const std::string data(512, 'x');
+    BOOST_REQUIRE_EQUAL(wrt->addFile(name1, data.size()), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(wrt->writeData((const uint8_t*) data.data(), data.size()), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(wrt->addFile(name2, data.size()), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(wrt->writeData((const uint8_t*) data.data(), data.size()), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(wrt->finishEncryption(), libcdoc::OK);
+    return container;
+}
+
+// Per the CDoc2 standard a payload integrity failure must always be
+// reported as the main error, even when another (consumer-side) error is
+// encountered first.
+BOOST_AUTO_TEST_CASE(IntegrityErrorOverridesConsumerError)
+{
+    std::vector<uint8_t> container = buildContainer("a.txt", "b.txt", false);
+    // Corrupt the AEAD tag (the last 16 bytes of the payload).
+    BOOST_REQUIRE(container.size() > 16);
+    for (size_t i = container.size() - 16; i < container.size(); ++i)
+        container[i] ^= 0xff;
+
+    struct FailingConsumer : public libcdoc::MultiDataConsumer {
+        libcdoc::result_t open(const std::string&, int64_t) override {
+            return libcdoc::OUTPUT_STREAM_ERROR;
+        }
+        libcdoc::result_t write(const uint8_t*, size_t) noexcept override { return 0; }
+        libcdoc::result_t close() noexcept override { return libcdoc::OK; }
+        bool isError() noexcept override { return false; }
+    } failing;
+
+    libcdoc::VectorSource src(container);
+    TestCrypto crypto; crypto.password = "test-password";
+    std::unique_ptr<libcdoc::CDocReader> rdr(
+        libcdoc::CDocReader::createReader(&src, false, nullptr, &crypto, nullptr));
+    BOOST_REQUIRE(rdr != nullptr);
+    std::vector<uint8_t> fmk;
+    BOOST_REQUIRE_EQUAL(rdr->getFMK(fmk, 0), libcdoc::OK);
+    // Without integrity-priority handling this would surface the consumer's
+    // OUTPUT_STREAM_ERROR; the standard requires the integrity failure.
+    BOOST_CHECK_EQUAL(rdr->decrypt(fmk, &failing), libcdoc::HASH_MISMATCH);
+}
+
+// A container whose stored pathnames collapse to the same basename under
+// sanitization must be rejected on read (duplicate entry name).
+BOOST_AUTO_TEST_CASE(SanitizedDuplicateRejectedByReader)
+{
+    std::vector<uint8_t> container = buildContainer("x/a.txt", "y/a.txt", true);
+
+    libcdoc::VectorSource src(container);
+    TestCrypto crypto; crypto.password = "test-password";
+    std::unique_ptr<libcdoc::CDocReader> rdr(
+        libcdoc::CDocReader::createReader(&src, false, nullptr, &crypto, nullptr));
+    BOOST_REQUIRE(rdr != nullptr);
+    std::vector<uint8_t> fmk;
+    BOOST_REQUIRE_EQUAL(rdr->getFMK(fmk, 0), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(rdr->beginDecryption(fmk), libcdoc::OK);
+    libcdoc::FileInfo fi;
+    BOOST_REQUIRE_EQUAL(rdr->nextFile(fi), libcdoc::OK);
+    BOOST_CHECK_EQUAL(fi.name, "a.txt");
+    std::vector<uint8_t> buf(fi.size);
+    BOOST_REQUIRE_EQUAL(rdr->readData(buf.data(), buf.size()), (libcdoc::result_t) buf.size());
+    // Second entry sanitizes to the same "a.txt" -> rejected.
+    BOOST_CHECK_EQUAL(rdr->nextFile(fi), libcdoc::DATA_FORMAT_ERROR);
+}
+
+// Same container, but with a corrupted payload tag: the duplicate-name
+// error must be masked by the integrity failure.
+BOOST_AUTO_TEST_CASE(IntegrityErrorOverridesDuplicateNameError)
+{
+    std::vector<uint8_t> container = buildContainer("x/a.txt", "y/a.txt", true);
+    BOOST_REQUIRE(container.size() > 16);
+    for (size_t i = container.size() - 16; i < container.size(); ++i)
+        container[i] ^= 0xff;
+
+    libcdoc::VectorSource src(container);
+    TestCrypto crypto; crypto.password = "test-password";
+    std::unique_ptr<libcdoc::CDocReader> rdr(
+        libcdoc::CDocReader::createReader(&src, false, nullptr, &crypto, nullptr));
+    BOOST_REQUIRE(rdr != nullptr);
+    std::vector<uint8_t> fmk;
+    BOOST_REQUIRE_EQUAL(rdr->getFMK(fmk, 0), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(rdr->beginDecryption(fmk), libcdoc::OK);
+    libcdoc::FileInfo fi;
+    BOOST_REQUIRE_EQUAL(rdr->nextFile(fi), libcdoc::OK);
+    std::vector<uint8_t> buf(fi.size);
+    BOOST_REQUIRE_EQUAL(rdr->readData(buf.data(), buf.size()), (libcdoc::result_t) buf.size());
+    // The second entry is a duplicate name, but the corrupted payload must
+    // be reported as HASH_MISMATCH instead of DATA_FORMAT_ERROR.
+    BOOST_CHECK_EQUAL(rdr->nextFile(fi), libcdoc::HASH_MISMATCH);
 }
 BOOST_AUTO_TEST_SUITE_END()
 
@@ -1621,6 +1919,71 @@ BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:evil.exe"), "");
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("file.txt:stream"), "");
     BOOST_CHECK_EQUAL(libcdoc::sanitiseExtractedFilename("C:foo.txt"), "");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(FilenameDedup)
+
+BOOST_AUTO_TEST_CASE(DeduplicateFilenameBasic)
+{
+    std::map<std::string, size_t> seen;
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a.txt");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "b.txt"), "b.txt");
+    // Exact duplicate gets renamed
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a (1).txt");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a (2).txt");
+}
+
+BOOST_AUTO_TEST_CASE(DeduplicateFilenameCaseInsensitive)
+{
+    std::map<std::string, size_t> seen;
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "Report.txt"), "Report.txt");
+    // ASCII case-folded clash
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "REPORT.txt"), "REPORT (1).txt");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "report.txt"), "report (2).txt");
+}
+
+BOOST_AUTO_TEST_CASE(DeduplicateFilenameNoExtension)
+{
+    std::map<std::string, size_t> seen;
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "README"), "README");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "README"), "README (1)");
+    // Dotfile-style leading dot is not an extension
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, ".gitignore"), ".gitignore");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, ".gitignore"), ".gitignore (1)");
+}
+
+BOOST_AUTO_TEST_CASE(DeduplicateFilenamePrePlantedSuffixes)
+{
+    // Attacker pre-plants "a (1).txt" so the natural rename target is taken.
+    std::map<std::string, size_t> seen;
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a.txt");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a (1).txt"), "a (1).txt");
+    // Third "a.txt" must skip the taken (1) and land on (2).
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a (2).txt");
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, "a.txt"), "a (3).txt");
+}
+
+BOOST_AUTO_TEST_CASE(DeduplicateFilenameTruncatesLongStems)
+{
+    std::map<std::string, size_t> seen;
+    std::string long_stem(250, 'a');
+    std::string name = long_stem + ".txt";
+    BOOST_CHECK_EQUAL(libcdoc::deduplicateFilename(seen, name), name);
+    std::string renamed = libcdoc::deduplicateFilename(seen, name);
+    BOOST_CHECK_LE(renamed.size(), 255u);
+    BOOST_CHECK(renamed.ends_with(".txt"));
+    BOOST_CHECK(renamed != name);
+    BOOST_CHECK(libcdoc::isValidUtf8(renamed));
+}
+
+BOOST_AUTO_TEST_CASE(FilenameDedupKeyFoldsAsciiCase)
+{
+    BOOST_CHECK_EQUAL(libcdoc::filenameDedupKey("ABC.txt"), "abc.txt");
+    BOOST_CHECK_EQUAL(libcdoc::filenameDedupKey("aBc.TxT"), "abc.txt");
+    // Non-ASCII bytes pass through untouched
+    BOOST_CHECK_EQUAL(libcdoc::filenameDedupKey("\xC3\xB5.txt"), "\xC3\xB5.txt");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

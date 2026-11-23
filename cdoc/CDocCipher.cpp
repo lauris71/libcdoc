@@ -301,7 +301,7 @@ struct ToolNetwork : public libcdoc::NetworkBackend {
 
 };
 
-int CDocCipher::writer_push(CDocWriter& writer, const vector<Recipient>& rcpts, const vector<string>& files)
+int CDocCipher::writer_push(CDocWriter& writer, const vector<Recipient>& rcpts, const vector<string>& files, bool allow_pathnames)
 {
     for (const libcdoc::Recipient& rcpt : rcpts) {
         int64_t result = writer.addRecipient(rcpt);
@@ -309,7 +309,7 @@ int CDocCipher::writer_push(CDocWriter& writer, const vector<Recipient>& rcpts, 
     }
     int64_t result = writer.beginEncryption();
     if (result != libcdoc::OK) return result;
-    FileListSource src({}, files);
+    FileListSource src({}, files, allow_pathnames);
     std::string name;
     int64_t size;
     while ((result = src.next(name, size)) == OK) {
@@ -449,10 +449,11 @@ int CDocCipher::Encrypt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& recipien
     if (!writer) return WRONG_ARGUMENTS;
 
     int result;
+    bool allow_pathnames = conf.getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false);
     if (PUSH) {
-        result = writer_push(*writer, rcpts, conf.input_files);
+        result = writer_push(*writer, rcpts, conf.input_files, allow_pathnames);
     } else {
-        libcdoc::FileListSource src({}, conf.input_files);
+        libcdoc::FileListSource src({}, conf.input_files, allow_pathnames);
         result = writer->encrypt(src, rcpts);
     }
     if (result != OK) {
@@ -489,7 +490,19 @@ int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
     if (!conf.library.empty())
         crypto.connectLibrary(conf.library);
 
-    unique_ptr<CDocReader> rdr(CDocReader::createReader(conf.input_files[0], &conf, &crypto, &network));
+    // Force the reader into raw (ALLOW_PATHNAMES) mode: the cipher applies
+    // its own sanitize + dedup policy below, and must see the stored names
+    // untouched to do it correctly.
+    struct RawPathConf : public libcdoc::Configuration {
+        const ToolConf& base;
+        explicit RawPathConf(const ToolConf& base) : base(base) {}
+        std::string getValue(std::string_view domain, std::string_view param) const override {
+            if (param == libcdoc::Configuration::ALLOW_PATHNAMES) return "true";
+            return base.getValue(domain, param);
+        }
+    };
+    RawPathConf rawConf(conf);
+    unique_ptr<CDocReader> rdr(CDocReader::createReader(conf.input_files[0], &rawConf, &crypto, &network));
     if (!rdr) {
         LOG_ERROR("Cannot create reader (invalid file?)");
         return 1;
@@ -536,10 +549,10 @@ int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
     recipient.lock_idx = lock_idx;
     network.rcpt_idx = lock_idx;
 
-    return Decrypt(rdr, lock_idx, conf.out);
+    return Decrypt(rdr, lock_idx, conf.out, conf.no_overwrite);
 }
 
-int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const string& base_pathname)
+int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const string& base_pathname, bool no_overwrite)
 {
     // N18: the FMK is key material; store it in a SecureTarget (self-cleaning)
     // and explicitly cleanse after the reader has consumed it.
@@ -563,6 +576,9 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
     }
     std::string name;
     int64_t size;
+    // Names already extracted in this run (case-folded): a container entry
+    // must never silently overwrite an earlier entry.
+    std::map<std::string, size_t> seen;
     result = rdr->nextFile(name, size);
     while (result == libcdoc::OK) {
         LOG_DBG("Got file: {} {}", name, size);
@@ -576,7 +592,24 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
             LOG_ERROR("Refusing unsafe entry name '{}'", name);
             return 1;
         }
-        filesystem::path fpath = base_path / filesystem::path(libcdoc::encodeName(safeName));
+        // Rename on clash so every entry lands in its own file
+        // (case-insensitively, so case-only variants also dedup).
+        std::string uniqueName = libcdoc::deduplicateFilename(seen, safeName);
+        if (no_overwrite) {
+            // Also dedup against files that already exist on disk, so
+            // extraction never clobbers them. fs::exists follows the
+            // filesystem's own case/normalization folding, which also covers
+            // Unicode normalization collisions on APFS/HFS+.
+            for (;;) {
+                filesystem::path probe = base_path / filesystem::path(libcdoc::encodeName(uniqueName));
+                std::error_code pec;
+                if (!filesystem::exists(probe, pec) || pec) break;
+                uniqueName = libcdoc::deduplicateFilename(seen, uniqueName);
+            }
+        }
+        if (uniqueName != safeName)
+            LOG_WARN("Renamed clashing entry '{}' -> '{}'", safeName, uniqueName);
+        filesystem::path fpath = base_path / filesystem::path(libcdoc::encodeName(uniqueName));
 
         // Defence in depth: ensure the lexically-resolved target stays
         // under base_path, even if a previously-extracted entry placed a

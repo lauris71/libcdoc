@@ -68,8 +68,10 @@ print_usage(ostream& ofs)
     ofs << "    --password PASSWORD     - lock's password" << endl;
     ofs << "    --secret SECRET         - secret (AES) key (hex encoded key value)" << endl;
     ofs << "    --pin PIN               - PKCS11 pin" << endl;
-    ofs << "    --key-id                - PKCS11 key ID (hex)" << endl;
+    ofs << "    --key-id                - PKCS11 key ID" << endl;
     ofs << "    --key-label             - PKCS11 key label" << endl;
+    ofs << "    --allow-pathnames       - extract files with stored pathnames (unsafe)" << endl;
+    ofs << "    --no-overwrite          - never overwrite existing files; clashing names are renamed" << endl;
     ofs << endl;
     ofs << "cdoc-tool locks FILE" << endl;
     ofs << endl;
@@ -190,6 +192,9 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
         return 1;
     } else if (arg == "--allow-pathnames") {
         conf.params[libcdoc::Configuration::ALLOW_PATHNAMES] = "true";
+        return 1;
+    } else if (arg == "--no-overwrite") {
+        conf.no_overwrite = true;
         return 1;
     }
     return 0;

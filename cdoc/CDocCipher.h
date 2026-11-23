@@ -32,8 +32,8 @@ public:
     static void Locks(const char* file);
 
 private:
-    static int writer_push(CDocWriter& writer, const std::vector<libcdoc::Recipient>& keys, const std::vector<std::string>& files);
-    static int Decrypt(const std::unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const std::string& base_path);
+    static int writer_push(CDocWriter& writer, const std::vector<libcdoc::Recipient>& keys, const std::vector<std::string>& files, bool allow_pathnames = false);
+    static int Decrypt(const std::unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const std::string& base_path, bool no_overwrite = false);
 };
 
 }

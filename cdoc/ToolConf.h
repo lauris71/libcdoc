@@ -59,6 +59,12 @@ struct ToolConf : public JSONConfiguration {
     bool gen_label = false;
 
     /**
+     * @brief Never overwrite existing files on decryption; clashing
+     *        extracted names are renamed ("name (N).ext").
+     */
+    bool no_overwrite = false;
+
+    /**
      * @brief The list of accepted keyserver certificates (empty - accept all)
      */
     std::vector<std::vector<uint8_t>> accept_certs;

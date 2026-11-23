@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <unordered_set>
 #include <vector>
 
@@ -308,10 +309,20 @@ struct CDOC_EXPORT FileListConsumer : public MultiDataConsumer {
 protected:
 	std::filesystem::path base;
 	std::ofstream ofs;
+    // Case-folded dedup keys of all opened names; clashes are renamed.
+    std::map<std::string, size_t> _names;
 };
 
 struct CDOC_EXPORT FileListSource : public MultiDataSource {
-	FileListSource(const std::string& base, const std::vector<std::string>& files);
+	FileListSource(const std::string& base, const std::vector<std::string>& files) : FileListSource(base, files, false) {}
+	/**
+	 * @param base directory the file paths are relative to
+	 * @param files file paths
+	 * @param allow_pathnames preserve clean relative paths (dir/sub/file.txt)
+	 *        as entry names instead of stripping to the basename. Absolute
+	 *        paths and ".." components are still rejected.
+	 */
+	FileListSource(const std::string& base, const std::vector<std::string>& files, bool allow_pathnames);
     result_t read(uint8_t *dst, size_t size) noexcept final;
     bool isError() noexcept final;
     bool isEof() noexcept final;
@@ -320,9 +331,10 @@ struct CDOC_EXPORT FileListSource : public MultiDataSource {
 protected:
 	std::filesystem::path _base;
 	const std::vector<std::string>& _files;
+	bool _allow_pathnames = false;
     int64_t _current = -1;
 	std::ifstream _ifs;
-	std::unordered_set<std::string> _names;
+	std::map<std::string, size_t> _names;
 };
 
 } // namespace libcdoc

@@ -5,6 +5,7 @@
 
 #include "CDocWriter.h"
 
+#include <map>
 #include <memory>
 
 namespace libcdoc
@@ -33,6 +34,9 @@ private:
     std::unique_ptr<TarConsumer> tar;
     std::vector<Recipient> recipients;
     bool finished = false;
+    // Case-folded dedup keys of all filenames added so far; the CDoc2 spec
+    // requires entry names to be unique.
+    std::map<std::string, size_t> seen_names;
 };
 
 }

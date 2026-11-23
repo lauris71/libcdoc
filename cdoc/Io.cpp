@@ -100,7 +100,14 @@ result_t FileListConsumer::open(const std::string &name, int64_t size) {
         return DATA_FORMAT_ERROR;
     }
 
-    fs::path target = base / fs::path(encodeName(safeName));
+    // Never let a later entry silently overwrite an earlier one: rename on
+    // clash (case-insensitively, so case-only variants also dedup).
+    std::string uniqueName = libcdoc::deduplicateFilename(_names, safeName);
+    if (uniqueName != safeName)
+        LOG_WARN("FileListConsumer::open: renamed clashing entry '{}' -> '{}'",
+                 safeName, uniqueName);
+
+    fs::path target = base / fs::path(encodeName(uniqueName));
 
     // Defence in depth: even after sanitising the leaf name, an attacker
     // who can plant a symlink at `base` (e.g. by extracting an earlier
@@ -135,8 +142,8 @@ result_t FileListConsumer::open(const std::string &name, int64_t size) {
     return ofs.fail() ? OUTPUT_STREAM_ERROR : OK;
 }
 
-FileListSource::FileListSource(const std::string& base, const std::vector<std::string>& files)
-    : _base(encodeName(base)), _files(files)
+FileListSource::FileListSource(const std::string& base, const std::vector<std::string>& files, bool allow_pathnames)
+    : _base(encodeName(base)), _files(files), _allow_pathnames(allow_pathnames)
 {
 }
 
@@ -182,22 +189,39 @@ FileListSource::next(std::string& name, int64_t& size)
     if (std::error_code ec; !fs::is_regular_file(path, ec)) return IO_ERROR;
     _ifs.open(path, std::ios_base::binary);
 	if (_ifs.fail()) return IO_ERROR;
-	name = sanitiseExtractedFilename(decodeName(path.filename()));
-    if (name.empty()) {
-        LOG_ERROR("Unsupported file name: {}", decodeName(path.filename()));
-        return DATA_FORMAT_ERROR;
+    if (_allow_pathnames) {
+        // Preserve clean relative paths in the container, but never absolute
+        // paths or traversal components.
+        fs::path rel = path.lexically_relative(_base);
+        // When _base is empty, lexically_relative returns the path itself.
+        fs::path entry = rel.empty() ? path.lexically_normal() : rel.lexically_normal();
+        if (entry.is_absolute()) {
+            LOG_ERROR("Refusing absolute path in container: {}", decodeName(path));
+            return DATA_FORMAT_ERROR;
+        }
+        // Reject any ".." component (would escape the base on extraction).
+        for (const auto& part : entry) {
+            if (part == "..") {
+                LOG_ERROR("Refusing '..' component in container path: {}", decodeName(path));
+                return DATA_FORMAT_ERROR;
+            }
+        }
+        // Store with forward slashes (tar convention).
+        auto gen = entry.generic_u8string();
+        name = std::string(reinterpret_cast<const char*>(gen.data()), gen.size());
+        if (name.empty() || name == ".") {
+            LOG_ERROR("Unsupported file name: {}", decodeName(path));
+            return DATA_FORMAT_ERROR;
+        }
+    } else {
+        name = sanitiseExtractedFilename(decodeName(path.filename()));
+        if (name.empty()) {
+            LOG_ERROR("Unsupported file name: {}", decodeName(path.filename()));
+            return DATA_FORMAT_ERROR;
+        }
     }
-    fs::path filename(encodeName(name));
-    std::string extension = decodeName(filename.extension());
-    if (extension.size() >= 16) extension.clear();
-    std::string stem = extension.empty() ? name : decodeName(filename.stem());
-    for (size_t i = 1; !_names.insert(name).second; ++i) {
-        std::string suffix = " (" + std::to_string(i) + ")" + extension;
-        size_t length = std::min(stem.size(), 255 - suffix.size());
-        while (length > 0 && length < stem.size() && (uint8_t(stem[length]) & 0xC0) == 0x80)
-            --length;
-        name = stem.substr(0, length) + suffix;
-    }
+    // Rename on clash (case-insensitively) so every entry name is unique.
+    name = deduplicateFilename(_names, name);
     std::error_code ec;
     size = fs::file_size(path, ec);
     if (ec) return IO_ERROR;

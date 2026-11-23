@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -170,6 +171,42 @@ std::string buildURL(const std::string& host, int port);
  *         elements, or an empty string when no safe name can be produced.
  */
 std::string sanitiseExtractedFilename(std::string_view name);
+
+/**
+ * @brief Insert @p name into the seen-set, renaming on clash.
+ *
+ * Used to guarantee that a sequence of file names (container entries,
+ * extraction targets) contains no duplicates. If the (case-folded) name is
+ * already present, a " (N)" suffix is inserted before the extension:
+ * "a.txt" -> "a (1).txt". The stem is truncated so the result never exceeds
+ * 255 bytes, and truncation never splits a UTF-8 codepoint.
+ *
+ * The dedup key folds ASCII case so that "A.txt" and "a.txt" are considered
+ * equal: they collide on case-insensitive filesystems (Windows, default
+ * APFS/HFS+). Full Unicode case folding / normalization is deliberately out
+ * of scope; use cdoc-tool --no-overwrite to also avoid clobbering existing
+ * on-disk files that only differ after normalization.
+ *
+ * Complexity is amortized O(log n) per call: the map stores the next free
+ * suffix for each key, so a container containing a.txt, a (1).txt, ...
+ * does not cause quadratic rescans.
+ *
+ * @param seen map of case-folded dedup key -> next free numeric suffix
+ *             (0 = none assigned yet). Updated in place.
+ * @param name the candidate name (must be non-empty and pre-sanitized)
+ * @return the name actually inserted into the seen-set (the original name,
+ *         or a renamed variant)
+ */
+std::string deduplicateFilename(std::map<std::string, size_t>& seen, const std::string& name);
+
+/**
+ * @brief ASCII case-folded dedup key for file names.
+ *
+ * Lowercases ASCII A-Z only; used as the map key by deduplicateFilename().
+ * Exposed for direct duplicate testing (writers/readers that must reject
+ * rather than rename).
+ */
+std::string filenameDedupKey(std::string_view name);
 
 /**
  * @brief Parsed components of an ETSI Smart-ID / Mobile-ID recipient identifier.

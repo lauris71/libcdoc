@@ -501,12 +501,20 @@ CDoc2Writer::addFile(const std::string& name, size_t size)
     if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
         stored_name = libcdoc::sanitiseExtractedFilename(name);
         if (stored_name.empty())
-            FAIL("Filename rejected by sanitizer", libcdoc::DATA_FORMAT_ERROR);
+             FAIL("Filename rejected by sanitizer", libcdoc::DATA_FORMAT_ERROR);
         if (stored_name != name)
             LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
     }
+    // The CDoc2 standard requires entry names to be unique. Reject
+    // duplicates (case-insensitively: "A.txt" and "a.txt" collide on
+    // case-insensitive filesystems). Record the key only after a successful
+    // open so a failed addFile does not poison the name.
+    std::string dedup_key = libcdoc::filenameDedupKey(stored_name);
+    if (seen_names.contains(dedup_key))
+        FAIL("Duplicate filename in container", libcdoc::DATA_FORMAT_ERROR);
     if(auto rv = tar->open(stored_name, size); rv < 0)
         FAIL(tar->getLastErrorStr(rv), rv);
+    seen_names.emplace(std::move(dedup_key), 1);
     return libcdoc::OK;
 }
 

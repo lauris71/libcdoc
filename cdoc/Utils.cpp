@@ -377,6 +377,59 @@ sanitiseExtractedFilename(std::string_view name)
     return std::string(base);
 }
 
+std::string
+filenameDedupKey(std::string_view name)
+{
+    std::string key(name);
+    for (auto& c : key) {
+        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    }
+    return key;
+}
+
+std::string
+deduplicateFilename(std::map<std::string, size_t>& seen, const std::string& name)
+{
+    // Extension: last '.' not at position 0, at most 15 chars, no '/' after
+    // it (the name should be pre-sanitized, but be defensive).
+    std::string_view stem = name;
+    std::string_view ext;
+    if (size_t dot = name.find_last_of('.');
+        dot != std::string::npos && dot > 0 && name.size() - dot <= 16) {
+        stem = std::string_view(name).substr(0, dot);
+        ext = std::string_view(name).substr(dot);
+    }
+
+    std::string key = filenameDedupKey(name);
+    auto [it, inserted] = seen.emplace(key, 1);
+    if (inserted) return name;
+
+    // Clash: append " (N)" before the extension, truncating the stem if
+    // needed so the result fits in 255 bytes without splitting a UTF-8
+    // codepoint.
+    for (;;) {
+        size_t n = it->second++;
+        std::string suffix = " (" + std::to_string(n) + ")";
+        size_t max_stem = 255 - suffix.size() - ext.size();
+        std::string_view keep = stem;
+        if (keep.size() > max_stem) {
+            size_t pos = max_stem;
+            while (pos > 0 && (uint8_t(keep[pos]) & 0xC0) == 0x80) --pos;
+            keep = keep.substr(0, pos);
+        }
+        std::string candidate;
+        candidate.reserve(keep.size() + suffix.size() + ext.size());
+        candidate.append(keep.data(), keep.size());
+        candidate.append(suffix);
+        candidate.append(ext.data(), ext.size());
+        std::string ckey = filenameDedupKey(candidate);
+        auto [cit, cinserted] = seen.emplace(ckey, 1);
+        if (cinserted) return candidate;
+        // The candidate itself exists (e.g. attacker pre-planted "a (1).txt").
+        // Try the next number.
+    }
+}
+
 std::vector<std::string>
 JsonToStringArray(std::string_view json)
 {

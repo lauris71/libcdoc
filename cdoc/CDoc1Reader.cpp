@@ -54,6 +54,8 @@ struct CDoc1Reader::Private
     std::vector<DDOCReader::File> files;
     int64_t f_pos = -1;
     std::unique_ptr<libcdoc::VectorSource> src;
+    // Case-folded dedup keys of all filenames returned by nextFile so far.
+    std::map<std::string, size_t> seen_names;
 
     // N10: RSA oracle throttle state. Set during getFMK when the lock is
     // RSA; empty otherwise (no throttle for ECC/AES-wrap paths).
@@ -278,7 +280,8 @@ CDoc1Reader::nextFile(std::string& name, int64_t& size)
     }
     name = d->files[d->f_pos].name;
     size = d->files[d->f_pos].data.size();
-    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
+    bool raw_paths = conf && conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false);
+    if (!raw_paths) {
         std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
         if (sanitized.empty()) {
             setLastError("Filename rejected by sanitizer");
@@ -289,6 +292,12 @@ CDoc1Reader::nextFile(std::string& name, int64_t& size)
             LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
             name = std::move(sanitized);
         }
+    }
+    // Entry names must be unique (case-insensitively) in both modes.
+    if (!d->seen_names.emplace(libcdoc::filenameDedupKey(name), 1).second) {
+        setLastError("Duplicate filename in container");
+        LOG_ERROR("Duplicate filename in container: '{}'", name);
+        return libcdoc::DATA_FORMAT_ERROR;
     }
     d->src = std::make_unique<libcdoc::VectorSource>(d->files[d->f_pos].data);
     return libcdoc::OK;
