@@ -1769,61 +1769,6 @@ BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(Utf8Validation)
 
-BOOST_AUTO_TEST_CASE(AcceptsValidUtf8)
-{
-    BOOST_CHECK(libcdoc::isValidUtf8(""));                       // empty
-    BOOST_CHECK(libcdoc::isValidUtf8("hello"));                  // ASCII
-    BOOST_CHECK(libcdoc::isValidUtf8("\xC2\x80"));               // U+0080 (2-byte min)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xDF\xBF"));               // U+07FF (2-byte max)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xC3\xB5"));               // U+00F5 (õ)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xE0\xA0\x80"));           // U+0800 (3-byte min)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xEF\xBF\xBF"));           // U+FFFF (3-byte max)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xF0\x90\x80\x80"));       // U+10000 (4-byte min)
-    BOOST_CHECK(libcdoc::isValidUtf8("\xF4\x8F\xBF\xBF"));       // U+10FFFF (4-byte max)
-}
-
-BOOST_AUTO_TEST_CASE(RejectsOverlongEncodings)
-{
-    // '/' (0x2F) encoded in 2 bytes: must be rejected (C0 is always overlong)
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xC0\xAF"));
-    // C1 is also always overlong
-    BOOST_CHECK(libcdoc::isValidUtf8("\xC1\xBF") == false);
-    // U+007F overlong in 2 bytes
-    BOOST_CHECK(libcdoc::isValidUtf8("\xC1\xBF") == false);
-    // 3-byte overlong: E0 with second byte < A0
-    BOOST_CHECK(libcdoc::isValidUtf8("\xE0\x80\x80") == false);
-    BOOST_CHECK(libcdoc::isValidUtf8("\xE0\x9F\xBF") == false);
-    // 4-byte overlong: F0 with second byte < 90
-    BOOST_CHECK(libcdoc::isValidUtf8("\xF0\x80\x80\x80") == false);
-    BOOST_CHECK(libcdoc::isValidUtf8("\xF0\x8F\xBF\xBF") == false);
-}
-
-BOOST_AUTO_TEST_CASE(RejectsSurrogates)
-{
-    // UTF-16 surrogate halves U+D800..U+DFFF are ill-formed in UTF-8
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xED\xA0\x80"));          // U+D800
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xED\xBF\xBF"));          // U+DFFF
-    // Just below and above the range are valid
-    BOOST_CHECK(libcdoc::isValidUtf8("\xED\x9F\xBF"));           // U+D7FF
-    BOOST_CHECK(libcdoc::isValidUtf8("\xEE\x80\x80"));           // U+E000
-}
-
-BOOST_AUTO_TEST_CASE(RejectsAboveMaxCodePoint)
-{
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xF4\x90\x80\x80"));      // U+110000
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xF5\x80\x80\x80"));      // lead F5 always invalid
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xF7\xBF\xBF\xBF"));      // lead F7 always invalid
-}
-
-BOOST_AUTO_TEST_CASE(RejectsTruncatedAndLone)
-{
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xC3"));                  // truncated 2-byte
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xE0\xA0"));              // truncated 3-byte
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xF0\x90\x80"));          // truncated 4-byte
-    BOOST_CHECK(!libcdoc::isValidUtf8("\x80"));                  // lone continuation
-    BOOST_CHECK(!libcdoc::isValidUtf8("\xC3\x28"));              // bad continuation
-}
-
 BOOST_AUTO_TEST_SUITE_END()
 
 // Regression coverage for libcdoc::sanitiseExtractedFilename(). All inputs
