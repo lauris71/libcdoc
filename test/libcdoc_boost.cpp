@@ -10,6 +10,7 @@
 #include <CryptoBackend.h>
 #include <DDocReader.h>
 #include <Lock.h>
+#include <NetworkBackend.h>
 #include <Recipient.h>
 #include <Tar.h>
 #include <Utils.h>
@@ -1397,6 +1398,56 @@ BOOST_AUTO_TEST_CASE(RejectsInvalidISO)
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-13-45T99:99:99Z"), -1);
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-08-18T12:00:00"), -1);
     BOOST_CHECK_EQUAL(libcdoc::timeFromISO("2026-08-18T12:00:00.Z"), -1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(ProxyCredentials)
+
+BOOST_AUTO_TEST_CASE(ProxyConfigCoherence)
+{
+    using PC = libcdoc::NetworkBackend::ProxyCredentials;
+    // No proxy, no credentials: fine (direct connection).
+    BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(PC{}), libcdoc::OK);
+    // Unauthenticated proxy: fine.
+    {
+        PC cred;
+        cred.host = "proxy.example.com";
+        cred.port = 8080;
+        BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred), libcdoc::OK);
+    }
+    // Host with complete credentials: fine.
+    {
+        PC cred;
+        cred.host = "proxy.example.com";
+        cred.port = 8080;
+        cred.username = "user";
+        cred.password = "pass";
+        BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred), libcdoc::OK);
+    }
+    // Credentials without a proxy host must be rejected: they would be sent
+    // to the destination server instead of the proxy (security report).
+    {
+        PC cred;
+        cred.username = "user";
+        cred.password = "pass";
+        BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred),
+                          libcdoc::CONFIGURATION_ERROR);
+    }
+    // Half-configured credential pairs are rejected.
+    {
+        PC cred;
+        cred.host = "proxy.example.com";
+        cred.username = "user";
+        BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred),
+                          libcdoc::CONFIGURATION_ERROR);
+    }
+    {
+        PC cred;
+        cred.password = "pass";
+        BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred),
+                          libcdoc::CONFIGURATION_ERROR);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

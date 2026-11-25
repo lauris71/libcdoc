@@ -184,7 +184,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
     }
     LOG_DBG("Num TLS certs {}", certs.size());
     if (!certs.empty()) {
-        SSL_CTX *ctx = cli.ssl_context();
+        SSL_CTX *ctx = static_cast<SSL_CTX *>(cli.tls_context());
         SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
         X509_STORE *store = SSL_CTX_get_cert_store(ctx);
         X509_STORE_set_flags(store, X509_V_FLAG_TRUSTED_FIRST | X509_V_FLAG_PARTIAL_CHAIN);
@@ -193,7 +193,8 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
             if (!x509) return libcdoc::CRYPTO_ERROR;
             X509_STORE_add_cert(store, x509.handle());
         }
-        cli.set_load_system_certs(false);
+        // Trust only the certificates added above, not the system store.
+        cli.enable_system_ca(false);
         cli.enable_server_certificate_verification(true);
         cli.enable_server_hostname_verification(true);
     }
@@ -224,6 +225,26 @@ logRequestError(const httplib::Result& res)
     }
 }
 
+libcdoc::result_t
+libcdoc::NetworkBackend::checkProxyCredentials(const ProxyCredentials& credentials)
+{
+    // The proxy identity is all-or-nothing (see declaration): a
+    // half-configured user name/password pair is rejected, and credentials
+    // without a proxy host are rejected so they can never end up at the
+    // destination server instead of the proxy.
+    const bool has_user = !credentials.username.empty();
+    const bool has_password = !credentials.password.empty();
+    if (has_user != has_password) {
+        LOG_ERROR("Proxy user name and password must be provided together");
+        return libcdoc::CONFIGURATION_ERROR;
+    }
+    if (has_user && credentials.host.empty()) {
+        LOG_ERROR("Proxy credentials provided without proxy host");
+        return libcdoc::CONFIGURATION_ERROR;
+    }
+    return libcdoc::OK;
+}
+
 //
 // Set proxy parameters
 //
@@ -234,14 +255,20 @@ setProxy(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
     switch (auto result = network->getProxyCredentials(cred)) {
     case libcdoc::NOT_IMPLEMENTED:
         return libcdoc::OK;
-    case libcdoc::OK:
-        if (!cred.host.empty()) {
-            cli.set_proxy(cred.host, cred.port);
+    case libcdoc::OK: {
+        if (auto result = libcdoc::NetworkBackend::checkProxyCredentials(cred); result != libcdoc::OK) {
+            return result;
         }
-        if (!cred.username.empty()) {
-            cli.set_proxy_basic_auth(cred.username, cred.password);
+        if (!cred.host.empty()) {
+            // Host and credentials are set together: authentication is only
+            // ever attached to a configured proxy, never to direct requests.
+            cli.set_proxy(cred.host, cred.port);
+            if (!cred.username.empty()) {
+                cli.set_proxy_basic_auth(cred.username, std::string(cred.password));
+            }
         }
         return libcdoc::OK;
+    }
     default: return result;
     }
 }
@@ -462,8 +489,21 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
     if (!cert.empty() && (!d->x509 || !d->key)) return CRYPTO_ERROR;
 
-    httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
-    SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
+    httplib::SSLClient cli(host, port);
+    SSL_CTX *ctx = static_cast<SSL_CTX *>(cli.tls_context());
+    SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
+    // Install the client certificate directly into the context: the
+    // httplib client-cert constructors require PEM material, and our
+    // private key may live on a smart card (PKCS#11) where it cannot be
+    // serialized. These are the same operations the old
+    // (X509*, EVP_PKEY*) constructor performed.
+    if (SSL_CTX_use_certificate(ctx, d->x509.handle()) != 1 ||
+        SSL_CTX_use_PrivateKey(ctx, d->key.get()) != 1 ||
+        SSL_CTX_check_private_key(ctx) != 1) {
+        error = "Cannot install TLS client certificate";
+        LOG_ERROR("{}", error);
+        return CRYPTO_ERROR;
+    }
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;

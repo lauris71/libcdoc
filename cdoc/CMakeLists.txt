@@ -123,6 +123,12 @@ if(WIN32)
     target_link_libraries(cdoc PRIVATE Crypt32 NCrypt cryptui)
 endif()
 
+if(APPLE)
+    # cpp-httplib compiles in macOS keychain trust-anchor enumeration
+    # (CoreFoundation/Security) even when system CA trust is disabled.
+    target_link_libraries(cdoc PRIVATE "-framework CoreFoundation" "-framework Security")
+endif()
+
 foreach(SCHEMA ${SCHEMAS})
     get_filename_component(stem ${SCHEMA} NAME_WE)
     get_filename_component(name ${SCHEMA} NAME)

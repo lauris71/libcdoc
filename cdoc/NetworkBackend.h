@@ -222,6 +222,18 @@ struct CDOC_EXPORT NetworkBackend {
     }
 
     /**
+     * @brief Validate proxy configuration coherence
+     *
+     * The proxy identity is all-or-nothing: user name and password are
+     * provided together, and credentials require a proxy host - credentials
+     * without a proxy would be sent to the destination server instead. A
+     * proxy host without credentials is allowed.
+     * @param credentials proxy configuration to validate
+     * @return OK or CONFIGURATION_ERROR
+     */
+    static result_t checkProxyCredentials(const ProxyCredentials& credentials);
+
+    /**
      * @brief sign TLS digest with client's private key
      *
      * An ECDSA signature is returned as r || s, an RSA signature as is. RSA keys sign with RSASSA-PSS
