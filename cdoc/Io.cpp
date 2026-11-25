@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include "Io.h"
 
@@ -194,10 +179,25 @@ FileListSource::next(std::string& name, int64_t& size)
 	if (_current >= _files.size()) return END_OF_STREAM;
     fs::path path(_base);
     path.append(encodeName(_files[_current]));
-    if (std::error_code ec; !fs::exists(path, ec)) return IO_ERROR;
+    if (std::error_code ec; !fs::is_regular_file(path, ec)) return IO_ERROR;
     _ifs.open(path, std::ios_base::binary);
-	if (_ifs.bad()) return IO_ERROR;
-	name = _files[_current];
+	if (_ifs.fail()) return IO_ERROR;
+	name = sanitiseExtractedFilename(decodeName(path.filename()));
+    if (name.empty()) {
+        LOG_ERROR("Unsupported file name: {}", decodeName(path.filename()));
+        return DATA_FORMAT_ERROR;
+    }
+    fs::path filename(encodeName(name));
+    std::string extension = decodeName(filename.extension());
+    if (extension.size() >= 16) extension.clear();
+    std::string stem = extension.empty() ? name : decodeName(filename.stem());
+    for (size_t i = 1; !_names.insert(name).second; ++i) {
+        std::string suffix = " (" + std::to_string(i) + ")" + extension;
+        size_t length = std::min(stem.size(), 255 - suffix.size());
+        while (length > 0 && length < stem.size() && (uint8_t(stem[length]) & 0xC0) == 0x80)
+            --length;
+        name = stem.substr(0, length) + suffix;
+    }
     std::error_code ec;
     size = fs::file_size(path, ec);
     if (ec) return IO_ERROR;

@@ -1,21 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 %module(directors="1") CDoc
 
@@ -82,6 +66,29 @@
 %ignore libcdoc::PKCS11Backend::findCertificates(const std::vector<uint8_t>& public_key);
 %ignore libcdoc::PKCS11Backend::getCertificate(std::vector<uint8_t>& val, bool& rsa, int slot, const std::vector<uint8_t>& pin, const std::vector<uint8_t>& id, const std::string& label);
 %ignore libcdoc::PKCS11Backend::getPublicKey(std::vector<uint8_t>& val, bool& rsa, int slot, const std::vector<uint8_t>& pin, const std::vector<uint8_t>& id, const std::string& label);
+
+// Java: map the output parameter 'val' of getCertificate/getPublicKey to
+// DataBuffer (the std::vector<uint8_t>& dst typemap below) so that the data
+// written by C++ is actually visible on the Java side. The default byte[]
+// mapping is input-only and silently discards the result.
+#ifdef SWIGJAVA
+%typemap(jtype) std::vector<uint8_t>& val "DataBuffer"
+%typemap(jstype) std::vector<uint8_t>& val "DataBuffer"
+%typemap(jni) std::vector<uint8_t>& val "jobject"
+%typemap(in) std::vector<uint8_t>& val %{
+    // DataBuffer in (val)
+    jclass $1_class = jenv->FindClass("ee/ria/cdoc/DataBuffer");
+    jmethodID $1_mid = jenv->GetStaticMethodID($1_class, "getCPtr", "(Lee/ria/cdoc/DataBuffer;)J");
+    jlong $1_cptr = jenv->CallStaticLongMethod($1_class, $1_mid, $input);
+    libcdoc::DataBuffer *$1_db = (libcdoc::DataBuffer *) $1_cptr;
+    $1 = $1_db->data;
+%}
+%typemap(javain) std::vector<uint8_t>& val "$javainput"
+%typemap(javaout) std::vector<uint8_t>& val "$jnicall"
+%typemap(freearg) std::vector<uint8_t>& val %{
+    // DataBuffer freearg (val)
+%}
+#endif
 
 // Map C++ integer types for all language bindings
 %apply long long { libcdoc::result_t }
@@ -150,7 +157,11 @@
 
 %ignore libcdoc::Recipient::rcpt_key;
 %ignore libcdoc::Recipient::cert;
+// getLabel(std::map<std::string_view, std::string_view>) requires the
+// Java typemaps from std_map_string_view.i; other languages keep it ignored
+#ifndef SWIGJAVA
 %ignore libcdoc::Recipient::getLabel;
+#endif
 %extend libcdoc::Recipient {
     std::vector<uint8_t> getRcptKey() {
         return $self->rcpt_key;
@@ -312,9 +323,27 @@
 
 #ifdef SWIGJAVA
 %include "arrays_java.i"
+%include "std_string_utf8.i"
 %include "std_string_view.i"
+%include "std_map.i"
+%include "std_map_string_view.i"
 %include "enums.swg"
 %javaconst(1);
+
+// CDoc.setLogger: keep a Java reference to the Logger. The C++ side stores
+// the raw pointer in a static global without ownership, and the SWIG director
+// only holds a weak reference to the Java proxy - so without this reference
+// the GC could collect the Logger while the library still calls into it.
+%rename("setLoggerInternal") libcdoc::setLogger;
+%pragma(java) modulecode=%{
+    // Java reference pinning the Logger installed via setLogger
+    private static Logger currentLogger;
+
+    public static void setLogger(Logger logger) {
+        currentLogger = logger;
+        setLoggerInternal(logger);
+    }
+%}
 
 %typemap(javaout, throws="CDocException") libcdoc::result_t %{
 {
@@ -494,33 +523,6 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %typemap(javain) std::vector<std::string>& "$javainput"
 
 //
-// std::map<std::string, std::string> -> java.util.Map<String,String>
-//
-
-%typemap(out) std::map<std::string, std::string> %{
-    jclass map_class = jenv->FindClass("java/util/Hashtable");
-    std::cerr << "Map class:" << (void *) map_class << std::endl;
-    jmethodID mid_new = jenv->GetMethodID(map_class, "<init>", "()V");
-    std::cerr << "Mid_new:" << mid_new << std::endl;
-    jmethodID mid_put = jenv->GetMethodID(map_class, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    std::cerr << "Mid_put:" << mid_put << std::endl;
-    jobject map = jenv->NewObject(map_class, mid_new);
-    std::cerr << "Map:" << (void *) map << std::endl;
-    for(auto pair : *(&result)) {
-        jstring key = jenv->NewStringUTF(pair.first.c_str());
-        jstring val = jenv->NewStringUTF(pair.second.c_str());
-        jenv->CallObjectMethod(map, mid_put, key, val);
-    }
-    jresult = map;
-%}
-%typemap(jtype) std::map<std::string, std::string> "java.util.Map<String,String>"
-%typemap(jstype) std::map<std::string, std::string> "java.util.Map<String,String>"
-%typemap(jni) std::map<std::string, std::string> "jobject"
-%typemap(javaout) std::map<std::string, std::string> {
-    return $jnicall;
-}
-
-//
 // std::vector<std::vector<uint8_t>> <- CertificateList
 //
 
@@ -566,35 +568,8 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     $javacall
 %}
 
-//
-// std::string_view -> String
-//
-
-%typemap(in) std::string_view %{
-    const char *$1_utf8 = jenv->GetStringUTFChars($input, nullptr);
-    $1 = $1_utf8;
-%}
-%typemap(freearg) std::string_view %{
-    jenv->ReleaseStringUTFChars($input, $1_utf8);
-%}
-//%typemap(out) std::string_view %{
-//    std::string $1_str(*(&result));
-//    jresult = jenv->NewStringUtf($1_str.c_str());
-//%}
-%typemap(jtype) std::string_view "String"
-%typemap(jstype) std::string_view "String"
-%typemap(jni) std::string_view "jstring"
-%typemap(javain) std::string_view "$javainput"
-//%typemap(javaout) std::string_view %{
-//    return $jnicall;
-//%}
-%typemap(directorin,descriptor="Ljava/lang/String;") std::string_view %{
-    std::string $1_str($1);
-    $input = jenv->NewStringUTF($1_str.c_str());
-%}
-// No return of std::string_view so no directorout
-%typemap(javadirectorin) std::string_view "$jniinput"
-// No return of std::string_view so no javadirectorout
+// std::string_view <-> String typemaps are in std_string_view.i
+// (standard UTF-8 via byte[] transport, see std_string_utf8.i)
 
 // CDocReader
 
@@ -603,6 +578,7 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     private Configuration config;
     private CryptoBackend crypto;
     private NetworkBackend network;
+    private DataSource source;
 
     public void readFile(java.io.OutputStream ofs) throws CDocException, java.io.IOException {
         byte[] buf = new byte[1024];
@@ -611,6 +587,11 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
             ofs.write(buf, 0, (int) result);
             result = readData(buf);
         }
+    }
+
+    // Called by the createReader(DataSource,...) overload to pin the source
+    void setSource(DataSource src) {
+        source = src;
     }
 %}
 
@@ -622,6 +603,30 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     rdr.config = conf;
     rdr.crypto = crypto;
     rdr.network = network;
+    return rdr;
+}
+
+// The DataSource overload of createReader is re-exposed under a distinct
+// name so that its javaout typemap can also pin the source reference (C++
+// takes ownership via take_ownership, so the Java proxy must not be GC'd
+// while the reader is alive). SWIG javaout typemaps cannot be specialized
+// by parameter types, so a separate %extend function is used.
+%ignore libcdoc::CDocReader::createReader(libcdoc::DataSource *src, bool take_ownership, libcdoc::Configuration *conf, libcdoc::CryptoBackend *crypto, libcdoc::NetworkBackend *network);
+%extend libcdoc::CDocReader {
+    static libcdoc::CDocReader *createReaderFromSource(libcdoc::DataSource *src, bool take_ownership, libcdoc::Configuration *conf, libcdoc::CryptoBackend *crypto, libcdoc::NetworkBackend *network) {
+        return libcdoc::CDocReader::createReader(src, take_ownership, conf, crypto, network);
+    }
+}
+
+%typemap(javaout) libcdoc::CDocReader * libcdoc::CDocReader::createReaderFromSource {
+    long cPtr = $jnicall;
+    if (cPtr == 0) return null;
+    CDocReader rdr = new CDocReader(cPtr, true);
+    // Set Java references
+    rdr.config = conf;
+    rdr.crypto = crypto;
+    rdr.network = network;
+    rdr.source = src;
     return rdr;
 }
 

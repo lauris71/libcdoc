@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #ifndef __NETWORKBACKEND_H__
 #define __NETWORKBACKEND_H__
@@ -29,6 +14,10 @@ struct CDOC_EXPORT NetworkBackend {
      * 
      */
 	static constexpr int NETWORK_ERROR = -300;
+    // The key server did not find the requested capsule (HTTP 404).
+    static constexpr int CAPSULE_NOT_FOUND = -304;
+    // The key server returned an unsuccessful HTTP response.
+    static constexpr int SERVER_ERROR = -305;
 #ifdef HAS_KEYSHARES
     // MID/SID error codes
     // User refused the session
@@ -234,6 +223,9 @@ struct CDOC_EXPORT NetworkBackend {
 
     /**
      * @brief sign TLS digest with client's private key
+     *
+     * An ECDSA signature is returned as r || s, an RSA signature as is. RSA keys sign with RSASSA-PSS
+     * (salt as long as the digest, MGF1 with the same hash): the connection requires TLS 1.3, which allows only PSS.
      * @param dst a destination container for signature
      * @param algorithm signing algorithm
      * @param digest data to be signed

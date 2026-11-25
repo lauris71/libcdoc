@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include "CDocCipher.h"
 #include "CDocReader.h"
@@ -295,6 +280,10 @@ struct ToolNetwork : public libcdoc::NetworkBackend {
     libcdoc::result_t getClientTLSCertificate(std::vector<uint8_t>& dst) override final {
         const RcptInfo *rcpt = crypto->c_info.getRcpt(rcpt_idx);
         if (!rcpt) return libcdoc::INTERNAL_ERROR;
+        if (!crypto->p11) {
+            LOG_ERROR("Key server authentication needs a PKCS11 key (--library)");
+            return libcdoc::CONFIGURATION_ERROR;
+        }
         return crypto->p11->getCertificate(dst, long(rcpt->p11.slot), rcpt->secret, rcpt->p11.key_id, rcpt->p11.key_label);
     }
 
@@ -306,6 +295,7 @@ struct ToolNetwork : public libcdoc::NetworkBackend {
     libcdoc::result_t signTLS(std::vector<uint8_t>& dst, libcdoc::CryptoBackend::HashAlgorithm algorithm, const std::vector<uint8_t> &digest) override final {
         const RcptInfo *rcpt = crypto->c_info.getRcpt(rcpt_idx);
         if (!rcpt) return libcdoc::INTERNAL_ERROR;
+        if (!crypto->p11) return libcdoc::CONFIGURATION_ERROR;
         return crypto->p11->sign(dst, algorithm, digest, rcpt_idx);
     }
 
@@ -319,27 +309,24 @@ int CDocCipher::writer_push(CDocWriter& writer, const vector<Recipient>& rcpts, 
     }
     int64_t result = writer.beginEncryption();
     if (result != libcdoc::OK) return result;
-    for (const std::string& file : files) {
-        std::filesystem::path path(file);
-        if (!std::filesystem::exists(path)) {
-            LOG_ERROR("File does not exist: {}", file);
-            return 1;
-        }
-        size_t size = std::filesystem::file_size(path);
-        int result = writer.addFile(file, size);
+    FileListSource src({}, files);
+    std::string name;
+    int64_t size;
+    while ((result = src.next(name, size)) == OK) {
+        int result = writer.addFile(name, size);
         if (result != libcdoc::OK) return result;
-        libcdoc::IStreamSource src(file);
         while (!src.isEof()) {
             uint8_t b[256];
             int64_t len = src.read(b, 256);
             if (len < 0) {
-                LOG_ERROR("IO error: {}", file);
-                return 1;
+                LOG_ERROR("IO error: {}", name);
+                return int(len);
             }
             int64_t nbytes = writer.writeData(b, len);
             if (nbytes < 0) return (int) nbytes;
         }
     }
+    if (result != END_OF_STREAM) return int(result);
     return writer.finishEncryption();
 }
 
@@ -409,6 +396,28 @@ fill_recipients_from_rcpt_info(ToolConf& conf, ToolCrypto& crypto, std::vector<l
     return true;
 }
 
+namespace {
+struct EncryptionOutput {
+    std::filesystem::path path;
+    std::ofstream stream;
+    bool opened;
+    bool complete = false;
+
+    explicit EncryptionOutput(const std::string& name)
+        : path(encodeName(name)), stream(path, std::ios::binary), opened(stream.is_open()) {}
+
+    ~EncryptionOutput()
+    {
+        stream.close();
+        if (opened && !complete) {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+            if (ec) LOG_ERROR("Cannot remove incomplete container {}: {}", decodeName(path), ec.message());
+        }
+    }
+};
+}
+
 int CDocCipher::Encrypt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& recipients)
 {
     CipherInfo cipher(CipherInfo::ENCRYPT, recipients, {});
@@ -434,7 +443,10 @@ int CDocCipher::Encrypt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& recipien
         return 1;
     }
 
-    unique_ptr<CDocWriter> writer(CDocWriter::createWriter(conf.cdocVersion, conf.out, &conf, &crypto, &network));
+    EncryptionOutput output(conf.out);
+    if (!output.stream) return OUTPUT_STREAM_ERROR;
+    unique_ptr<CDocWriter> writer(CDocWriter::createWriter(conf.cdocVersion, output.stream, &conf, &crypto, &network));
+    if (!writer) return WRONG_ARGUMENTS;
 
     int result;
     if (PUSH) {
@@ -443,14 +455,27 @@ int CDocCipher::Encrypt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& recipien
         libcdoc::FileListSource src({}, conf.input_files);
         result = writer->encrypt(src, rcpts);
     }
-    if (result < 0) {
+    if (result != OK) {
         LOG_ERROR("Encryption failed: error {}", result);
         cerr << writer->getLastErrorStr() << endl;
-    } else {
-        LOG_INFO("File encrypted successfully: {}", conf.out);
+        return result;
     }
+    writer.reset();
+    output.stream.close();
+    if (output.stream.fail()) return OUTPUT_STREAM_ERROR;
+    output.complete = true;
+    LOG_INFO("File encrypted successfully: {}", conf.out);
+    return OK;
+}
 
-    return result;
+// --label is the label as written, or the "label" value of a machine-readable one (data:,label=...)
+static bool
+matchesLabel(const Lock& lock, const std::string& label)
+{
+    if (lock.label == label) return true;
+    auto parsed = Lock::parseLabel(lock.label);
+    auto it = parsed.find(std::string(CDoc2::Label::LABEL));
+    return it != parsed.end() && it->second == label;
 }
 
 int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
@@ -476,7 +501,7 @@ int CDocCipher::Decrypt(ToolConf& conf, RcptInfo& recipient)
     if (!recipient.label.empty()) {
         LOG_DBG("Looking for lock by label");
         for (unsigned int i = 0; i < locks.size(); i++) {
-            if (locks[i].label == recipient.label) {
+            if (matchesLabel(locks[i], recipient.label)) {
                 lock_idx = i;
                 break;
             }
@@ -526,7 +551,7 @@ int CDocCipher::Decrypt(const unique_ptr<CDocReader>& rdr, unsigned int lock_idx
         LOG_ERROR("Error on extracting FMK: {} {}", result, rdr->getLastErrorStr());
         return 1;
     }
-    filesystem::path base_path(base_pathname);
+    filesystem::path base_path(std::u8string(reinterpret_cast<const char8_t*>(base_pathname.data()), base_pathname.size()));
 
     /* Do pull */
     result = rdr->beginDecryption(fmk);
@@ -651,7 +676,7 @@ CDocCipher::ReEncrypt(ToolConf& conf, RcptInfo& dec_info, std::vector<libcdoc::R
     int lock_idx = -1;
     if (!dec_info.label.empty()) {
         for (unsigned int i = 0; i < locks.size(); i++) {
-            if (locks[i].label == dec_info.label) {
+            if (matchesLabel(locks[i], dec_info.label)) {
                 lock_idx = i;
                 break;
             }

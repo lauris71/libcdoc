@@ -84,7 +84,8 @@
       "cacheVariables": {
         "CMAKE_SYSTEM_NAME": "Android",
         "CMAKE_SYSTEM_VERSION": "30",
-        "BUILD_SHARED_LIBS": "NO"
+        "BUILD_SHARED_LIBS": "NO",
+        "SKIP_JAVA_TESTS": "YES"
       }
     },
     {

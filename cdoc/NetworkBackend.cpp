@@ -1,31 +1,16 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include "NetworkBackend.h"
 
 #include "Certificate.h"
 #include "Crypto.h"
 #include "CryptoBackend.h"
+#include "TLSKey.h"
 #include "Utils.h"
 
-#define OPENSSL_SUPPRESS_DEPRECATED
-
 #include <openssl/bio.h>
+#include <openssl/err.h>
 #include <openssl/http.h>
 #include <openssl/ssl.h>
 
@@ -34,6 +19,7 @@
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 
+#include <array>
 #include <chrono>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -41,56 +27,19 @@
 #endif
 
 #define CDOC_SSL_TIMEOUT 30
+// Key server, share server and SID/MID responses are small JSON documents
+#define CDOC_MAX_RESPONSE_SIZE (64 * 1024)
 
 using namespace std::literals::chrono_literals;
 
-using EC_KEY_sign = int (*)(int type, const unsigned char *dgst, int dlen, unsigned char *sig, unsigned int *siglen, const BIGNUM *kinv, const BIGNUM *r, EC_KEY *eckey);
-using EC_KEY_sign_setup = int (*)(EC_KEY *eckey, BN_CTX *ctx_in, BIGNUM **kinvp, BIGNUM **rp);
-
-static ECDSA_SIG* ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM *inv, const BIGNUM *rp, EC_KEY *eckey);
-static int rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const ::RSA *rsa);
-
 struct Private {
     libcdoc::Certificate x509;
-    EVP_PKEY *pkey = nullptr;
-
-    RSA_METHOD *rsamethod = nullptr;
-    EC_KEY_METHOD *ecmethod = nullptr;
+    libcdoc::unique_ptr_t<EVP_PKEY_free> key = libcdoc::make_unique_ptr<EVP_PKEY_free>(nullptr);
 
     explicit Private(libcdoc::NetworkBackend *backend, const std::vector<uint8_t> &client_cert)
         : x509(client_cert)
     {
-        if (!x509) return;
-        pkey = X509_get_pubkey(x509.handle());
-        if (!pkey) return;
-        int id = EVP_PKEY_get_id(pkey);
-        if (id == EVP_PKEY_EC) {
-            ecmethod = EC_KEY_METHOD_new(EC_KEY_get_default_method());
-            EC_KEY_sign sign = nullptr;
-            EC_KEY_sign_setup sign_setup = nullptr;
-            EC_KEY_METHOD_get_sign(ecmethod, &sign, &sign_setup, nullptr);
-            EC_KEY_METHOD_set_sign(ecmethod, sign, sign_setup, ecdsa_do_sign);
-
-            auto *ec = (EC_KEY *) EVP_PKEY_get1_EC_KEY(pkey);
-            EC_KEY_set_method(ec, ecmethod);
-            EC_KEY_set_ex_data(ec, 0, backend);
-            EVP_PKEY_set1_EC_KEY(pkey, ec);
-        } else if (id == EVP_PKEY_RSA) {
-            rsamethod = RSA_meth_dup(RSA_get_default_method());
-            RSA_meth_set1_name(rsamethod, "libcdoc");
-            RSA_meth_set_sign(rsamethod, rsa_sign);
-
-            RSA *rsa = (RSA *) EVP_PKEY_get1_RSA(pkey);
-            RSA_set_method(rsa, rsamethod);
-            RSA_set_ex_data(rsa, 0, backend);
-            EVP_PKEY_set1_RSA(pkey, rsa);
-        }
-    }
-
-    ~Private() {
-        if (pkey) EVP_PKEY_free(pkey);
-        if (rsamethod) RSA_meth_free(rsamethod);
-        if (ecmethod) EC_KEY_METHOD_free(ecmethod);
+        if (x509) key = libcdoc::createTLSKey(backend, x509.handle());
     }
 };
 
@@ -175,6 +124,29 @@ static_assert(hashAlgorithmToSidMidName(static_cast<libcdoc::CryptoBackend::Hash
 
 thread_local std::string error;
 
+static std::string
+getJsonString(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
+{
+    error = {};
+    // picojson::value::get(key) throws std::runtime_error if json is not an
+    // object - check first, the input comes from a remote server.
+    if (!json.is<picojson::object>()) {
+        error = FORMAT("{} is missing (the response is not a JSON object)", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    picojson::value v = json.get(key);
+    if (!v.is<std::string>()) {
+        error = FORMAT("{} is missing or is not a string", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    result = libcdoc::OK;
+    return v.get<std::string>();
+}
+
 std::string
 libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 {
@@ -184,6 +156,10 @@ libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
         return {};
 	case NETWORK_ERROR:
 		return "NetworkBackend: Network error";
+    case CAPSULE_NOT_FOUND:
+        return "NetworkBackend: Key capsule not found";
+    case SERVER_ERROR:
+        return "NetworkBackend: Server error";
 	default:
 		break;
 	}
@@ -217,6 +193,7 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
             if (!x509) return libcdoc::CRYPTO_ERROR;
             X509_STORE_add_cert(store, x509.handle());
         }
+        cli.set_load_system_certs(false);
         cli.enable_server_certificate_verification(true);
         cli.enable_server_hostname_verification(true);
     }
@@ -231,6 +208,20 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
 #endif
     }
     return libcdoc::OK;
+}
+
+//
+// Log why a request failed. httplib does not report TLS errors, they stay in the OpenSSL error queue.
+//
+static void
+logRequestError(const httplib::Result& res)
+{
+    LOG_DBG("Request failed: {}", httplib::to_string(res.error()));
+    while (unsigned long err = ERR_get_error()) {
+        std::array<char, 256> buf{};
+        ERR_error_string_n(err, buf.data(), buf.size());
+        LOG_DBG("    {}", buf.data());
+    }
 }
 
 //
@@ -256,7 +247,7 @@ setProxy(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
 }
 
 //
-// Set SSL timeouts
+// Set SSL timeouts and response size limit
 //
 static libcdoc::result_t
 applySSLTimeout(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
@@ -264,6 +255,7 @@ applySSLTimeout(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
     cli.set_connection_timeout(CDOC_SSL_TIMEOUT);
     cli.set_read_timeout(CDOC_SSL_TIMEOUT);
     cli.set_write_timeout(CDOC_SSL_TIMEOUT);
+    cli.set_payload_max_length(CDOC_MAX_RESPONSE_SIZE);
     return libcdoc::OK;
 }
 
@@ -271,16 +263,26 @@ applySSLTimeout(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
 // Post request and fetch response
 //
 static libcdoc::result_t
-post(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, const std::string& req, httplib::Response& rsp)
+httpPost(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, const std::string& req, httplib::Response& rsp)
 {
     // Capture TLS and HTTP errors
-    LOG_TRACE("POST: {} {}", path, req);
+    LOG_DBG("POST: {}", path);
+    LOG_TRACE("  Body: {}", req);
+    for (auto h : hdrs) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     httplib::Result res = cli.Post(path, hdrs, req, "application/json");
     if (!res) {
-        error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
+        logRequestError(res);
+        error = FORMAT("Cannot connect to https://{}:{}{}: {}", cli.host(), cli.port(), path, httplib::to_string(res.error()));
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
     int status = res->status;
+    LOG_DBG("Status: {}", status);
+    LOG_TRACE("  Body: {}", res->body);
+    for (auto h : res->headers) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     if ((status < 200) || (status >= 300)) {
         error = FORMAT("Http status {}", status);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
@@ -294,21 +296,32 @@ post(httplib::SSLClient& cli, const std::string& path, httplib::Headers& hdrs, c
 // Get url and fetch JSON response
 //
 static libcdoc::result_t
-get(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, picojson::value& rsp_json)
+httpGet(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path, httplib::Response& rsp, int* httpStatus = nullptr)
 {
     // Capture TLS and HTTP errors
+    LOG_DBG("GET: {}", path);
+    for (auto h : hdrs) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
     httplib::Result res = cli.Get(path, hdrs);
     if (!res) {
-        error = FORMAT("Cannot connect to https://{}:{}{}", cli.host(), cli.port(), path);
+        logRequestError(res);
+        error = FORMAT("Cannot connect to https://{}:{}{}: {}", cli.host(), cli.port(), path, httplib::to_string(res.error()));
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
-    httplib::Response rsp = res.value();
-    auto status = rsp.status;
-    if ((status < 200) || (status >= 300)) {
+    int status = res->status;
+    if (httpStatus) *httpStatus = status;
+    LOG_DBG("Status: {}", status);
+    LOG_TRACE("  Body: {}", res->body);
+    for (auto h : res->headers) {
+        LOG_TRACE("    Header {}: {}", h.first, h.second);
+    }
+    // GET requests return the resource with 200, any other success status is unexpected
+    if (status != 200) {
         error = FORMAT("Http status {}", status);
         return libcdoc::NetworkBackend::NETWORK_ERROR;
     }
-    picojson::parse(rsp_json, rsp.body);
+    rsp = res.value();
     error = {};
     return libcdoc::OK;
 }
@@ -344,8 +357,13 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         hdrs.emplace("x-expiry-time", expiry_str);
     }
     httplib::Response rsp;
-    result = post(cli, full, hdrs, req_str, rsp);
+    result = httpPost(cli, full, hdrs, req_str, rsp);
     if (result != libcdoc::OK) return result;
+    // The key server answers 201 Created with the capsule Location
+    if (rsp.status != 201) {
+        error = FORMAT("Http status {}", rsp.status);
+        return NETWORK_ERROR;
+    }
 
     std::string location = rsp.get_header_value("Location");
     if (location.empty()) {
@@ -353,7 +371,7 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
         return NETWORK_ERROR;
     }
     constexpr std::string_view prefix = "/key-capsules/";
-    if (location.compare(0, prefix.size(), prefix) != 0) {
+    if (!location.starts_with(prefix) || location.size() == prefix.size()) {
         error = FORMAT("Unexpected Location header value");
         return NETWORK_ERROR;
     }
@@ -408,7 +426,7 @@ libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string&
     std::string full = path + "/key-shares";
     httplib::Headers hdrs;
     httplib::Response rsp;
-    result = post(cli, full, hdrs, req_str, rsp);
+    result = httpPost(cli, full, hdrs, req_str, rsp);
     if (result != libcdoc::OK) return result;
 
     std::string location = rsp.get_header_value("Location");
@@ -442,30 +460,47 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     result = getClientTLSCertificate(cert);
     if (result != OK) return result;
     std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
-    if (!cert.empty() && (!d->x509 || !d->pkey)) return CRYPTO_ERROR;
+    if (!cert.empty() && (!d->x509 || !d->key)) return CRYPTO_ERROR;
 
-    httplib::SSLClient cli(host, port, d->x509.handle(), d->pkey);
+    httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+    SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
     if (result = applySSLTimeout(cli, this); result != OK) return result;
     result = setPeerCertificates(cli, this, buildURL(host, port));
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
-    std::string full = path + "/key-capsules/" + transaction_id;
+    // S12: transaction_id comes from the (untrusted) container
+    // Dots are not encoded, a dot segment would leave the key-capsules path
+    if (transaction_id.find_first_not_of('.') == std::string::npos) {
+        error = "Invalid transaction id";
+        LOG_WARN("{}", error);
+        return DATA_FORMAT_ERROR;
+    }
+    std::string full = joinUrl(path, "/key-capsules/") + urlEncodeComponent(transaction_id);
     httplib::Headers hdrs;
-    picojson::value rsp_json;
-    result = get(cli, hdrs, full, rsp_json);
-    if (result != libcdoc::OK) return result;
+    httplib::Response rsp;
+    int httpStatus = 0;
+    result = httpGet(cli, hdrs, full, rsp, &httpStatus);
+    if (result != libcdoc::OK) {
+        if (httpStatus) return httpStatus == 404 ? CAPSULE_NOT_FOUND : SERVER_ERROR;
+        return result;
+    }
 
-    picojson::value v = rsp_json.get("ephemeral_key_material");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'ephemeral_key_material' in response");
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
-    error = {};
-    std::string ks = v.get<std::string>();
+
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string ks = getJsonString(rsp_json, "ephemeral_key_material", rv);
+    if (rv != libcdoc::OK) return NETWORK_ERROR;
     dst = fromBase64(ks);
     if (dst.empty()) {
         error = FORMAT("Invalid base64 in 'ephemeral_key_material'");
+        LOG_WARN("{}", error);
         return NETWORK_ERROR;
     }
 
@@ -490,10 +525,11 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
-    std::string full = path + "/key-shares/" + share_id + "/nonce";
+    // S12: share_id comes from the (untrusted) container
+    std::string full = joinUrl(path, "/key-shares/") + urlEncodeComponent(share_id) + "/nonce";
     httplib::Headers hdrs;
     httplib::Response rsp;
-    result = post(cli, full, hdrs, "", rsp);
+    result = httpPost(cli, full, hdrs, "", rsp);
     if (result != libcdoc::OK) return result;
 
     LOG_TRACE("Response: {}", rsp.body);
@@ -504,12 +540,9 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
         LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
-    picojson::value v = rsp_json.get("nonce");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'nonce' in response");
-        return NETWORK_ERROR;
-    }
-    std::string nonce_str = v.get<std::string>();
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string nonce_str = getJsonString(rsp_json, "nonce", rv);
+    if (rv != libcdoc::OK) return rv;
     dst = toUint8Vector(nonce_str);
     return OK;
 }
@@ -532,28 +565,30 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     if (result != OK) return result;
     if (result = setProxy(cli, this); result != OK) return result;
 
-    std::string full = path + "/key-shares/" + share_id;
+    // S12: share_id comes from the (untrusted) container
+    std::string full = joinUrl(path, "/key-shares/") + urlEncodeComponent(share_id);
     LOG_TRACE("Share url: {}", full);
     httplib::Headers hdrs;
     hdrs.insert({"x-cdoc2-auth-ticket", ticket});
     hdrs.insert({"x-cdoc2-auth-x5c", std::string("-----BEGIN CERTIFICATE-----") + toBase64(cert) + "-----END CERTIFICATE-----"});
-    picojson::value rsp_json;
-    result = get(cli, hdrs, full, rsp_json);
+    httplib::Response rsp;
+    result = httpGet(cli, hdrs, full, rsp);
     if (result != libcdoc::OK) return result;
 
-    picojson::value v = rsp_json.get("share");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'share' in response");
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
         return NETWORK_ERROR;
     }
-    std::string share64 = v.get<std::string>();
+
+    libcdoc::result_t rv = libcdoc::OK;
+    std::string share64 = getJsonString(rsp_json, "share", rv);
+    if (rv != libcdoc::OK) return rv;
     LOG_TRACE("Share64: {}", share64);
-    v = rsp_json.get("recipient");
-    if (!v.is<std::string>()) {
-        error = FORMAT("No 'recipient' in response");
-        return NETWORK_ERROR;
-    }
-    std::string recipient = v.get<std::string>();
+    std::string recipient = getJsonString(rsp_json, "recipient", rv);
+    if (rv != libcdoc::OK) return rv;
     std::vector<uint8_t> shareval = fromBase64(share64);
     if (shareval.size() != 32) {
         error = FORMAT("Invalid share size: expected 32, got {}", shareval.size());
@@ -564,57 +599,6 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     return OK;
 }
 #endif
-
-ECDSA_SIG *
-ecdsa_do_sign(const unsigned char *dgst, int dgst_len, const BIGNUM * /*inv*/, const BIGNUM * /*rp*/, EC_KEY *eckey)
-{
-    auto *backend = (libcdoc::NetworkBackend *) EC_KEY_get_ex_data(eckey, 0);
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(dgst, dgst + dgst_len);
-    int result = backend->signTLS(dst, libcdoc::CryptoBackend::SHA_512, digest);
-    if (result != libcdoc::OK) {
-        return nullptr;
-    }
-    int size_2 = (int) dst.size() / 2;
-    ECDSA_SIG *sig = ECDSA_SIG_new();
-    ECDSA_SIG_set0(sig,
-                   BN_bin2bn(dst.data(), size_2, nullptr),
-                   BN_bin2bn(dst.data() + size_2, size_2, nullptr));
-    return sig;
-}
-
-int
-rsa_sign(int type, const unsigned char *m, unsigned int m_len, unsigned char *sigret, unsigned int *siglen, const RSA *rsa)
-{
-    auto *backend = (libcdoc::NetworkBackend *) RSA_get_ex_data(rsa, 0);
-    auto algo = libcdoc::CryptoBackend::SHA_512;
-    switch (type) {
-    case NID_sha224:
-        algo = libcdoc::CryptoBackend::SHA_224;
-        break;
-    case NID_sha256:
-        algo = libcdoc::CryptoBackend::SHA_256;
-        break;
-    case NID_sha384:
-        algo = libcdoc::CryptoBackend::SHA_384;
-        break;
-    case NID_sha512:
-        break;
-    default:
-        return 0;
-    }
-    std::vector<uint8_t> dst;
-    std::vector<uint8_t> digest(m, m + m_len);
-    int result = backend->signTLS(dst, algo, digest);
-    if (result != libcdoc::OK) {
-        return 0;
-    }
-    if (sigret && (*siglen >= dst.size())) {
-        memcpy(sigret, dst.data(), dst.size());
-    }
-    *siglen = (unsigned int) dst.size();
-    return 1;
-}
 
 #ifdef HAS_KEYSHARES
 libcdoc::result_t
@@ -648,9 +632,12 @@ waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path
     std::string full = path + session_id + "?timeoutMs=" + std::to_string((int) (seconds * 1000));
     LOG_TRACE("SID/MID session query path: {}", full);
     while (libcdoc::getTime() < end) {
-        picojson::value rsp;
-        result_t result = get(cli, hdrs, full, rsp);
+        httplib::Response http_rsp;
+        result_t result = httpGet(cli, hdrs, full, http_rsp);
         if (result != OK) return result;
+        // A parse error leaves rsp null, which the object check below rejects
+        picojson::value rsp;
+        picojson::parse(rsp, http_rsp.body);
         if (!rsp.is<picojson::object>()) {
             error = "Response is not a JSON object";
             LOG_WARN("{}", error);
@@ -795,7 +782,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     LOG_TRACE("SmartID path: {}", full);
     httplib::Headers hdrs;
     httplib::Response rsp;
-    result = post(cli, full, hdrs, query.serialize(), rsp);
+    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
 
 
@@ -873,7 +860,7 @@ libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     //
     full = path + "/authentication/" + rcpt_id;
     LOG_TRACE("SmartID path: {}", full);
-    result = post(cli, full, hdrs, query.serialize(), rsp);
+    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
     LOG_TRACE("Response: {}", rsp.body);
     parse_err = picojson::parse(v, rsp.body);
@@ -996,7 +983,7 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     LOG_TRACE("Mobile ID path: {}", full);
     httplib::Headers hdrs;
     httplib::Response rsp;
-    result = post(cli, full, hdrs, query.serialize(), rsp);
+    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
     if (result != libcdoc::OK) return result;
     LOG_TRACE("Response: {}", rsp.body);
 

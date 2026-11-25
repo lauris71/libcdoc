@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #ifndef __LIBCDOC_WINBACKEND_H__
 #define __LIBCDOC_WINBACKEND_H__
@@ -53,14 +38,6 @@ struct CDOC_EXPORT WinBackend : public CryptoBackend {
      * @return error code or OK
      */
     virtual result_t connectToKey(int idx, bool priv) = 0;
-    /**
-     * @brief whether to use PSS RSA padding
-     *
-     * A subclass should overwrite this to inform the backend about the correct padding.
-     * @param idx a lock idx
-     * @return true if PSS padding is sued
-     */
-    virtual result_t usePSS(int idx) {return true;}
 
     virtual result_t decryptRSA(std::vector<uint8_t>& dst, const std::vector<uint8_t>& data, bool oaep, unsigned int idx);
     virtual result_t deriveConcatKDF(std::vector<uint8_t>& dst, const std::vector<uint8_t> &public_key, const std::string &digest,

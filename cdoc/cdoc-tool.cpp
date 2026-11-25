@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <iostream>
 #ifndef _WIN32
@@ -82,7 +67,7 @@ print_usage(ostream& ofs)
     ofs << "    --password PASSWORD     - lock's password" << endl;
     ofs << "    --secret SECRET         - secret (AES) key (hex encoded key value)" << endl;
     ofs << "    --pin PIN               - PKCS11 pin" << endl;
-    ofs << "    --key-id                - PKCS11 key ID" << endl;
+    ofs << "    --key-id                - PKCS11 key ID (hex)" << endl;
     ofs << "    --key-label             - PKCS11 key label" << endl;
     ofs << endl;
     ofs << "cdoc-tool locks FILE" << endl;
@@ -231,6 +216,10 @@ parse_rcpt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& rcpts, int& arg_idx, 
 
         rcpt.type = RcptInfo::PKEY;
         rcpt.secret = fromHex(parts[2]);
+        if (rcpt.secret.empty()) {
+            LOG_ERROR("Public key must be hexadecimal");
+            return RESULT_USAGE;
+        }
     } else if (method == "pfkey") {
         // label:pfkey:PUBLIC_KEY_FILE
         if (parts.size() != 3) return RESULT_USAGE;
@@ -284,7 +273,13 @@ parse_rcpt(ToolConf& conf, std::vector<libcdoc::RcptInfo>& rcpts, int& arg_idx, 
         if (parts.size() > 3) {
             rcpt.secret.assign(parts[3].cbegin(), parts[3].cend());
             if (parts.size() > 4) {
-                if (!parts[4].empty()) rcpt.p11.key_id = fromHex(parts[4]);
+                if (!parts[4].empty()) {
+                    rcpt.p11.key_id = fromHex(parts[4]);
+                    if (rcpt.p11.key_id.empty()) {
+                        LOG_ERROR("Key ID must be hexadecimal");
+                        return RESULT_USAGE;
+                    }
+                }
                 if (parts.size() > 5)
                     rcpt.p11.key_label = parts[5];
             }
@@ -405,10 +400,18 @@ parse_key_data(LockData& ldata, const int& arg_idx, int argc, char *argv[])
     } else if (arg == "--secret") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
         ldata.secret = fromHex(argv[arg_idx + 1]);
+        if (ldata.secret.empty()) {
+            LOG_ERROR("Secret must be hexadecimal");
+            return RESULT_USAGE;
+        }
         return 2;
     } else if (arg == "--pkey") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
         ldata.secret = fromHex(argv[arg_idx + 1]);
+        if (ldata.secret.empty()) {
+            LOG_ERROR("Private key must be hexadecimal");
+            return RESULT_USAGE;
+        }
         return 2;
     } else if (arg == "--pfkey") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
@@ -434,8 +437,12 @@ parse_key_data(LockData& ldata, const int& arg_idx, int argc, char *argv[])
         return 2;
     } else if (arg == "--key-id") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        string_view s(argv[arg_idx + 1]);
-        ldata.key_id.assign(s.cbegin(), s.cend());
+        // Hex like the ID in p11pk/p11sk recipients
+        ldata.key_id = fromHex(argv[arg_idx + 1]);
+        if (ldata.key_id.empty()) {
+            LOG_ERROR("Key ID must be hexadecimal");
+            return RESULT_USAGE;
+        }
         return 2;
     } else if (arg == "--key-label") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
@@ -555,7 +562,7 @@ static int ParseAndEncrypt(int argc, char *argv[])
 //   --label LABEL   CDoc container lock label
 //   --slot SLOT     PKCS11 slot number
 //   --secret|password|pin SECRET    Secret phrase (either lock password or PKCS11 pin)
-//   --key-id        PKCS11 key id
+//   --key-id        PKCS11 key id (hex)
 //   --key-label     PKCS11 key label
 //   --library       full path to cryptographic library to be used (needed for decryption with PKCS11)
 

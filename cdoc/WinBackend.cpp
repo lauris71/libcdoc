@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include "WinBackend.h"
 
@@ -399,7 +384,6 @@ libcdoc::WinBackend::sign(std::vector<uint8_t>& dst, HashAlgorithm algorithm, co
         default:
             return INVALID_PARAMS;
     }
-	BCRYPT_PKCS1_PADDING_INFO rsaPKCS1 { rsaPSS.pszAlgId };
 	DWORD size;
 	NCryptGetProperty(d->key, NCRYPT_ALGORITHM_GROUP_PROPERTY, nullptr, 0, &size, 0);
     std::wstring algo(5, 0);
@@ -408,12 +392,9 @@ libcdoc::WinBackend::sign(std::vector<uint8_t>& dst, HashAlgorithm algorithm, co
 	bool isRSA = (algo == L"RSA");
 	DWORD padding {};
 	PVOID paddingInfo {};
-	if(isRSA && usePSS(idx)) {
+	if(isRSA) {
 		padding = BCRYPT_PAD_PSS;
 		paddingInfo = &rsaPSS;
-	} else if(isRSA) {
-		padding = BCRYPT_PAD_PKCS1;
-		paddingInfo = &rsaPKCS1;
 	}
 	SECURITY_STATUS err = NCryptSignHash(d->key, paddingInfo, PBYTE(digest.data()), DWORD(digest.size()), nullptr, 0, &size, padding);
     if (err != ERROR_SUCCESS) return CRYPTO_ERROR;

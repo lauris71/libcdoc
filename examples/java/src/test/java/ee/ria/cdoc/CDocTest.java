@@ -1,0 +1,232 @@
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
+
+package ee.ria.cdoc;
+
+import java.io.File;
+import java.security.SecureRandom;
+import java.util.Map;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+public class CDocTest {
+
+    @TempDir
+    File tempDir;
+
+    @BeforeAll
+    static void loadLibrary() {
+        // Uses the same resolution chain as CDocTool: -Dcdoc.library,
+        // jni.properties baked into the jar, well-known build directories,
+        // java.library.path.
+        CDocTool.loadLibrary(null);
+    }
+
+    /**
+     * The Logger installed via CDoc.setLogger must stay alive even when the
+     * caller drops its reference and the GC runs: the C++ side keeps only a
+     * raw pointer, so the Java binding must pin the proxy object.
+     */
+    @Test
+    void loggerSurvivesGC() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger messages = new java.util.concurrent.atomic.AtomicInteger();
+        // Install the logger and drop the reference immediately
+        CDoc.setLogger(new Logger() {
+            @Override
+            protected void logMessage(LogLevel level, String file, int line, String msg) {
+                messages.incrementAndGet();
+            }
+        });
+        CDoc.setLogLevel(LogLevel.LEVEL_DEBUG);
+
+        // Try hard to make the GC collect the logger proxy
+        for (int i = 0; i < 10; i++) {
+            System.gc();
+            System.runFinalization();
+        }
+
+        // Trigger a C++ -> Java log callback; crashes if the logger was collected
+        CDoc.log(LogLevel.LEVEL_INFO, "CDocTest", 0, "logger GC test");
+        assertTrue(messages.get() > 0, "logger callback should have been invoked after GC");
+    }
+
+    /**
+     * Creates a password-based Recipient, validates it and checks the
+     * automatically generated (machine-readable) lock label.
+     */
+    @Test
+    void passwordRecipient() throws Exception {
+        final String password = "JUnit test password";
+        final String labelValue = "JUnit test";
+        // The smallest count libcdoc accepts for encryption; any kdf_iter > 0
+        // makes the recipient password-based ("pw").
+        final int kdfIter = CryptoBackend.KDF_ITER_MIN_ENCRYPT;
+
+        // Create a password-based recipient with empty label, so that the
+        // lock label is generated automatically.
+        Recipient rcpt = Recipient.makeSymmetric("", kdfIter);
+        assertFalse(rcpt.isEmpty());
+        assertTrue(rcpt.isSymmetric());
+        assertEquals(kdfIter, rcpt.getKdf_iter());
+
+        // A symmetric recipient without label or LABEL property is invalid
+        assertFalse(rcpt.validate());
+        // Provide the human-readable part of the generated label
+        rcpt.setLabelValue("label", labelValue);
+        assertTrue(rcpt.validate());
+
+        // Write a container and read the generated label back from the lock
+        File container = new File(tempDir, "test.cdoc2");
+        TestCrypto crypto = new TestCrypto(password);
+        CDocWriter wrtr = CDocWriter.createWriter(2, container.getAbsolutePath(), null, crypto, null);
+        assertNotNull(wrtr);
+        assertEquals(CDoc.OK, wrtr.addRecipient(rcpt));
+        assertEquals(CDoc.OK, wrtr.beginEncryption());
+        byte[] payload = {1, 2, 3, 4};
+        assertEquals(CDoc.OK, wrtr.addFile("payload.bin", payload.length));
+        assertEquals(CDoc.OK, wrtr.writeData(payload));
+        assertEquals(CDoc.OK, wrtr.finishEncryption());
+
+        CDocReader rdr = CDocReader.createReader(container.getAbsolutePath(), null, crypto, null);
+        assertNotNull(rdr);
+        assertEquals(2, rdr.getVersion());
+        LockVector locks = rdr.getLocks();
+        assertEquals(1, locks.size());
+        Lock lock = locks.get(0);
+
+        // The lock label must be the automatically generated machine-readable one
+        String label = lock.getLabel();
+        assertTrue(label.startsWith("data:"), "label should be machine-generated: " + label);
+
+        Map<String, String> parsed = Lock.parseLabel(label);
+        assertEquals("1", parsed.get("v"));
+        assertEquals("pw", parsed.get("type"));
+        assertEquals(labelValue, parsed.get("label"));
+
+        // The same label must be produced by the std::map<string_view,...>
+        // overload exposed through the SWIG Java typemap
+        assertEquals(label, rcpt.getLabel(Map.of()));
+
+        // Non-empty argument: extra values override the recipient's own
+        // label parts with the same key, unknown keys are appended
+        String overridden = rcpt.getLabel(Map.of("label", "overridden", "file", "payload.bin"));
+        Map<String, String> parsedOverride = Lock.parseLabel(overridden);
+        assertEquals("overridden", parsedOverride.get("label"));
+        assertEquals("payload.bin", parsedOverride.get("file"));
+        assertEquals("pw", parsedOverride.get("type"));
+        // ...and must not mutate the recipient
+        assertEquals(label, rcpt.getLabel(Map.of()));
+
+        // Sanity check: the container is decryptable with the same password
+        byte[] fmk = rdr.getFMK(0);
+        assertEquals(CDoc.OK, rdr.beginDecryption(fmk));
+        FileInfo fi = new FileInfo();
+        long result = rdr.nextFile(fi);
+        assertEquals(CDoc.OK, result);
+        assertEquals("payload.bin", fi.getName());
+        byte[] data = new byte[(int) fi.getSize()];
+        assertEquals(payload.length, rdr.readData(data));
+        assertArrayEquals(payload, data);
+        assertEquals(CDoc.END_OF_STREAM, rdr.nextFile(fi));
+        assertEquals(CDoc.OK, rdr.finishDecryption());
+    }
+
+    /**
+     * Labels and file names with characters that JNI's modified UTF-8
+     * (CESU-8) cannot represent as standard UTF-8 must round-trip intact:
+     * supplementary characters (above U+FFFF) and characters needing
+     * multi-byte encoding.
+     */
+    @Test
+    void utf8Strings() throws Exception {
+        // Contains supplementary characters (𝔘𝕟𝕚, 🚀) and BMP multi-byte
+        // characters (õ, ü, é)
+        final String label = "Jõgeva 𝔘𝕟𝕚 🚀 üé";
+        final String fileName = "põder-🚀-文件.txt";
+        final String password = "pässw0rd-🔑";
+
+        Recipient rcpt = Recipient.makeSymmetric(label, CryptoBackend.KDF_ITER_MIN_ENCRYPT);
+        assertTrue(rcpt.validate());
+
+        File container = new File(tempDir, "utf8.cdoc2");
+        TestCrypto crypto = new TestCrypto(password);
+        CDocWriter wrtr = CDocWriter.createWriter(2, container.getAbsolutePath(), null, crypto, null);
+        assertEquals(CDoc.OK, wrtr.addRecipient(rcpt));
+        assertEquals(CDoc.OK, wrtr.beginEncryption());
+        byte[] payload = {9, 8, 7};
+        assertEquals(CDoc.OK, wrtr.addFile(fileName, payload.length));
+        assertEquals(CDoc.OK, wrtr.writeData(payload));
+        assertEquals(CDoc.OK, wrtr.finishEncryption());
+
+        // The label must be stored in the container as standard UTF-8.
+        // Under JNI modified UTF-8, '🚀' would be stored as the 6-byte
+        // surrogate pair ED A0 BD ED B2 80 instead of F0 9F 9A 80.
+        byte[] containerBytes = java.nio.file.Files.readAllBytes(container.toPath());
+        byte[] labelUtf8 = label.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(containsSubarray(containerBytes, labelUtf8),
+                "container should contain the standard UTF-8 encoding of the label");
+
+        // The label and file name must come back exactly as written
+        CDocReader rdr = CDocReader.createReader(container.getAbsolutePath(), null, crypto, null);
+        LockVector locks = rdr.getLocks();
+        assertEquals(1, locks.size());
+        assertEquals(label, locks.get(0).getLabel());
+
+        byte[] fmk = rdr.getFMK(0);
+        assertEquals(CDoc.OK, rdr.beginDecryption(fmk));
+        FileInfo fi = new FileInfo();
+        assertEquals(CDoc.OK, rdr.nextFile(fi));
+        assertEquals(fileName, fi.getName());
+        byte[] data = new byte[(int) fi.getSize()];
+        assertEquals(payload.length, rdr.readData(data));
+        assertArrayEquals(payload, data);
+        assertEquals(CDoc.END_OF_STREAM, rdr.nextFile(fi));
+        assertEquals(CDoc.OK, rdr.finishDecryption());
+
+        // Labels parsed back into a Map must also carry standard UTF-8.
+        // Use an auto-generated (machine-readable) label for parseLabel:
+        // a recipient with an explicit user label returns it verbatim.
+        Recipient autoRcpt = Recipient.makeSymmetric("", CryptoBackend.KDF_ITER_MIN_ENCRYPT);
+        autoRcpt.setLabelValue("label", label);
+        String generated = autoRcpt.getLabel(Map.of());
+        Map<String, String> parsed = Lock.parseLabel(generated);
+        assertEquals(label, parsed.get("label"));
+
+        // Extra map values also round-trip as standard UTF-8
+        String withExtra = autoRcpt.getLabel(Map.of("file", fileName));
+        assertEquals(fileName, Lock.parseLabel(withExtra).get("file"));
+    }
+
+    private static boolean containsSubarray(byte[] haystack, byte[] needle) {
+        outer:
+        for (int i = 0; i + needle.length <= haystack.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private static class TestCrypto extends CryptoBackend {
+        private final byte[] secret;
+
+        TestCrypto(String password) {
+            this.secret = password.getBytes();
+        }
+
+        @Override
+        public long getSecret(DataBuffer dst, int idx) {
+            dst.setData(secret);
+            return CDoc.OK;
+        }
+    }
+}

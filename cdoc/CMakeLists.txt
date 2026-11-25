@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Estonian Information System Authority
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 set(SCHEMAS
     schema/recipients.fbs
     schema/header.fbs
@@ -41,6 +44,7 @@ add_library(cdoc
     Certificate.cpp Certificate.h
     Crypto.cpp Crypto.h
     Tar.cpp Tar.h
+    TLSKey.cpp TLSKey.h
     ZStream.h
     # Internal
     Utils.cpp Utils.h

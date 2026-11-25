@@ -1,3 +1,9 @@
+// SPDX-FileCopyrightText: 2018 Dominik Thalhammer
+// SPDX-License-Identifier: MIT
+//
+// Vendored from https://github.com/Thalhammer/jwt-cpp
+// Full licence text: LICENSE.MIT in this directory
+
 #ifndef JWT_CPP_KAZUHO_PICOJSON_DEFAULTS_H
 #define JWT_CPP_KAZUHO_PICOJSON_DEFAULTS_H
 

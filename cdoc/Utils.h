@@ -1,20 +1,5 @@
-/*
- * libcdoc
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- */
+// SPDX-FileCopyrightText: Estonian Information System Authority
+// SPDX-License-Identifier: LGPL-2.1-or-later
 
 #ifndef __LIBCDOC_UTILS_H__
 #define __LIBCDOC_UTILS_H__
@@ -83,7 +68,7 @@ static constexpr bool fromHex(auto pos, auto end, auto& val)
 static std::vector<uint8_t>
 fromHex(std::string_view hex) {
     std::vector<uint8_t> val;
-    if((hex.size() % 2) != 0)
+    if((hex.size() % 2) != 0 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos)
         return val;
     val.resize(hex.size() / 2);
     auto p = val.begin();
@@ -238,6 +223,16 @@ struct urlEncode {
     friend std::ostream& operator<<(std::ostream& escaped, urlEncode src);
 };
 
+/**
+ * @brief Percent-encode a string for use as a URL path segment or query value
+ *
+ * RFC 3986 unreserved characters (A-Z a-z 0-9 - _ . ~) are kept as-is,
+ * everything else (including space) is percent-encoded. Used to safely
+ * interpolate untrusted values (share ids, nonces, transaction ids) into
+ * request URLs (S12).
+ */
+std::string urlEncodeComponent(std::string_view value);
+
 std::vector<uint8_t> toUint8Vector(const auto* data)
 {
     return {data->cbegin(), data->cend()};
@@ -283,6 +278,25 @@ struct restoreFlags {
     CDOC_DISABLE_MOVE_COPY(restoreFlags)
     ~restoreFlags() { os.flags(f); }
 };
+
+/**
+ * @brief Join a base URL with a path suffix, handling trailing slashes.
+ *
+ * The @p base may or may not end with '/'; the @p suffix must start with
+ * '/'. The result always has exactly one '/' between base and suffix.
+ *
+ * @param base the base URL (e.g. "https://host" or "https://host/")
+ * @param suffix the path suffix (e.g. "/key-capsules")
+ * @return the joined URL
+ */
+[[nodiscard]] inline std::string joinUrl(std::string_view base, std::string_view suffix)
+{
+    std::string result(base);
+    if (!result.empty() && result.back() == '/')
+        result.pop_back();
+    result.append(suffix);
+    return result;
+}
 
 [[nodiscard]] constexpr auto range_to_sv(auto begin, auto end) noexcept {
     if (begin == end)
