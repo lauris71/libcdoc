@@ -434,10 +434,15 @@ public class CDocTool {
             byte[] fmk = rdr.getFMK(key.lock_idx);
             rdr.beginDecryption(fmk);
             FileInfo fi = new FileInfo();
+            java.util.Set<String> usedNames = new java.util.HashSet<>();
             long result = rdr.nextFile(fi);
             while (result == CDoc.OK) {
                 System.out.format("File %s length %d\n", fi.getName(), fi.getSize());
-                File ofile = (outDir != null) ? new File(outDir, fi.getName()) : new File(fi.getName());
+                // The reader returns stored names verbatim (they may
+                // contain paths); flatten to a safe basename and rename on
+                // clash before writing to disk.
+                String entry = flattenEntryName(fi.getName(), usedNames);
+                File ofile = (outDir != null) ? new File(outDir, entry) : new File(entry);
                 OutputStream ofs = new FileOutputStream(ofile);
                 rdr.readFile(ofs);
                 ofs.close();
@@ -449,6 +454,27 @@ public class CDocTool {
         } catch (IOException exc) {
             System.err.println("IO Exception: " + exc.getMessage());
         }
+    }
+
+    /**
+     * Flatten a stored entry name to a safe basename for writing to disk:
+     * strip directory components (both separator styles), repair the name
+     * and rename on clash (" (N)" before the extension, ASCII
+     * case-insensitive). Mirrors the C++ extraction sink.
+     */
+    private static String flattenEntryName(String name, java.util.Set<String> used) {
+        String base = name;
+        int sep = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
+        if (sep >= 0) base = base.substring(sep + 1);
+        String entry = CDoc.repairFilename(base);
+        int dot = entry.lastIndexOf('.');
+        String stem = (dot > 0) ? entry.substring(0, dot) : entry;
+        String ext = (dot > 0) ? entry.substring(dot) : "";
+        String candidate = entry;
+        for (int n = 1; !used.add(candidate.toLowerCase()); n++) {
+            candidate = stem + " (" + n + ")" + ext;
+        }
+        return candidate;
     }
 
     static void encrypt(int version, String file, List<String> files)
@@ -497,7 +523,15 @@ public class CDocTool {
                 InputStream ifs = new FileInputStream(name);
                 byte[] bytes = ifs.readAllBytes();
                 ifs.close();
-                result = wrtr.addFile(name, bytes.length);
+                // Prepare the entry name like FileListSource: strip to the
+                // basename (both separator styles) and repair it to a clean
+                // name - the writer accepts only clean names and stores
+                // them verbatim.
+                String base = name;
+                int sep = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
+                if (sep >= 0) base = base.substring(sep + 1);
+                String entryName = CDoc.repairFilename(base);
+                result = wrtr.addFile(entryName, bytes.length);
                 System.out.format("addFile: %d\n", result);
                 result = wrtr.writeData(bytes);
                 System.out.format("writeData: %d\n", result);

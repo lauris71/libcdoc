@@ -4,6 +4,8 @@
 #ifndef __LIBCDOC_UTILS_H__
 #define __LIBCDOC_UTILS_H__
 
+#include "Exports.h"
+
 #include <array>
 #include <charconv>
 #include <filesystem>
@@ -11,6 +13,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -107,7 +110,49 @@ double getTime();
 double timeFromISO(const std::string& iso);
 std::string timeToISO(time_t time);
 
-bool isValidUtf8 (std::string str);
+/**
+ * @brief Result of decoding a single UTF-8 sequence.
+ *
+ * Returned by decodeUtf8Char(). The zero-length default state means "the
+ * bytes at the cursor are not a well-formed UTF-8 character".
+ */
+struct Utf8Char {
+    /// Bytes consumed: 1..4 for a well-formed sequence, 0 when invalid.
+    size_t length = 0;
+    /// Decoded code point (U+0000..U+10FFFF); meaningful only if valid().
+    char32_t codepoint = 0;
+
+    bool valid() const { return length > 0; }
+};
+
+/**
+ * @brief Decode the single UTF-8 character at the start of [data, data+size).
+ *
+ * Enforces the well-formed byte sequences from RFC 3629 / Unicode Standard
+ * 3.9 (Table 3-7): rejects overlong encodings (e.g. 0xC0 0xAF for '/'),
+ * UTF-16 surrogate halves (U+D800..U+DFFF) and code points above U+10FFFF.
+ * All of these are ill-formed and can bypass filters that decode them
+ * differently, so repair/validity code must classify them as invalid.
+ *
+ * This is the per-character primitive behind isValidUtf8(); string-repair
+ * code walks a buffer with it to replace ill-formed runs byte-by-byte and
+ * to filter decoded code points (control characters etc.). On invalid
+ * input nothing is consumed (length == 0), so the caller decides how many
+ * bytes to replace/skip before retrying.
+ *
+ * @param data start of the input span (may be null only when size == 0)
+ * @param size number of available bytes
+ * @return the decoded character, or length 0 if invalid
+ */
+Utf8Char decodeUtf8Char(const uint8_t *data, size_t size);
+
+/**
+ * @brief Check that the whole string is well-formed UTF-8 (RFC 3629).
+ *
+ * Implemented as repeated decodeUtf8Char() calls; use the primitive
+ * directly when repairing or classifying individual characters.
+ */
+bool isValidUtf8 (std::string_view str);
 
 static std::vector<uint8_t>
 readAllBytes(std::string_view filename)
@@ -170,6 +215,166 @@ std::string buildURL(const std::string& host, int port);
  * @return a relative file name guaranteed not to contain path-traversal
  *         elements, or an empty string when no safe name can be produced.
  */
+/**
+ * @brief Last path component of @p path, ignoring directory parts.
+ *
+ * Splits on BOTH '/' and '\\' on every platform: an attacker who crafts a
+ * Windows-style path on Linux is still trying to escape, and vice versa.
+ * Returns the last non-empty component (empty if the path ends in a
+ * separator).
+ */
+std::string_view baseNameOf(std::string_view path);
+
+/**
+ * @brief Trim leading whitespace and trailing dots/whitespace.
+ *
+ * Windows silently strips trailing dots and spaces when creating files, so
+ * "evil.exe.." resolves to "evil.exe" and can collide with or hide a
+ * legitimate file. Leading whitespace is trimmed for symmetry.
+ */
+std::string_view trimFilenameEdges(std::string_view component);
+
+/**
+ * @brief True for Windows reserved device names (CON, PRN, AUX, NUL,
+ * COM1-9, LPT1-9), matched case-insensitively against the part before the
+ * first dot (so "CON.txt" is reserved too).
+ *
+ * On Windows these are device handles regardless of working directory:
+ * base/CON would not create a file but open the console device, and any
+ * subsequent write goes there.
+ */
+bool isReservedDeviceName(std::string_view component);
+
+/**
+ * @brief Truncate to at most @p max_bytes without splitting a character.
+ *
+ * A multi-byte codepoint crossing the limit is dropped whole rather than
+ * cut in half, which would produce ill-formed UTF-8.
+ */
+std::string_view truncateUtf8(std::string_view s, size_t max_bytes);
+
+/**
+ * @brief True if the string contains NUL or an ASCII control byte other
+ * than tab.
+ *
+ * NUL is particularly dangerous: many Windows APIs truncate at NUL while
+ * the filesystem treats the full name, which has historically been used to
+ * mask malicious extensions. Tab is allowed as ordinary whitespace.
+ */
+bool hasControlBytes(std::string_view s);
+
+/**
+ * @brief True if @p name is a conformant CDoc2 entry name.
+ *
+ * Conformance is the §5.3.1 rule set (Filename-handling-proposal.md §3,
+ * "non-conformant" class): valid UTF-8 (RFC 3629), non-empty, at most
+ * 1000 bytes, no Unicode control characters / U+202E / U+FFFE / U+FFFF,
+ * relative (no leading '/' or drive letter), and no empty / "." / ".."
+ * path components. Uniqueness is a cross-entry property the caller checks
+ * (see deduplicateFilename). A name may be conformant yet suspicious
+ * (hasSuspiciousTraits) - the two classes are independent on purpose.
+ */
+CDOC_EXPORT bool isConformantName(std::string_view name);
+
+/**
+ * @brief True if @p name carries suspicious-but-spec-valid traits.
+ *
+ * The §3 "suspicious" class: symbols `<>:\|?*` and backslash, leading
+ * dots (hidden files on Unix), leading space/hyphen, trailing dot/space,
+ * reserved device components, or components longer than 255 bytes. These
+ * names are legal to store but hazardous to write to disk or pass to other
+ * tools: the writer rejects them, readers return them only after
+ * repairFilename(). The scan is byte-level and meaningful together with
+ * isConformantName().
+ */
+CDOC_EXPORT bool hasSuspiciousTraits(std::string_view name);
+
+/**
+ * @brief Repair @p name into a conformant name free of suspicious traits.
+ *
+ * Implements the §3 repair rules: ill-formed bytes and forbidden code
+ * points become '_', suspicious symbols are removed, component edges are
+ * trimmed (leading space/hyphen, trailing dot/space), leading dots become
+ * '_' (no hidden files), reserved device components get a '_' prefix,
+ * components are capped at 255 bytes and the whole name at 1000. Path
+ * shape is preserved but confined: the leading
+ * root of absolute names is dropped and "." / ".." components are
+ * resolved, so the result is always a clean relative name that can never
+ * escape an extraction root. An empty result becomes "unnamed"; callers
+ * pipe through deduplicateFilename() for " (N)" indexing. Idempotent.
+ */
+CDOC_EXPORT std::string repairFilename(std::string_view name);
+
+/**
+ * @brief Entry-name handling policy for readers (FILENAME_MODE).
+ */
+enum class FilenamePolicy {
+    /// Validate: non-conformant names fail the read (and are not
+    /// returned), suspicious-but-conformant names come back repaired.
+    /// Default.
+    Strict,
+    /// Repair everything: non-conformant names are repaired instead of
+    /// failing, duplicates get " (N)" suffixes.
+    Safe,
+    /// Verbatim pass-through (forensics/inspection): raw names leave the
+    /// library untouched, duplicates included.
+    Lenient
+};
+
+/**
+ * @brief Parse a FILENAME_MODE configuration value.
+ *
+ * Unknown or empty values mean Strict (the default).
+ */
+CDOC_EXPORT FilenamePolicy filenamePolicyFromString(std::string_view value);
+
+/**
+ * @brief Per-reader name bookkeeping for applyFilenamePolicy().
+ */
+struct FilenameState {
+    /// Dedup keys of returned names (deduplicateFilename bookkeeping).
+    std::map<std::string, size_t> returned;
+    /// Dedup keys of raw stored names. Strict mode treats duplicate raw
+    /// names as a container conformance violation, which is distinct from
+    /// a repair-induced collision between different raw names.
+    std::set<std::string> raw;
+};
+
+/**
+ * @brief Outcome of applying a FilenamePolicy to one stored entry name.
+ */
+struct FilenameDecision {
+    /// False when strict mode rejects the name; name is then empty (the
+    /// raw name is never returned, see Filename-handling-proposal.md §5).
+    bool ok = true;
+    /// The name to return to the caller.
+    std::string name;
+    /// True when name differs from the stored raw name (repaired/renamed);
+    /// callers log a warning in that case.
+    bool repaired = false;
+};
+
+/**
+ * @brief Apply the reader name policy to one stored entry name.
+ *
+ * Implements the mode matrix from Filename-handling-proposal.md §5 on top
+ * of isConformantName()/hasSuspiciousTraits()/repairFilename() and updates
+ * @p state for duplicate handling. This is the single place where reader
+ * name policy lives; CDoc1/CDoc2Reader::nextFile() call it and only wire
+ * the result to their error/integrity handling.
+ */
+CDOC_EXPORT FilenameDecision applyFilenamePolicy(FilenamePolicy policy, FilenameState& state, std::string_view raw_name);
+
+/**
+ * @brief Sink-side name safety: flatten to a safe basename for writing to
+ * disk, or empty if no safe name exists.
+ *
+ * Composes the helpers above (UTF-8 validity, control bytes, baseNameOf,
+ * ':' rejection, trimFilenameEdges, reserved devices, truncateUtf8); the
+ * same rule blocks back the read-side repair/conformance functions (see
+ * Filename-handling-proposal.md). Never returns a name with directory
+ * components; returns "" for names that cannot be made safe.
+ */
 std::string sanitiseExtractedFilename(std::string_view name);
 
 /**
@@ -207,6 +412,24 @@ std::string deduplicateFilename(std::map<std::string, size_t>& seen, const std::
  * rather than rename).
  */
 std::string filenameDedupKey(std::string_view name);
+
+/**
+ * @brief Choose a unique file name for extraction into @p base_dir.
+ *
+ * The extraction sinks' general rename loop: runs deduplicateFilename()
+ * and additionally probes the filesystem, which is the per-OS collision
+ * authority - byte-different names can collide after the filesystem's own
+ * case/normalization folding (NFC/NFD on APFS, case folding on NTFS).
+ * Names that collide with files created during this run (@p created) are
+ * always renamed: extraction must never clobber its own output, even when
+ * overwriting is allowed. Names colliding with pre-existing files are
+ * renamed unless @p allow_overwrite is set.
+ */
+CDOC_EXPORT std::string uniqueExtractedFilename(std::map<std::string, size_t>& seen,
+                                                const std::string& name,
+                                                const std::filesystem::path& base_dir,
+                                                bool allow_overwrite,
+                                                const std::vector<std::filesystem::path>& created);
 
 /**
  * @brief Parsed components of an ETSI Smart-ID / Mobile-ID recipient identifier.

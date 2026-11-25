@@ -694,6 +694,13 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %include "PKCS11Backend.h"
 %include "Logger.h"
 
+// Entry-name helper exposed to bindings: CDocTool.java prepares names for
+// addFile() with this (the writer accepts only clean names). Declared here
+// because Utils.h is deliberately not wrapped as a whole.
+namespace libcdoc {
+    std::string repairFilename(std::string_view name);
+}
+
 // LockVector template must come after Lock.h is included so that
 // SWIG knows about the libcdoc::Lock class definition.
 %template(LockVector) std::vector<libcdoc::Lock>;

@@ -493,29 +493,37 @@ CDoc2Writer::addFile(const std::string& name, size_t size)
         FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
     if(!tar)
         FAIL("Encryption not started", libcdoc::WORKFLOW_ERROR);
-    if (name.empty() || !libcdoc::isValidUtf8(name))
+    // Accept/reject only, never mutate: clean names are stored verbatim;
+    // non-conformant or suspicious names must be repaired by the caller
+    // first (Filename-handling-proposal.md §4).
+    if (!libcdoc::isConformantName(name) || libcdoc::hasSuspiciousTraits(name))
         FAIL("Invalid file name", libcdoc::DATA_FORMAT_ERROR);
     if (constexpr size_t MAX_SIZE = 8ULL * 1024 * 1024 * 1024; size > MAX_SIZE)
         FAIL("Invalid file size", libcdoc::WRONG_ARGUMENTS);
-    std::string stored_name = name;
-    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
-        stored_name = libcdoc::sanitiseExtractedFilename(name);
-        if (stored_name.empty())
-             FAIL("Filename rejected by sanitizer", libcdoc::DATA_FORMAT_ERROR);
-        if (stored_name != name)
-            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
-    }
     // The CDoc2 standard requires entry names to be unique. Reject
     // duplicates (case-insensitively: "A.txt" and "a.txt" collide on
     // case-insensitive filesystems). Record the key only after a successful
     // open so a failed addFile does not poison the name.
-    std::string dedup_key = libcdoc::filenameDedupKey(stored_name);
+    std::string dedup_key = libcdoc::filenameDedupKey(name);
     if (seen_names.contains(dedup_key))
         FAIL("Duplicate filename in container", libcdoc::DATA_FORMAT_ERROR);
-    if(auto rv = tar->open(stored_name, size); rv < 0)
+    if(auto rv = addFileInternal(name, size); rv < 0)
         FAIL(tar->getLastErrorStr(rv), rv);
     seen_names.emplace(std::move(dedup_key), 1);
     return libcdoc::OK;
+}
+
+libcdoc::result_t
+CDoc2Writer::addFileInternal(const std::string& name, size_t size)
+{
+    // Store one entry without the writer name policy. Production code must
+    // use addFile() (push and pull paths both do); tests use this through
+    // WriterTestAccess to build containers with arbitrary names.
+    if (finished)
+        return libcdoc::WORKFLOW_ERROR;
+    if (!tar)
+        return libcdoc::WORKFLOW_ERROR;
+    return tar->open(name, size);
 }
 
 libcdoc::result_t
@@ -550,6 +558,11 @@ CDoc2Writer::finishEncryption()
 libcdoc::result_t
 CDoc2Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::Recipient>& keys)
 {
+    // Pull-mode assembly runs the same entry-name policy as push mode:
+    // every entry goes through addFile(), so names are validated and
+    // duplicates rejected identically. Re-encrypting a container with
+    // repaired names (reader safe mode) is "decrypt + encrypt without
+    // writing files".
     if (finished)
         FAIL("Encryption finished", libcdoc::WORKFLOW_ERROR);
     for (const auto &rcpt : keys) {
@@ -562,7 +575,7 @@ CDoc2Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::R
     int64_t size;
     auto result = src.next(name, size);
     while(result == libcdoc::OK) {
-        if (result = tar->open(name, size); result != libcdoc::OK)
+        if (result = addFile(name, size); result != libcdoc::OK)
             break;
         if (result = tar->writeAll(src); result < 0)
             break;

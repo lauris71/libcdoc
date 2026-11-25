@@ -78,6 +78,11 @@ struct CDOC_EXPORT Configuration {
      * Default: false.
      */
     static constexpr char const *ALLOW_PATHNAMES = "ALLOW_PATHNAMES";
+    /**
+     * @brief Reader entry-name policy: "strict" (default), "safe" or
+     * "lenient" (libcdoc::FilenamePolicy in Utils.h).
+     */
+    static constexpr char const *FILENAME_MODE = "FILENAME_MODE";
 
 	Configuration() = default;
 	virtual ~Configuration() noexcept = default;

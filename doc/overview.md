@@ -14,6 +14,7 @@ CDoc containers are utilized in Estonia for secure document exchange, especially
 - **Cross-Platform Support:** The library is compatible with Windows, macOS, and Linux for desktop environments, as well as iOS and Android for mobile platforms.
 - **Multi-Language Support:** Offers Java and C# bindings using SWIG for cross-platform development.
 - **Command-Line Tool:** Includes the `cdoc-tool` utility for managing CDoc containers via the command line, refer to the [Tool](tool.md) document.
+- **Safe Filename Handling:** Entry names from containers are validated against the CDoc2 standard, repaired when hazardous and confined at extraction (no path traversal, no overwrites), refer to the [Filename handling](filenames.md) document.
 
 For detailed workflows, refer to the [Usage](usage.md) document.
 

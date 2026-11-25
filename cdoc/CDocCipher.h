@@ -33,7 +33,9 @@ public:
 
 private:
     static int writer_push(CDocWriter& writer, const std::vector<libcdoc::Recipient>& keys, const std::vector<std::string>& files, bool allow_pathnames = false);
-    static int Decrypt(const std::unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const std::string& base_path, bool no_overwrite = false);
+    // Extract to base_path. allow_overwrite=false (the default) never
+    // clobbers pre-existing files - clashing names are renamed instead.
+    static int Decrypt(const std::unique_ptr<CDocReader>& rdr, unsigned int lock_idx, const std::string& base_path, bool allow_overwrite = false);
 };
 
 }

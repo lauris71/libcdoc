@@ -59,10 +59,12 @@ struct ToolConf : public JSONConfiguration {
     bool gen_label = false;
 
     /**
-     * @brief Never overwrite existing files on decryption; clashing
-     *        extracted names are renamed ("name (N).ext").
+     * @brief Allow overwriting files that already exist on decryption.
+     * Default false: existing files are never clobbered, clashing extracted
+     * names are renamed ("name (N).ext"). Files created during the same
+     * run are never overwritten either way.
      */
-    bool no_overwrite = false;
+    bool allow_overwrite = false;
 
     /**
      * @brief The list of accepted keyserver certificates (empty - accept all)

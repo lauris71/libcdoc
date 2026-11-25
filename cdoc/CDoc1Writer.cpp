@@ -210,6 +210,8 @@ int64_t CDoc1Writer::Private::writeRecipient(const std::vector<uint8_t> &recipie
 libcdoc::result_t
 CDoc1Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::Recipient>& keys)
 {
+    // Pull-mode assembly runs the same entry-name policy as push mode
+    // (validateEntryName), so both interfaces behave identically.
     if(keys.empty())
         return WORKFLOW_ERROR;
     rcpts = keys;
@@ -223,16 +225,20 @@ CDoc1Writer::encrypt(libcdoc::MultiDataSource& src, const std::vector<libcdoc::R
             DDOCWriter ddoc(dst);
             result_t result;
             for (result = src.next(name, size); result == OK; result = src.next(name, size)) {
+                if (auto rv = validateEntryName(name); rv != OK) return rv;
                 RET_ERROR(ddoc.addFile(name, "application/octet-stream", size, src));
+                d->seen_names.emplace(libcdoc::filenameDedupKey(name), 1);
                 d->files.push_back({name, size_t(size)});
             }
             if(result != END_OF_STREAM)
                 return result;
         } else {
             RET_ERROR(src.next(name, size));
-            if(auto rv = src.readAll(dst); rv >= 0)
+            if (auto rv = validateEntryName(name); rv != OK) return rv;
+            if(auto rv = src.readAll(dst); rv >= 0) {
+                d->seen_names.emplace(libcdoc::filenameDedupKey(name), 1);
                 d->files.push_back({std::move(name), size_t(rv)});
-            else
+            } else
                 return rv;
         }
         return OK;
@@ -278,20 +284,36 @@ CDoc1Writer::addFile(const std::string& name, size_t size)
 {
     if(!d)
         return WORKFLOW_ERROR;
-    if (name.empty() || !libcdoc::isValidUtf8(name)) return libcdoc::DATA_FORMAT_ERROR;
-    std::string stored_name = name;
-    if (!conf || !conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false)) {
-        stored_name = libcdoc::sanitiseExtractedFilename(name);
-        if (stored_name.empty()) return libcdoc::DATA_FORMAT_ERROR;
-        if (stored_name != name)
-            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, stored_name);
-    }
-    // Entry names must be unique, also on case-insensitive filesystems.
-    std::string dedup_key = libcdoc::filenameDedupKey(stored_name);
-    if (d->seen_names.contains(dedup_key))
+    if (auto rv = validateEntryName(name); rv != libcdoc::OK)
+        return rv;
+	d->files.push_back({name, size, {}});
+    d->seen_names.emplace(libcdoc::filenameDedupKey(name), 1);
+	return libcdoc::OK;
+}
+
+libcdoc::result_t
+CDoc1Writer::validateEntryName(const std::string& name)
+{
+    // Accept/reject only, never mutate: clean names are stored verbatim;
+    // non-conformant or suspicious names must be repaired by the caller
+    // first (Filename-handling-proposal.md §4). The push and pull entry
+    // paths share this check so they behave identically.
+    if (!libcdoc::isConformantName(name) || libcdoc::hasSuspiciousTraits(name))
         return libcdoc::DATA_FORMAT_ERROR;
-	d->files.push_back({stored_name, size, {}});
-    d->seen_names.emplace(std::move(dedup_key), 1);
+    // Entry names must be unique, also on case-insensitive filesystems.
+    if (d->seen_names.contains(libcdoc::filenameDedupKey(name)))
+        return libcdoc::DATA_FORMAT_ERROR;
+    return libcdoc::OK;
+}
+
+libcdoc::result_t
+CDoc1Writer::addFileInternal(const std::string& name, size_t size)
+{
+    // Store one entry without the writer name policy (tests only, via
+    // WriterTestAccess).
+    if (!d)
+        return WORKFLOW_ERROR;
+	d->files.push_back({name, size, {}});
 	return libcdoc::OK;
 }
 

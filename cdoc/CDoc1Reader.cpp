@@ -54,8 +54,8 @@ struct CDoc1Reader::Private
     std::vector<DDOCReader::File> files;
     int64_t f_pos = -1;
     std::unique_ptr<libcdoc::VectorSource> src;
-    // Case-folded dedup keys of all filenames returned by nextFile so far.
-    std::map<std::string, size_t> seen_names;
+    // Per-reader entry-name bookkeeping for applyFilenamePolicy().
+    libcdoc::FilenameState names;
 
     // N10: RSA oracle throttle state. Set during getFMK when the lock is
     // RSA; empty otherwise (no throttle for ECC/AES-wrap paths).
@@ -207,24 +207,61 @@ CDoc1Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
     return libcdoc::OK;
 }
 
+// Adapts a MultiDataConsumer so every entry name handed to it goes through
+// the reader's filename policy. The bulk decrypt() path (used by DigiDoc4)
+// must enforce the same rules as nextFile(), including nested DDoc content.
+namespace {
+struct PolicyConsumer : public libcdoc::MultiDataConsumer {
+    libcdoc::MultiDataConsumer& inner;
+    libcdoc::FilenamePolicy policy;
+    libcdoc::FilenameState& names;
+
+    PolicyConsumer(libcdoc::MultiDataConsumer& inner, libcdoc::FilenamePolicy policy,
+                   libcdoc::FilenameState& names)
+        : inner(inner), policy(policy), names(names) {}
+
+    libcdoc::result_t open(const std::string& name, int64_t size) override {
+        libcdoc::FilenameDecision fd = libcdoc::applyFilenamePolicy(policy, names, name);
+        if (!fd.ok) {
+            LOG_ERROR("Non-conformant entry name: '{}'", libcdoc::repairFilename(name));
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        if (fd.repaired)
+            LOG_WARN("Entry name repaired -> '{}'", fd.name);
+        return inner.open(fd.name, size);
+    }
+    libcdoc::result_t write(const uint8_t *src, size_t size) noexcept override {
+        return inner.write(src, size);
+    }
+    libcdoc::result_t close() noexcept override { return inner.close(); }
+    bool isError() noexcept override { return inner.isError(); }
+};
+}
+
 libcdoc::result_t
 CDoc1Reader::decrypt(const std::vector<uint8_t>& fmk, libcdoc::MultiDataConsumer *dst)
 {
+    libcdoc::FilenamePolicy policy = libcdoc::filenamePolicyFromString(
+        conf ? std::string_view(conf->getValue(libcdoc::Configuration::FILENAME_MODE)) : std::string_view{});
+    PolicyConsumer guarded{*dst, policy, d->names};
     return CDoc1Reader::decryptData(fmk, [&](DataSource &src, const std::string &mime) -> result_t {
         if(mime == MIME_DDOC || mime == MIME_DDOC_OLD) {
             LOG_DBG("Contains DDoc content {}", mime);
-            auto rv = DDOCReader(src).parse(dst);
+            auto rv = DDOCReader(src).parse(&guarded);
             if (rv != libcdoc::OK) {
                 setLastError("Failed to parse DDOC file");
                 LOG_ERROR("{}", last_error);
             }
             return rv;
         }
-        if(auto rv = dst->open(d->properties["Filename"], -1/*data.size()*/); rv != OK)
+        if(auto rv = guarded.open(d->properties["Filename"], -1/*data.size()*/); rv != OK) {
+            if (rv == libcdoc::DATA_FORMAT_ERROR)
+                setLastError("Non-conformant filename in container");
             return rv;
-        if(auto rv = dst->writeAll(src); rv < OK)
+        }
+        if(auto rv = guarded.writeAll(src); rv < OK)
             return rv;
-        return dst->close();
+        return guarded.close();
     });
 }
 
@@ -278,27 +315,21 @@ CDoc1Reader::nextFile(std::string& name, int64_t& size)
     if ((d->f_pos < 0) || (d->f_pos >= (int64_t) d->files.size())) {
         return libcdoc::END_OF_STREAM;
     }
-    name = d->files[d->f_pos].name;
-    size = d->files[d->f_pos].data.size();
-    bool raw_paths = conf && conf->getBoolean(libcdoc::Configuration::ALLOW_PATHNAMES, false);
-    if (!raw_paths) {
-        std::string sanitized = libcdoc::sanitiseExtractedFilename(name);
-        if (sanitized.empty()) {
-            setLastError("Filename rejected by sanitizer");
-            LOG_ERROR("Filename rejected by sanitizer: '{}'", name);
-            return libcdoc::DATA_FORMAT_ERROR;
-        }
-        if (sanitized != name) {
-            LOG_WARN("Filename sanitized: '{}' -> '{}'", name, sanitized);
-            name = std::move(sanitized);
-        }
-    }
-    // Entry names must be unique (case-insensitively) in both modes.
-    if (!d->seen_names.emplace(libcdoc::filenameDedupKey(name), 1).second) {
-        setLastError("Duplicate filename in container");
-        LOG_ERROR("Duplicate filename in container: '{}'", name);
+    const std::string& raw_name = d->files[d->f_pos].name;
+    libcdoc::FilenamePolicy policy = libcdoc::filenamePolicyFromString(
+        conf ? std::string_view(conf->getValue(libcdoc::Configuration::FILENAME_MODE)) : std::string_view{});
+    libcdoc::FilenameDecision fd = libcdoc::applyFilenamePolicy(policy, d->names, raw_name);
+    if (!fd.ok) {
+        // Strict mode: the stored name is non-conformant. The raw name is
+        // never surfaced - only its repaired form reaches the log.
+        LOG_ERROR("Non-conformant entry name: '{}'", libcdoc::repairFilename(raw_name));
+        setLastError("Non-conformant filename in container");
         return libcdoc::DATA_FORMAT_ERROR;
     }
+    if (fd.repaired)
+        LOG_WARN("Entry name repaired -> '{}'", fd.name);
+    name = std::move(fd.name);
+    size = d->files[d->f_pos].data.size();
     d->src = std::make_unique<libcdoc::VectorSource>(d->files[d->f_pos].data);
     return libcdoc::OK;
 }

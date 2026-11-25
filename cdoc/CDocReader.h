@@ -92,7 +92,17 @@ public:
     /**
      * @brief Finish decrypting container
      *
-     * Finishes the decryption of the container. This may onvolve releasing buffers, closing hardware keys etc.
+     * Finishes the decryption of the container. This may involve releasing
+     * buffers, closing hardware keys etc.
+     *
+     * Callers MUST invoke this after the extraction loop in all cases -
+     * including when the loop stopped on a local error (I/O failure, name
+     * policy violation, ...). For CDoc2 it drains the remainder of the
+     * payload and verifies the AEAD tag, so a non-OK integrity result must
+     * be reported as the main error, overriding any local error
+     * (CDOC2 §5.3.2). When the payload integrity was already checked, the
+     * recorded verdict is returned again. WORKFLOW_ERROR is only returned
+     * when called before beginDecryption().
      * @return error code or OK
      */
     virtual result_t finishDecryption() = 0;

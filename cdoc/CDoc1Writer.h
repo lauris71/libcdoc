@@ -7,7 +7,9 @@
 
 #include <memory>
 
-class CDoc1Writer final: public libcdoc::CDocWriter
+namespace libcdoc { struct WriterTestAccess; }
+
+class CDOC_EXPORT CDoc1Writer final: public libcdoc::CDocWriter
 {
 public:
     CDoc1Writer(libcdoc::DataConsumer *dst, bool take_ownership);
@@ -23,6 +25,20 @@ public:
 
 private:
     CDOC_DISABLE_COPY(CDoc1Writer)
+
+    // Test-only access: WriterTestAccess drives addFileInternal() to build
+    // containers with arbitrary (hostile) entry names for the reader
+    // policy tests. Production code must use addFile(), which validates.
+    friend struct libcdoc::WriterTestAccess;
+
+    // Entry-name policy shared by the push (addFile) and pull (encrypt)
+    // paths so both behave identically: clean, unique names only.
+    libcdoc::result_t validateEntryName(const std::string& name);
+
+    // Store one entry without the writer name policy (tests only, via
+    // WriterTestAccess).
+    libcdoc::result_t addFileInternal(const std::string& name, size_t size);
+
     std::vector<libcdoc::Recipient> rcpts;
     struct Private;
     std::unique_ptr<Private> d;

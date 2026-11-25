@@ -306,11 +306,22 @@ struct CDOC_EXPORT FileListConsumer : public MultiDataConsumer {
 	}
     result_t open(const std::string &name, int64_t size) final;
 
+    /**
+     * @brief Delete all files created by open() so far.
+     *
+     * Delete-on-abort (CDOC2 spec §5.3.2): callers invoke this when
+     * extraction aborts with a payload integrity failure or a name policy
+     * violation, so partially extracted files do not remain on disk.
+     */
+    void removeCreated();
+
 protected:
 	std::filesystem::path base;
 	std::ofstream ofs;
     // Case-folded dedup keys of all opened names; clashes are renamed.
     std::map<std::string, size_t> _names;
+    // Files created during this run, in creation order (for removeCreated).
+    std::vector<std::filesystem::path> _created;
 };
 
 struct CDOC_EXPORT FileListSource : public MultiDataSource {

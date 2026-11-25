@@ -40,6 +40,9 @@ or send URL. For share server it is comma-separated list of share server URLs.
 - `--out OUTPUTFILE` - CDOC file name to be created. This option is mandatory. If the file name is provided without path then the file is created in current working 
 directory.
 
+- `--allow-pathnames` - store clean relative input paths as entry names (`dir/file.txt`) instead of stripping them to the basename. Absolute paths and `..` components 
+are rejected with an error. See [Filename handling](filenames.md) for the name rules.
+
 - `FILE` - one or more files to be encrypted. At least one file must be provided.
 
 ### Recipients
@@ -125,9 +128,14 @@ Following options are supported:
 - `--library PKCS11_LIBRARY` - path to the PKCS11 library. Same as in encryption case.
 - `--server ID URL(s)` - specifies a key or share server. Same as in encryption case.
 - `--accept SERVER_CERT_FILENAME` - path to server's TLS certificate file. Same as in encryption case.
+- `--safe` - extract containers with non-conformant entry names; names are repaired (invalid symbols replaced) and clashing names renamed. Without this flag such 
+containers fail to decrypt and the error suggests this option. See [Filename handling](filenames.md).
+- `--lenient` - extract with entry names exactly as stored in the container, without name checks. Intended for inspection of broken containers.
+- `--overwrite` - allow replacing files that already exist in the output directory. By default existing files are never overwritten - clashing names are renamed 
+instead (see [Filename handling](filenames.md)).
 - `FILE` - encrypted file to be decrypted.
-- `OUTPUT_DIR` - output directory where the files are decrypted. If not specified then current working directory is used. If there is already a file with same name 
-then it is overwritten.
+- `OUTPUT_DIR` - output directory where the files are decrypted. If not specified then current working directory is used. Files are extracted with flattened, 
+sanitized names; existing files are never overwritten by default.
 
 ### Examples
 
@@ -172,6 +180,8 @@ Both decryption and encryption options are supported with the following constrai
 - Only single URL can be specified for server. Thus, if re-encrypting by using capsule server base lock to another capsule server recipient, the configuration json should be used.
 - Only single PKCS11 library can be specified. Thus it is not possible to re-encrypt from one harware token to another, unless they use the same PKCS11 library.
 - All original locks (recipients) will be removed from container and replaced with new ones.
+- Entry names are carried over from the source container subject to the read mode: with `--safe` non-conformant names are repaired, so the new container is 
+conformant (see [Filename handling](filenames.md)).
 
 ---
 

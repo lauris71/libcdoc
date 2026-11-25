@@ -383,8 +383,10 @@ result_t nextFile(std::string& name, int64_t& size)
 
 The method returns the name and size of the next file in encrypted stream, or END_OF_STREAM if there are no more files. Due to the structure
 of CDoc container, files have to be processed sequentially - there is no way to rewind the stream.
-The name returned is the *exact filename* in encrypted stream. If the application intends to save the file with the same name, it has
-to verify that the path is safe.
+The name returned depends on the configured filename policy (see [Filename handling](filenames.md)). By default (*strict* mode) only
+conformant names are returned - a container with non-conformant names fails with DATA_FORMAT_ERROR - and suspicious names come back
+repaired. With `FILENAME_MODE` set to `lenient` the name is returned exactly as stored in the encrypted stream. Applications that write
+returned names to disk should flatten and confine them first; the `libcdoc::FileListConsumer` sink does this automatically.
 
 The actual decrypted data can be read with method:
 
@@ -401,7 +403,9 @@ result_t finishDecryption()
 ```
 
 The decrypted data should *not be used* before successful finalization because it performs the final check of data integrity. If it
-fails, the data should be assumed incomplete or corrupted.
+fails, the data should be assumed incomplete or corrupted. The finalizer must be called after the extraction loop **in all cases** -
+including when the loop stopped on a local error (I/O failure, name policy violation): it drains the payload, verifies the integrity
+and its result takes precedence over any local error (a failed integrity check is always the main error).
 
 ---
 

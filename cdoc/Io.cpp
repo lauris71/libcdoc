@@ -92,17 +92,17 @@ result_t FileListConsumer::open(const std::string &name, int64_t size) {
     }
 
     // The file name comes from inside the (encrypted) container and is
-    // therefore fully attacker-controlled. Run it through the central
-    // sanitiser; reject the entry rather than write to a tampered path.
-    std::string safeName = libcdoc::sanitiseExtractedFilename(name);
-    if (safeName.empty()) {
-        LOG_ERROR("FileListConsumer::open: refusing unsafe entry name '{}'", name);
-        return DATA_FORMAT_ERROR;
-    }
+    // therefore fully attacker-controlled. Flatten to a repaired basename:
+    // directory components are dropped and every hazard (symbols, device
+    // names, lengths) is repaired rather than trusted (see
+    // Filename-handling-proposal.md §6).
+    std::string safeName = repairFilename(baseNameOf(name));
 
-    // Never let a later entry silently overwrite an earlier one: rename on
-    // clash (case-insensitively, so case-only variants also dedup).
-    std::string uniqueName = libcdoc::deduplicateFilename(_names, safeName);
+    // Unique output name: rename on in-run clashes and on collisions with
+    // files already on disk (the filesystem folds case/NFC-NFD, so its
+    // existence check is the per-OS authority). FileListConsumer never
+    // overwrites existing files.
+    std::string uniqueName = uniqueExtractedFilename(_names, safeName, base, false, _created);
     if (uniqueName != safeName)
         LOG_WARN("FileListConsumer::open: renamed clashing entry '{}' -> '{}'",
                  safeName, uniqueName);
@@ -139,7 +139,20 @@ result_t FileListConsumer::open(const std::string &name, int64_t size) {
     // N23: ofs.bad() misses failbit set by a failed open() (e.g. permission
     // denied, read-only filesystem). Check fail() instead so extraction
     // reports the error instead of "succeeding" with nothing written.
-    return ofs.fail() ? OUTPUT_STREAM_ERROR : OK;
+    if (ofs.fail()) return OUTPUT_STREAM_ERROR;
+    _created.push_back(std::move(target));
+    return OK;
+}
+
+void FileListConsumer::removeCreated()
+{
+    ofs.close();
+    // Delete-on-abort (CDOC2 spec §5.3.2), newest first.
+    for (auto it = _created.rbegin(); it != _created.rend(); ++it) {
+        std::error_code ec;
+        fs::remove(*it, ec);
+    }
+    _created.clear();
 }
 
 FileListSource::FileListSource(const std::string& base, const std::vector<std::string>& files, bool allow_pathnames)
@@ -213,11 +226,19 @@ FileListSource::next(std::string& name, int64_t& size)
             LOG_ERROR("Unsupported file name: {}", decodeName(path));
             return DATA_FORMAT_ERROR;
         }
+        // Repair remaining hazards (symbols, device names, lengths) while
+        // keeping the path shape; the writer accepts only clean names.
+        std::string repaired = repairFilename(name);
+        if (repaired != name) {
+            LOG_WARN("Entry name repaired: '{}' -> '{}'", name, repaired);
+            name = std::move(repaired);
+        }
     } else {
-        name = sanitiseExtractedFilename(decodeName(path.filename()));
-        if (name.empty()) {
-            LOG_ERROR("Unsupported file name: {}", decodeName(path.filename()));
-            return DATA_FORMAT_ERROR;
+        // Strip to the basename and repair it to a clean name.
+        std::string base(baseNameOf(decodeName(path.filename())));
+        name = repairFilename(base);
+        if (name != base) {
+            LOG_WARN("Entry name repaired: '{}' -> '{}'", base, name);
         }
     }
     // Rename on clash (case-insensitively) so every entry name is unique.
