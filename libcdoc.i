@@ -60,6 +60,7 @@
 %ignore libcdoc::Configuration::CDOC1_MAX_DECOMPRESSED_SIZE;
 %ignore libcdoc::Configuration::CDOC2_MAX_DECOMPRESSED_SIZE;
 %ignore libcdoc::Configuration::ALLOW_PATHNAMES;
+%ignore libcdoc::Configuration::FILENAME_MODE;
 
 %ignore libcdoc::PKCS11Backend::Handle;
 %ignore libcdoc::PKCS11Backend::findCertificates(const std::string& label);
@@ -665,6 +666,7 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
     public static final String CDOC1_MAX_DECOMPRESSED_SIZE = "CDOC1_MAX_DECOMPRESSED_SIZE";
     public static final String CDOC2_MAX_DECOMPRESSED_SIZE = "CDOC2_MAX_DECOMPRESSED_SIZE";
     public static final String ALLOW_PATHNAMES = "ALLOW_PATHNAMES";
+    public static final String FILENAME_MODE = "FILENAME_MODE";
 %}
 
 %typemap(javaimports) ArrayList<byte[]> %{
