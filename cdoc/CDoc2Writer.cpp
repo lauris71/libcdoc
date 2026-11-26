@@ -331,8 +331,11 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
                 FAIL("Missing server list for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             LOG_DBG("Share servers: {}", url_list);
             std::vector<std::string> urls = libcdoc::JsonToStringArray(url_list);
-            if (urls.size() < 1)
-                FAIL("No server URLs in " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
+            // S5: with fewer than 2 servers the XOR "split" would hand the
+            // complete KEK to a single server, defeating the threshold
+            // protection - refuse to produce such a container.
+            if (urls.size() < 2)
+                FAIL("At least 2 share server URLs are required for ID " + rcpt.server_id, libcdoc::CONFIGURATION_ERROR);
             int N_SHARES = urls.size();
             LOG_DBG("Number of shares: {}", N_SHARES);
 
@@ -357,8 +360,11 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             // key_material is split-share-input material; wipe on exit.
             libcdoc::Cleanser key_material_guard(key_material);
 
-            //KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i, KeyMaterial_i)
-            std::vector<uint8_t> kek_pm = libcdoc::Crypto::extract(key_material_salt, key_material);
+            // KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i, KeyMaterial_i)
+            // RFC 5869: HKDF-Extract(salt, IKM); Crypto::extract takes (IKM, salt).
+            // (S11: the arguments were swapped, deviating from the spec and
+            // the reference implementation.)
+            std::vector<uint8_t> kek_pm = libcdoc::Crypto::extract(key_material, key_material_salt);
             libcdoc::Cleanser kek_pm_guard(kek_pm);
 
             // KEK_i = HKDF_Expand(KEK_i_pm, "CDOC2kek" + FMKEncryptionMethod + RecipientInfo_i, L)
@@ -404,7 +410,8 @@ CDoc2Writer::buildHeader(std::vector<uint8_t>& header, const std::vector<libcdoc
             std::vector<std::vector<uint8_t>> transaction_ids(N_SHARES);
             for (int i = 0; i < N_SHARES; i++) {
                 std::string send_url = urls[i];
-                LOG_TRACE_KEY("Sending share: {} {} {}", i, send_url, libcdoc::toHex(kek_shares[i]));
+                LOG_TRACE("Sending share {} to {}", i, send_url);
+                LOG_TRACE_KEY("Share: {}", kek_shares[i]);
                 int result = network->sendShare(transaction_ids[i], send_url, RecipientInfo_i, kek_shares[i]);
                 if (result < 0)
                     FAIL(network->getLastErrorStr(result), result);
@@ -464,6 +471,14 @@ CDoc2Writer::addRecipient(const libcdoc::Recipient& rcpt)
         if(!rcpt.validate())
             FAIL("Invalid recipient parameters", libcdoc::WRONG_ARGUMENTS);
         break;
+#ifdef HAS_KEYSHARES
+    case Recipient::KEYSHARE:
+        if (!network)
+            FAIL("KeyShares require NetworkBackend", libcdoc::WORKFLOW_ERROR);
+        if (!rcpt.validate())
+            FAIL("Invalid recipient parameters", libcdoc::WRONG_ARGUMENTS);
+        break;
+#endif
     default:
         FAIL("Invalid recipient type", WRONG_ARGUMENTS);
     }

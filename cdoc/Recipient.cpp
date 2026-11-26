@@ -233,6 +233,14 @@ Recipient::validate() const
         case PUBLIC_KEY:
             // Public key should not be empty
             return !rcpt_key.empty();
+#ifdef HAS_KEYSHARES
+        case KEYSHARE:
+            // S13: the recipient id must be a valid ETSI semantics identifier
+            // (PNO<CC>-<digits>, stored without the "etsi/" prefix). A malformed
+            // id would only fail late (at the share server) or, worse, bind the
+            // shares to a wrong identity.
+            return !server_id.empty() && libcdoc::parseEtsiRecipientId("etsi/" + id).valid();
+#endif
         default:
             return false;
     }

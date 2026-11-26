@@ -3,16 +3,24 @@
 
 add_executable(unittests
     libcdoc_boost.cpp
+    libcdoc_live_boost.cpp
     ../cdoc/Crypto.cpp
+    ../cdoc/KeyShares.cpp
     ../cdoc/DDocReader.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
     ../cdoc/Utils.cpp
 )
 
-target_compile_definitions(unittests PRIVATE
-    DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
-)
+target_compile_definitions(unittests PRIVATE HAS_KEYSHARES)
+
+# The live SID/MID tests (libcdoc_live_boost.cpp) run against the RIA test
+# servers with TLS certificate checks disabled until the RIA cert-pinning
+# infrastructure is ready - propagate the flag so the test skips cleanly
+# in default builds.
+if(LIBCDOC_ALLOW_INSECURE_TLS)
+    target_compile_definitions(unittests PRIVATE LIBCDOC_ALLOW_INSECURE_TLS)
+endif()
 
 target_link_libraries(unittests
     OpenSSL::SSL

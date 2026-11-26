@@ -95,9 +95,9 @@ table PBKDF2Capsule {
 
 // KeyShare url. Response KeyShare is defined https://github.com/open-eid/cdoc2-openapi/blob/55a0b02adae0d8c61f2589a47555a93e4cf31971/cdoc2-key-shares-openapi.yaml#L144
 table KeyShare {
-    //full url of key share, ex https://cdoc2-keyserver.dev.riaint.ee:8443/key-shares/SS0123456789ABCDEF
+    //full url of key share, ex https://keyserver.example.com:8443/key-shares/SS0123456789ABCDEF
     // is defined as server_base_url
-    // https://cdoc2-keyserver.dev.riaint.ee:8443/
+    // https://keyserver.example.com:8443/
     server_base_url: string (required);
 
     // and share_id SS0123456789ABCDEF

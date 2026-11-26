@@ -228,85 +228,203 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
         /* SHARE_URLS */
         /* url,share_id;url,share_id... */
         std::string all = lock.getString(Lock::SHARE_URLS);
-        std::vector<std::string> strs = split(all, ';');
-        if (strs.empty()){
+        std::vector<std::string> servers = split(all, ';');
+        if (servers.empty()){
             setLastError("Lock does not contain server info");
             LOG_ERROR("{}", last_error);
             return libcdoc::DATA_FORMAT_ERROR;
         }
         std::vector<ShareData> shares;
-        for (auto& str : strs) {
-            std::vector<std::string> parts = split(str, ',');
+        for (auto& server : servers) {
+            std::vector<std::string> parts = split(server, ',');
             if (parts.size() != 2) {
                 setLastError("Invalid server info in lock");
                 LOG_ERROR("{}", last_error);
                 return libcdoc::DATA_FORMAT_ERROR;
             }
-            std::string url = parts[0];
-            std::string id = parts[1];
-            LOG_TRACE("Share {} url {}", id, url);
-
-            std::vector<uint8_t> nonce;
-            result_t result = network->fetchNonce(nonce, url, id);
-            if (result != libcdoc::OK) {
-                setLastError(network->getLastErrorStr(result));
-                LOG_ERROR("Cannot fetch nonce from server {}", url);
-                return result;
-            }
-            LOG_TRACE("Nonce: {}", std::string(nonce.cbegin(), nonce.cend()));
-            ShareData acc(url, id, std::string(nonce.cbegin(), nonce.cend()));
-            shares.push_back(std::move(acc));
+            LOG_DBG("Share {} url {}", parts[1], parts[0]);
+            shares.emplace_back(parts[0], parts[1]);
         }
-        /* Create tickets from shares */
-        std::vector<std::string> tickets;
-        std::vector<uint8_t> cert;
-        result_t result = NOT_IMPLEMENTED;
-        std::string signer = conf->getValue(Configuration::SHARE_SIGNER);
-        LOG_TRACE("Signer: {}", signer);
-        if (signer == "SMART_ID") {
-            // "https://sid.demo.sk.ee/smart-id-rp/v2"
-            std::string url = conf->getValue(Configuration::SID_DOMAIN, Configuration::BASE_URL);
-            // "00000000-0000-0000-0000-000000000000"
-            std::string relyingPartyUUID = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_UUID);
-            // "DEMO"
-            std::string relyingPartyName = conf->getValue(Configuration::SID_DOMAIN, Configuration::RP_NAME);
-            SIDSigner signer(url, relyingPartyUUID, relyingPartyName, rcpt_id, network);
-            result = signer.generateTickets(tickets, shares);
-            if (result != OK) {
-                setLastError(signer.error);
-            } else {
-                cert = std::move(signer.cert);
-            }
-        } else if (signer == "MOBILE_ID") {
-            // "https://sid.demo.sk.ee/smart-id-rp/v2"
-            std::string url = conf->getValue(Configuration::MID_DOMAIN, Configuration::BASE_URL);
-            // "00000000-0000-0000-0000-000000000000"
-            std::string relyingPartyUUID = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_UUID);
-            // "DEMO"
-            std::string relyingPartyName = conf->getValue(Configuration::MID_DOMAIN, Configuration::RP_NAME);
-            // "37200000566"
-            std::string phone = conf->getValue(Configuration::MID_DOMAIN, Configuration::PHONE_NUMBER);
-            MIDSigner signer(url, relyingPartyUUID, relyingPartyName, phone, rcpt_id, network);
-            result = signer.generateTickets(tickets, shares);
-            if (result != OK) {
-                setLastError(signer.error);
-            } else {
-                cert = std::move(signer.cert);
-            }
-        } else {
+
+        // Get authentication token
+        std::string auth_url = conf->getValue({}, Configuration::AUTH_SERVER);
+        if (auth_url.empty()) {
+            setLastError(FORMAT("No AUTH_SERVER found"));
+            LOG_ERROR("{}", last_error);
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        // fixme:
+        std::string signer_type = conf->getValue(Configuration::SHARE_SIGNER);
+        LOG_DBG("Signer: {}", signer_type);
+        bool mid = false;
+        if (signer_type == Configuration::SHARE_SIGNER_MID) {
+            mid = true;
+        } else if (signer_type != Configuration::SHARE_SIGNER_SID) {
             setLastError(t_("Unknown or missing signer type"));
             LOG_ERROR("Unknown or missing signer type");
-            return result;
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        std::string phone;
+        if (mid) {
+            phone = conf->getValue({}, Configuration::PHONE_NUMBER);
+            if (phone.empty()) {
+                setLastError(t_("Missing phone number"));
+                LOG_ERROR("Missing phone number");
+                return libcdoc::CONFIGURATION_ERROR;
+            }
+        }
+
+        NetworkBackend::SessionData session;
+        if (auto rv = network->authenticateForShares(auth_url, rcpt_id, phone, session); rv != OK) {
+            setLastError(network->getLastErrorStr(rv));
+            LOG_ERROR("{}", last_error);
+            return rv;
+        }
+
+        // S1: only contact share servers that the authentication server has
+        // authorized for this session. The session token carries one
+        // disclosure per authorized server; a container pointing to any other
+        // server would otherwise receive the session token and the user's
+        // credentials (SSRF / credential exfiltration). N-of-N reconstruction
+        // needs every share, so an unauthorized server rejects the container.
+        {
+            SessionToken stoken(session.token);
+            for (const auto& share : shares) {
+                if (!stoken.hasDisclosureForUrl(share.base_url)) {
+                    setLastError(FORMAT("Share server {} is not authorized by the authentication session", share.base_url));
+                    LOG_ERROR("{}", last_error);
+                    return libcdoc::DATA_FORMAT_ERROR;
+                }
+            }
+        }
+
+        // S8: validate the authentication session client-side - the session
+        // certificate must belong to the lock recipient and the session token
+        // must not be expired. Also learns the schemeName/rpName claims needed
+        // to verify the signed ticket later.
+        std::string scheme_name, rp_name, v_err;
+        if (auto rv = validateSessionData(crypto, rcpt_id, mid, session.token, session.cert, scheme_name, rp_name, v_err); rv != OK) {
+            setLastError(v_err);
+            LOG_ERROR("{}", last_error);
+            return rv;
+        }
+
+        // Get nonces
+        for (auto& share : shares) {
+            std::vector<uint8_t> nonce;
+            result_t result = network->fetchNonce(nonce, share.base_url, share.share_id, session);
+            if (result != libcdoc::OK) {
+                setLastError(network->getLastErrorStr(result));
+                LOG_ERROR("Cannot fetch nonce {} from server {}", share.share_id, share.base_url);
+                return result;
+            }
+            LOG_DBG("Nonce: {}", std::string(nonce.cbegin(), nonce.cend()));
+            share.nonce = std::string(nonce.cbegin(), nonce.cend());
+        }
+
+        std::string rp_url = conf->getValue({}, Configuration::RP_SERVER);
+        if (rp_url.empty()) {
+            setLastError(FORMAT("No RP_SERVER found"));
+            LOG_ERROR("{}", last_error);
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+        /* Create tickets from shares */
+        std::vector<std::string> auth_tokens;
+        AuthenticationData auth;
+        result_t result = NOT_IMPLEMENTED;
+
+        // The text shown on the user's device in the SID/MID confirmation
+        // dialog (Smart-ID displayText200 / Mobile-ID displayText).
+        std::string display_text = conf ? conf->getValue(libcdoc::Configuration::DISPLAY_TEXT) : std::string{};
+
+        if (!mid) {
+            SIDSigner signer(rp_url, session, rcpt_id, network, display_text);
+            result = signer.generateTickets(auth_tokens, shares);
+            if (result != OK) {
+                setLastError(signer.error);
+            } else {
+                auth.cert = std::move(signer.cert);
+                auth.params = std::move(signer.params);
+            }
+        } else {
+            MIDSigner signer(rp_url, phone, session, rcpt_id, network, display_text);
+            result = signer.generateTickets(auth_tokens, shares);
+            if (result != OK) {
+                setLastError(signer.error);
+            } else {
+                auth.cert = std::move(signer.cert);
+                auth.params = std::move(signer.params);
+            }
         }
         if (result != libcdoc::OK) {
             LOG_ERROR("Cannot generate share tickets");
             return result;
         }
-        kek.resize(32);
-        std::fill(kek.begin(), kek.end(), 0);
-        for (unsigned int i = 0; i < tickets.size(); i++) {
+        // S8: verify the signed auth ticket client-side before spending it -
+        // the signing certificate must belong to rcpt_id and the ticket
+        // signature must verify (binds identity, the consent text shown to
+        // the user, and freshness). All tickets share the same signed JWT,
+        // so validating the first one covers them all.
+        if (!auth_tokens.empty()) {
+            if (!mid) {
+                // Smart-ID: RSASSA-PSS over the ACSP_V2 payload
+                std::vector params = fromBase64URL(auth.params[network->X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS]);
+                if (auto rv = validateAuthTicket(crypto, rcpt_id, auth_tokens[0], auth.cert, std::string(params.cbegin(), params.cend()), scheme_name, rp_name, v_err); rv != OK) {
+                    setLastError(v_err);
+                    LOG_ERROR("{}", last_error);
+                    return rv;
+                }
+            } else {
+                // Mobile-ID: ECDSA (ES256) ticket signature plus the RP
+                // server RFC9421 HTTP countersignature. The RP signing keys
+                // are fetched from its well-known endpoint.
+                std::string jwks;
+                {
+                    std::string jwks_url = joinUrl(rp_url, "/.well-known/jwks.jws");
+                    std::map<std::string, std::string> headers;
+                    std::vector<uint8_t> body;
+                    if (auto rv = network->get(jwks_url, body, headers, false); rv != OK) {
+                        setLastError(network->getLastErrorStr(rv));
+                        LOG_ERROR("{}", last_error);
+                        return rv;
+                    }
+                    jwks.assign(body.begin(), body.end());
+
+                    // The endpoint name says .jws: accept both a plain JWK
+                    // Set (what the servers currently return) and a JWS
+                    // compact serialization (header64.payload64.signature64)
+                    // whose payload is the JWK Set.
+                    if (jwks.find("\"keys\"") == std::string::npos) {
+                        std::vector<std::string> parts = split(jwks, '.');
+                        if (parts.size() == 3) {
+                            std::vector<uint8_t> payload = fromBase64URL(parts[1]);
+                            jwks.assign(payload.begin(), payload.end());
+                        }
+                    }
+                    if (jwks.find("\"keys\"") == std::string::npos) {
+                        setLastError("Well-known keys response is not a JWK Set");
+                        LOG_ERROR("{}", last_error);
+                        return libcdoc::DATA_FORMAT_ERROR;
+                    }
+                }
+                if (auto rv = validateAuthTicketMID(crypto, rcpt_id, auth_tokens[0], auth.cert, auth.params, jwks, v_err); rv != OK) {
+                    setLastError(v_err);
+                    LOG_ERROR("{}", last_error);
+                    return rv;
+                }
+            }
+        }
+        std::vector<uint8_t>& kek_build = kek.getTarget(32);
+        std::fill(kek_build.begin(), kek_build.end(), 0);
+        // Build the auth SessionData once (cert and params are shared);
+        // only the per-share ticket token changes between requests.
+        NetworkBackend::SessionData auth_session;
+        auth_session.cert = toBase64URL(auth.cert);
+        auth_session.params = auth.params;
+        for (unsigned int i = 0; i < auth_tokens.size(); i++) {
             NetworkBackend::ShareInfo share;
-            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, tickets[i], cert);
+            auth_session.token = auth_tokens[i];
+            result = network->fetchShare(share, shares[i].base_url, shares[i].share_id, session, auth_session);
             if (result != libcdoc::OK) {
                 setLastError(network->getLastErrorStr(result));
                 LOG_ERROR("Cannot fetch share {}", i);
@@ -316,7 +434,7 @@ CDoc2Reader::getFMK(std::vector<uint8_t>& fmk, unsigned int lock_idx)
             // remaining shares it reconstructs the KEK. Wipe it after
             // XOR-ing it into kek so it does not linger on the heap.
             libcdoc::Cleanser share_guard(share.share);
-            if (auto err = libcdoc::Crypto::xor_data(kek, kek, share.share); err != libcdoc::OK) {
+            if (auto err = libcdoc::Crypto::xor_data(kek_build, kek_build, share.share); err != libcdoc::OK) {
                 setLastError("Failed to derive kek");
                 LOG_ERROR("Failed to derive kek");
                 return err;

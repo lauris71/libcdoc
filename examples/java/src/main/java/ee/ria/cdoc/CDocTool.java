@@ -25,6 +25,7 @@ import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import javax.crypto.KeyAgreement;
@@ -74,6 +75,8 @@ public class CDocTool {
                 <label>:pw:PASS                           - AES key derived from password with PWBKDF.
                 <label>:p11sk:SLOT[:PIN][:KEY_ID][:LABEL] - use AES key from PKCS11 module.
                 <label>:p11pk:SLOT[:PIN][:KEY_ID][:LABEL] - use public key from PKCS11 module.
+                <label>:share:ID                          - keyshares for the given personal code.
+            --share-servers ID URL[,URL...]  - keyshare server group used by share recipients.
             --v1                      - creates CDOC1 version container. Supported only for encryption with certificate.
         Decryption arguments:
             --label LABEL          Lock label
@@ -110,6 +113,7 @@ public class CDocTool {
             P11_SYMMETRIC,
             P11_PKI,
             CERT,
+            SHARE,
         }
         public static final class P11Info {
             public int slot = -1;
@@ -138,6 +142,8 @@ public class CDocTool {
     private static int version = 2;
     private static String out = null;
     private static String p11_library = null;
+    private static ToolConf conf = null;
+    private static String server_id = null;
 
     // Decryption state (the "key data", mirroring cdoc-tool's LockData).
     // All decryption arguments are collected here, including the PKCS11
@@ -218,6 +224,11 @@ public class CDocTool {
                         rcpt.p11.key_label = parts[5];
                     }
                     break;
+                case "share":
+                    if (parts.length != 3) failUsage("share format: label:share:ID");
+                    rcpt.type = RcptInfo.Type.SHARE;
+                    rcpt.id = parts[2];
+                    break;
                 default:
                     failUsage("Unsupported recipient type: " + parts[1]);
             }
@@ -247,6 +258,21 @@ public class CDocTool {
         } else if (args[arg_idx].equals("--v1")) {
             version = 1;
             return 1;
+        } else if (args[arg_idx].equals("--share-servers")) {
+            server_id = getArg(arg_idx, args);
+            String[] servers = getArg(arg_idx + 1, args).split(",");
+            StringBuilder urls = new StringBuilder("[");
+            for (int i = 0; i < servers.length; i++) {
+                if (i > 0) urls.append(",");
+                urls.append("\"").append(servers[i]).append("\"");
+            }
+            urls.append("]");
+            HashMap<String,Object> map = new HashMap<>();
+            map.put(Configuration.SHARE_SERVER_URLS, urls.toString());
+            // Created here, the native library is not loaded yet when the class is initialised
+            if (conf == null) conf = new ToolConf();
+            conf.values.put(server_id, map);
+            return 3;
         }
         return 0;
     }
@@ -456,7 +482,7 @@ public class CDocTool {
         try {
             ToolCrypto crypto = new ToolCrypto(recipients, p11_library);
             NetworkBackend network = new ToolNetwork();
-            CDocWriter wrtr = CDocWriter.createWriter(version, file, null, crypto, network);
+            CDocWriter wrtr = CDocWriter.createWriter(version, file, conf, crypto, network);
             for (RcptInfo rinfo : recipients) {
                 Recipient rcpt = null;
                 switch (rinfo.type) {
@@ -482,6 +508,13 @@ public class CDocTool {
                         break;
                     case CERT:
                         rcpt = Recipient.makeCertificate(rinfo.label, rinfo.cert);
+                        break;
+                    case SHARE:
+                        if (server_id == null) {
+                            System.err.println("Share recipient requires --share-servers");
+                            System.exit(1);
+                        }
+                        rcpt = Recipient.makeShare(rinfo.label, server_id, "PNOEE-" + rinfo.id);
                         break;
                     default:
                         System.err.println("Unsupported recipient type");
@@ -669,6 +702,36 @@ public class CDocTool {
      *  - PKCS11 recipients delegate the key operations to a PKCS11Backend
      *  - --pkey/--pfkey decryption uses a local private key (via JCE)
      */
+    ///
+    /// A simple Configuration implementation for CDocTool
+    ///
+    private static class ToolConf extends Configuration  {
+        public final HashMap<String,Object> values = new HashMap<>();
+
+        @Override
+        public String getValue(String domain, String param) {
+            HashMap<String,Object> map = values;
+            if ((domain != null) && !domain.isEmpty()) {
+                Object obj = map.get(domain);
+                if ((obj == null) || !(obj instanceof HashMap)) {
+                    System.err.format("%s is not a valid configuration domain\n", domain);
+                    System.exit(1);
+                }
+                map = (HashMap<String,Object>) obj;
+            }
+            if (!map.containsKey(param)) {
+                System.err.format("No such parameter: %s\n", param);
+                return null;
+            }
+            Object obj = map.get(param);
+            if ((obj == null) || !(obj instanceof String)) {
+                System.err.format("%s is not a valid configuration entry\n", param);
+                System.exit(1);
+            }
+            return (String) obj;
+        }
+    }
+
     private static class ToolCrypto extends CryptoBackend {
         private final List<RcptInfo> recipients;
         private PKCS11Backend p11;

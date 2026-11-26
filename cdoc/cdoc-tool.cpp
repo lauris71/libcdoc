@@ -69,6 +69,10 @@ print_usage(ostream& ofs)
     ofs << "    --pin PIN               - PKCS11 pin" << endl;
     ofs << "    --key-id                - PKCS11 key ID (hex)" << endl;
     ofs << "    --key-label             - PKCS11 key label" << endl;
+    ofs << "    --rp-server RP_SERVER   - RP server URL" << endl;
+    ofs << "    --auth-server AUTH_SERVER - Authentication server URL" << endl;
+    ofs << "    --phone NUMBER          - Phone number for MID signing (starting with + and country prefix)" << endl;
+    ofs << "                            - If the phone number is present user is authenticated with MobileID, otherwise with SmartId" << endl;
     ofs << endl;
     ofs << "cdoc-tool locks FILE" << endl;
     ofs << endl;
@@ -79,7 +83,7 @@ print_usage(ostream& ofs)
     ofs << "  --library                 - path to the PKCS11 library to be used" << endl;
     ofs << "  --server ID URL(S)        - specifies a key or share server. The recipient key will be stored in server instead of in the document." << endl;
     ofs << "                              for key server the url is either fetch or send url. For share server it is comma-separated list of share server urls." << endl;
-    ofs << "  --accept FILENAME         - keyserver certificate file (in der encoding)" << endl;
+    ofs << "  --accept SERVERNAME[:PORT] FILENAME - server certificate file (in der encoding, plain server name without protocol)" << endl;
     ofs << "  --log-level LEVEL         - set logging level (FATAL, ERROR, WARNING, INFO, DEBUG, TRACE)" << endl;
 }
 
@@ -97,10 +101,20 @@ fromB64(const std::string& data)
     }
 }
 
-static void
-load_certs(ToolConf& conf, const std::string& filename)
+static libcdoc::result_t
+load_certs(ToolConf& conf, std::string url, const std::string& filename)
 {
+    if (!url.contains(':')) {
+        url = fmt::format("https://{}:443/", url);
+    } else {
+        url = fmt::format("https://{}/", url);
+    }
+    LOG_DBG("Accept url: {}", url);
     std::vector<uint8_t> content = readAllBytes(filename);
+    if (content.empty()) {
+        LOG_ERROR("Cannot read {}", filename);
+        return libcdoc::CONFIGURATION_ERROR;
+    }
     if ((content.size() > 3) && (content[0] == 'M') && (content[1] == 'I') && (content[2] == 'I')) {
         std::string cstr(content.cbegin(), content.cend());
         std::vector<std::string> parts = split(cstr, '\n');
@@ -111,12 +125,13 @@ load_certs(ToolConf& conf, const std::string& filename)
                     LOG_WARN("Skipping invalid base64 line in {}", filename);
                     continue;
                 }
-                conf.accept_certs.push_back(std::move(v));
+                conf.accept_certs[url].push_back(std::move(v));
             }
         }
     } else {
-        conf.accept_certs.push_back(content);
+        conf.accept_certs[url].push_back(content);
     }
+    return libcdoc::OK;
 }
 
 static void
@@ -163,10 +178,25 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
         sdata.url = argv[arg_idx + 2];
         conf.servers.push_back(sdata);
         return 3;
-    } else if (arg == "--accept") {
+    } else if (arg == "--auth-server") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        load_certs(conf, argv[arg_idx + 1]);
+        conf.auth_server = argv[arg_idx + 1];
         return 2;
+    } else if (arg == "--rp-server") {
+        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
+        conf.rp_server = argv[arg_idx + 1];
+        return 2;
+    } else if (arg == "--phone") {
+        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
+        conf.phone = argv[arg_idx + 1];
+        return 2;
+    } else if (arg == "--accept") {
+        if ((arg_idx + 2) >= argc) return RESULT_USAGE;
+        if (load_certs(conf, argv[arg_idx + 1], argv[arg_idx + 2]) != libcdoc::OK) {
+            LOG_ERROR("Cannot load certificates");
+            return RESULT_ERROR;
+        };
+        return 3;
     } else if (arg == "--conf") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
         conf.parse(argv[arg_idx + 1]);

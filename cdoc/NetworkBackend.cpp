@@ -8,6 +8,9 @@
 #include "CryptoBackend.h"
 #include "TLSKey.h"
 #include "Utils.h"
+#ifdef HAS_KEYSHARES
+#include "KeyShares.h"
+#endif
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -30,6 +33,13 @@
 // Key server, share server and SID/MID responses are small JSON documents
 #define CDOC_MAX_RESPONSE_SIZE (64 * 1024)
 
+// The default confirmation text shown on the user's device in SID/MID
+// dialogs when no DISPLAY_TEXT configuration value is set. Overridable at
+// compile time (e.g. -DCDOC2_DEFAULT_DISPLAY_TEXT="...").
+#ifndef CDOC2_DEFAULT_DISPLAY_TEXT
+#define CDOC2_DEFAULT_DISPLAY_TEXT "Do you want to decrypt the CDoc container?"
+#endif
+
 using namespace std::literals::chrono_literals;
 
 struct Private {
@@ -44,85 +54,26 @@ struct Private {
 };
 
 #ifdef HAS_KEYSHARES
-struct MIDSIDResultData {
-    int code;
-    std::string_view str;
-    std::string_view desc;
-};
-
-static constexpr auto midsid_results = std::to_array<MIDSIDResultData>({
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED, "USER_REFUSED", "User refused the session"},
-    {libcdoc::NetworkBackend::MIDSID_TIMEOUT, "TIMEOUT", "User did not confirm action within the timeframe"},
-    {libcdoc::NetworkBackend::MIDSID_DOCUMENT_UNUSABLE, "DOCUMENT_UNUSABLE", "Smart document unusable, please contact Smart ID customer support"},
-    {libcdoc::NetworkBackend::MIDSID_WRONG_VC, "WRONG_VC", "User chose a wrong Smart ID verification code"},
-    {libcdoc::NetworkBackend::MIDSID_REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP, "REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP", "Smart ID app does not support current protocol"},
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CERT_CHOICE, "USER_REFUSED_CERT_CHOICE", "User refused certificate choice"},
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_DISPLAYTEXTANDPIN, "USER_REFUSED_DISPLAYTEXTANDPIN", "User canceled the PIN choice"},
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_VC_CHOICE, "USER_REFUSED_VC_CHOICE", "User canceled the verification code choice"},
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE, "USER_REFUSED_CONFIRMATIONMESSAGE", "User refused the confirmation message"},
-    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE, "USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE", "User refused the confirmation message and verification code choice"},
-    {libcdoc::NetworkBackend::MIDSID_NOT_MID_CLIENT, "NOT_MID_CLIENT", "User is not a Mobile ID client"},
-    {libcdoc::NetworkBackend::MIDSID_USER_CANCELLED, "USER_CANCELLED", "User canceled the Mobile ID operation"},
-    {libcdoc::NetworkBackend::MIDSID_SIGNATURE_HASH_MISMATCH, "SIGNATURE_HASH_MISMATCH", "SIM card signature mismatch, please contact the mobile provider"},
-    {libcdoc::NetworkBackend::MIDSID_PHONE_ABSENT, "PHONE_ABSENT", "SIM card is not available"},
-    {libcdoc::NetworkBackend::MIDSID_DELIVERY_ERROR, "DELIVERY_ERROR", "SMS sending error"},
-    {libcdoc::NetworkBackend::MIDSID_SIM_ERROR, "SIM_ERROR", "Invalid response from SIM card"}
-});
-
-static int
-parseMIDSIDResult(std::string_view str)
-{
-    if (str == "OK") return libcdoc::OK;
-    for (auto v : midsid_results) {
-        if (str == v.str) return v.code;
-    }
-    return libcdoc::UNSPECIFIED_ERROR;
-}
-
-static std::string_view
-getMIDSIDDescription(libcdoc::result_t code)
-{
-    for (auto v : midsid_results) {
-        if (code == v.code) return v.desc;
-    }
-    return {};
-}
-
-// Map a CryptoBackend::HashAlgorithm to the algorithm name string the
-// SK Smart-ID / Mobile-ID JSON API expects ("SHA224", "SHA256",
-// "SHA384", "SHA512"). Returns an empty string_view when the algorithm
-// is not in the supported set; callers MUST treat that as a hard error
-// rather than indexing an array - foreign-language bindings (SWIG / Java
-// / C#) and any future addition to the HashAlgorithm enum can otherwise
-// drive the previous `algo_names[(int)algo]` lookup out of bounds.
-//
-// The function is constexpr so that the static_assert block below can
-// verify at compile time that every documented enumerator maps to a
-// non-empty string. Any new HashAlgorithm value added to CryptoBackend.h
-// will trigger -Wswitch (no default branch covers it) and the
-// static_asserts will catch it explicitly.
-static constexpr std::string_view
-hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
-{
-    switch (algo) {
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_224: return "SHA224";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: return "SHA256";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: return "SHA384";
-    case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: return "SHA512";
-    }
-    return {};
-}
-
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_224) == "SHA224");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_256) == "SHA256");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_384) == "SHA384");
-static_assert(hashAlgorithmToSidMidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_512) == "SHA512");
-// Out-of-range value (e.g. coming from a SWIG-generated foreign caller)
-// must produce an empty result rather than reading past the array.
-static_assert(hashAlgorithmToSidMidName(static_cast<libcdoc::CryptoBackend::HashAlgorithm>(99)).empty());
+// SID/MID result-code table and helpers live in the HAS_KEYSHARES block at
+// the end of this file; getLastErrorStr needs the description lookup.
+static std::string_view getMIDSIDDescription(libcdoc::result_t code);
 #endif
 
 thread_local std::string error;
+
+// Normalize an HTTP header name to lowercase for case-insensitive lookup in
+// the std::map used by get()/post()/getAuthResponse()/getSignResponse().
+// HTTP/2 mandates lowercase header names; HTTP/1.1 servers vary. All
+// response headers are stored under their lowercase key, and all lookups
+// must use lowercase names.
+static std::string
+headerKey(std::string_view name)
+{
+    std::string out(name);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return out;
+}
 
 static std::string
 getJsonString(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
@@ -145,6 +96,29 @@ getJsonString(const picojson::value& json, const std::string& key, libcdoc::resu
     }
     result = libcdoc::OK;
     return v.get<std::string>();
+}
+
+static picojson::object
+getJsonObject(const picojson::value& json, const std::string& key, libcdoc::result_t& result)
+{
+    error = {};
+    // picojson::value::get(key) throws std::runtime_error if json is not an
+    // object - check first, the input comes from a remote server.
+    if (!json.is<picojson::object>()) {
+        error = FORMAT("{} is missing (the response is not a JSON object)", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    picojson::value v = json.get(key);
+    if (!v.is<picojson::object>()) {
+        error = FORMAT("{} is missing or is not an object", key);
+        LOG_WARN("{}", error);
+        result = libcdoc::DATA_FORMAT_ERROR;
+        return {};
+    }
+    result = libcdoc::OK;
+    return v.get<picojson::object>();
 }
 
 std::string
@@ -211,20 +185,6 @@ setPeerCertificates(httplib::SSLClient& cli, libcdoc::NetworkBackend *network, c
 }
 
 //
-// Log why a request failed. httplib does not report TLS errors, they stay in the OpenSSL error queue.
-//
-static void
-logRequestError(const httplib::Result& res)
-{
-    LOG_DBG("Request failed: {}", httplib::to_string(res.error()));
-    while (unsigned long err = ERR_get_error()) {
-        std::array<char, 256> buf{};
-        ERR_error_string_n(err, buf.data(), buf.size());
-        LOG_DBG("    {}", buf.data());
-    }
-}
-
-//
 // Set proxy parameters
 //
 static libcdoc::result_t
@@ -246,8 +206,20 @@ setProxy(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
     }
 }
 
+static void
+logRequestError(const httplib::Result& res)
+{
+    LOG_DBG("Request failed: {}", httplib::to_string(res.error()));
+    while (unsigned long err = ERR_get_error()) {
+        std::array<char, 256> buf{};
+        ERR_error_string_n(err, buf.data(), buf.size());
+        LOG_DBG("    {}", buf.data());
+    }
+}
+
+
 //
-// Set SSL timeouts and response size limit
+// Set SSL timeouts
 //
 static libcdoc::result_t
 applySSLTimeout(httplib::SSLClient& cli, libcdoc::NetworkBackend *network)
@@ -327,6 +299,104 @@ httpGet(httplib::SSLClient& cli, httplib::Headers& hdrs, const std::string& path
 }
 
 libcdoc::result_t
+libcdoc::NetworkBackend::get(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert)
+{
+    std::string host, path;
+    int port;
+    result_t result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::Headers hdrs;
+    for (const auto& hdr : headers) {
+        hdrs.insert({hdr.first, hdr.second});
+    }
+    httplib::Response rsp;
+
+    if (client_cert) {
+        std::vector<uint8_t> cert;
+        result = getClientTLSCertificate(cert);
+        if (result != OK) return result;
+        // L1: an empty or unparseable client certificate must not produce a
+        // client with null credentials - reject before constructing the
+        // SSLClient.
+        if (cert.empty()) return CRYPTO_ERROR;
+        std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
+        if (!d->x509 || !d->key) return CRYPTO_ERROR;
+
+        httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+        SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
+        if (result = applySSLTimeout(cli, this); result != OK) return result;
+        if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+        if (result = setProxy(cli, this); result != OK) return result;
+        result = httpGet(cli, hdrs, path, rsp);
+    } else {
+        httplib::SSLClient cli(host, port);
+        if (result = applySSLTimeout(cli, this); result != OK) return result;
+        if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+        if (result = setProxy(cli, this); result != OK) return result;
+        result = httpGet(cli, hdrs, path, rsp);
+    }
+    if (result != libcdoc::OK) return result;
+
+    headers.clear();
+    for (const auto& hdr : rsp.headers) {
+        headers.insert({headerKey(hdr.first), hdr.second});
+    }
+    body.assign(rsp.body.begin(), rsp.body.end());
+
+    return libcdoc::OK;
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::post(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert)
+{
+    std::string host, path;
+    int port;
+    int result = libcdoc::parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::Headers hdrs;
+    for (const auto& hdr : headers) {
+        hdrs.insert({hdr.first, hdr.second});
+    }
+    httplib::Response rsp;
+
+    if (client_cert) {
+        std::vector<uint8_t> cert;
+        result = getClientTLSCertificate(cert);
+        if (result != OK) return result;
+        // L1: an empty or unparseable client certificate must not produce a
+        // client with null credentials - reject before constructing the
+        // SSLClient.
+        if (cert.empty()) return CRYPTO_ERROR;
+        std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
+        if (!d->x509 || !d->key) return CRYPTO_ERROR;
+
+        httplib::SSLClient cli(host, port, d->x509.handle(), d->key.get());
+        SSL_CTX_set_min_proto_version(cli.ssl_context(), TLS1_3_VERSION);
+        if (result = applySSLTimeout(cli, this); result != OK) return result;
+        if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+        if (result = setProxy(cli, this); result != OK) return result;
+        result = httpPost(cli, path, hdrs, std::string(body.cbegin(), body.cend()), rsp);
+    } else {
+        httplib::SSLClient cli(host, port);
+        if (result = applySSLTimeout(cli, this); result != OK) return result;
+        if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+        if (result = setProxy(cli, this); result != OK) return result;
+        result = httpPost(cli, path, hdrs, std::string(body.cbegin(), body.cend()), rsp);
+    }
+    if (result != libcdoc::OK) return result;
+
+    headers.clear();
+    for (const auto& hdr : rsp.headers) {
+        headers.insert({headerKey(hdr.first), hdr.second});
+    }
+    body.assign(rsp.body.begin(), rsp.body.end());
+
+    return libcdoc::OK;
+}
+
+libcdoc::result_t
 libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, const std::vector<uint8_t>& rcpt_key, const std::vector<uint8_t> &key_material, const std::string& type, uint64_t expiry_ts)
 {
     LOG_DBG("NetworkBackend::Sendkey");
@@ -398,56 +468,6 @@ libcdoc::NetworkBackend::sendKey (CapsuleInfo& dst, const std::string& url, cons
     return OK;
 }
 
-#ifdef HAS_KEYSHARES
-libcdoc::result_t
-libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
-{
-    // Create KeyShare container
-    picojson::object obj = {
-        {"share", picojson::value(libcdoc::toBase64(share))},
-        {"recipient", picojson::value(recipient)}
-    };
-    picojson::value req_json(obj);
-    std::string req_str = req_json.serialize();
-    LOG_TRACE("POST keyshare to: {}", url);
-    LOG_TRACE("{}", req_str);
-
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
-
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
-
-    std::string full = path + "/key-shares";
-    httplib::Headers hdrs;
-    httplib::Response rsp;
-    result = httpPost(cli, full, hdrs, req_str, rsp);
-    if (result != libcdoc::OK) return result;
-
-    std::string location = rsp.get_header_value("Location");
-    if (location.empty()) {
-        error = FORMAT("No Location header in response");
-        return NETWORK_ERROR;
-    }
-    constexpr std::string_view prefix = "/key-shares/";
-    if (location.compare(0, prefix.size(), prefix) != 0) {
-        error = FORMAT("Unexpected Location header value");
-        return NETWORK_ERROR;
-    }
-    error = {};
-
-    dst.assign(location.cbegin() + prefix.size(), location.cend());
-    LOG_TRACE("Share: {}", std::string((const char *) dst.data(), dst.size()));
-
-    return OK;
-}
-#endif
-
 libcdoc::result_t
 libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id)
 {
@@ -459,6 +479,7 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
     std::vector<uint8_t> cert;
     result = getClientTLSCertificate(cert);
     if (result != OK) return result;
+    if (cert.empty()) return CRYPTO_ERROR;
     std::unique_ptr<Private> d = std::make_unique<Private>(this, cert);
     if (!cert.empty() && (!d->x509 || !d->key)) return CRYPTO_ERROR;
 
@@ -508,33 +529,502 @@ libcdoc::NetworkBackend::fetchKey (std::vector<uint8_t>& dst, const std::string&
 }
 
 #ifdef HAS_KEYSHARES
+struct MIDSIDResultData {
+    int code;
+    std::string_view str;
+    std::string_view desc;
+};
+
+static constexpr auto midsid_results = std::to_array<MIDSIDResultData>({
+    // Smart-ID v3.1+ session endResult codes
+    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED, "USER_REFUSED", "User refused the session"},
+    {libcdoc::NetworkBackend::MIDSID_TIMEOUT, "TIMEOUT", "User did not confirm action within the timeframe"},
+    {libcdoc::NetworkBackend::MIDSID_DOCUMENT_UNUSABLE, "DOCUMENT_UNUSABLE", "Document unusable, please contact Smart ID customer support"},
+    {libcdoc::NetworkBackend::MIDSID_WRONG_VC, "WRONG_VC", "User chose a wrong Smart ID verification code"},
+    {libcdoc::NetworkBackend::MIDSID_REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP, "REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP", "Smart ID app does not support current protocol"},
+    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_CERT_CHOICE, "USER_REFUSED_CERT_CHOICE", "User refused certificate choice"},
+    {libcdoc::NetworkBackend::MIDSID_USER_REFUSED_INTERACTION, "USER_REFUSED_INTERACTION", "User refused the interaction"},
+    {libcdoc::NetworkBackend::MIDSID_PROTOCOL_FAILURE, "PROTOCOL_FAILURE", "There was a logical error in the signing protocol"},
+    {libcdoc::NetworkBackend::MIDSID_EXPECTED_LINKED_SESSION, "EXPECTED_LINKED_SESSION", "The app received a different transaction while waiting for the linked session"},
+    {libcdoc::NetworkBackend::MIDSID_SERVER_ERROR, "SERVER_ERROR", "The process was terminated due to server-side technical error"},
+    {libcdoc::NetworkBackend::ACCOUNT_UNUSABLE, "ACCOUNT_UNUSABLE", "The account is currently unusable"},
+    // Mobile-ID session end result codes
+    {libcdoc::NetworkBackend::MIDSID_NOT_MID_CLIENT, "NOT_MID_CLIENT", "user has no active Mobile-ID certificates"},
+    {libcdoc::NetworkBackend::MIDSID_USER_CANCELLED, "USER_CANCELLED", "user rejected the operation on the device"},
+    {libcdoc::NetworkBackend::MIDSID_SIGNATURE_HASH_MISMATCH, "SIGNATURE_HASH_MISMATCH", "mismatch between SIM and service provider configuration"},
+    {libcdoc::NetworkBackend::MIDSID_PHONE_ABSENT, "PHONE_ABSENT", "SIM card is not available"},
+    {libcdoc::NetworkBackend::MIDSID_DELIVERY_ERROR, "DELIVERY_ERROR", "SMS sending error"},
+    {libcdoc::NetworkBackend::MIDSID_SIM_ERROR, "SIM_ERROR", "Invalid response from SIM card"}
+});
+
+static libcdoc::result_t
+parseMIDSIDResult(std::string_view str)
+{
+    if (str == "OK") return libcdoc::OK;
+    for (auto v : midsid_results) {
+        if (str == v.str) return v.code;
+    }
+    return libcdoc::UNSPECIFIED_ERROR;
+}
+
+static std::string_view
+getMIDSIDDescription(libcdoc::result_t code)
+{
+    for (auto v : midsid_results) {
+        if (code == v.code) return v.desc;
+    }
+    return {};
+}
+
+// Map a CryptoBackend::HashAlgorithm to the algorithm name string the
+// SK Smart-ID / Mobile-ID JSON API expects ("SHA224", "SHA256",
+// "SHA384", "SHA512"). Returns an empty string_view when the algorithm
+// is not in the supported set; callers MUST treat that as a hard error
+// rather than indexing an array - foreign-language bindings (SWIG / Java
+// / C#) and any future addition to the HashAlgorithm enum can otherwise
+// drive the previous `algo_names[(int)algo]` lookup out of bounds.
+//
+// The function is constexpr so that the static_assert block below can
+// verify at compile time that every documented enumerator maps to a
+// non-empty string. Any new HashAlgorithm value added to CryptoBackend.h
+// will trigger -Wswitch (no default branch covers it) and the
+// static_asserts will catch it explicitly.
+static constexpr std::string_view
+hashAlgorithmToSidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
+{
+    switch (algo) {
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: return "SHA-256";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: return "SHA-384";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: return "SHA-512";
+    default:
+        break;
+    }
+    return {};
+}
+
+static_assert(hashAlgorithmToSidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_256) == "SHA-256");
+static_assert(hashAlgorithmToSidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_384) == "SHA-384");
+static_assert(hashAlgorithmToSidName(libcdoc::CryptoBackend::HashAlgorithm::SHA_512) == "SHA-512");
+// Out-of-range value (e.g. coming from a SWIG-generated foreign caller)
+// must produce an empty result rather than reading past the array.
+static_assert(hashAlgorithmToSidName(static_cast<libcdoc::CryptoBackend::HashAlgorithm>(99)).empty());
+
+static constexpr std::string_view
+hashAlgorithmToMidName(libcdoc::CryptoBackend::HashAlgorithm algo) noexcept
+{
+    switch (algo) {
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_256: return "SHA256";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_384: return "SHA384";
+    case libcdoc::CryptoBackend::HashAlgorithm::SHA_512: return "SHA512";
+    default:
+        break;
+    }
+    return {};
+}
+
 libcdoc::result_t
-libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id)
+libcdoc::NetworkBackend::getAuthResponse(const std::string& url, std::vector<uint8_t>& body,
+    std::map<std::string, std::string>& headers)
+{
+    std::string host, path;
+    int port;
+    result_t result = parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    // POST /auth/start
+    std::string full = path + "/auth/start";
+    httplib::Headers hdrs;
+    for (const auto& h : headers) {
+        hdrs.insert({h.first, h.second});
+    }
+    httplib::Response rsp;
+    result = httpPost(cli, full, hdrs, std::string(body.cbegin(), body.cend()), rsp);
+    if (result != libcdoc::OK) return result;
+
+    // Parse Location header for the polling path
+    std::string location = rsp.get_header_value("Location");
+    LOG_DBG("Location: {}", location);
+    if (location.empty()) {
+        error = FORMAT("No Location header in response");
+        return NETWORK_ERROR;
+    }
+    // M3: the Location header path includes the server base path (from the
+    // configured URL), so prefix-check against path + "/auth/status/" rather
+    // than a hardcoded root-relative path. parseURL strips the trailing '/'
+    // from path, so path + "/auth/status/" is always well-formed.
+    const std::string prefix = path + "/auth/status/";
+    if (location.compare(0, prefix.size(), prefix) != 0) {
+        error = FORMAT("Unexpected Location header value");
+        return NETWORK_ERROR;
+    }
+    std::string auth_proc_uuid = location.substr(prefix.size());
+
+    // Parse the initial response body for the verification code
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    std::string ver_code = getJsonString(rsp_json, "vc", result);
+    if (result != libcdoc::OK) return NETWORK_ERROR;
+    LOG_DBG("Verification code: {}", ver_code);
+
+    // S16: the verification code is the user's consent anchor - a malformed
+    // server value must never be rendered as 0 or garbage. Smart-ID/Mobile-ID
+    // numeric4 codes are 0000-9999.
+    int vc = 0;
+    if (!libcdoc::parseBoundedUInt(ver_code, 9999, vc)) {
+        error = FORMAT("Invalid verification code in response: {}", ver_code);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+
+    SIDMIDFeedback fb = {
+        .code = vc,
+    };
+    result = showFeedback(fb);
+    if (result != OK) {
+        error = FORMAT("Failed to show verification code: {}", result);
+        LOG_ERROR("{}", error);
+        return result;
+    }
+
+    // Poll GET /auth/status/{uuid} on the same connection until COMPLETE.
+    // The server closes idle keep-alive connections (Connection: close), and
+    // reusing a dead socket fails with "Cannot connect". Open a fresh
+    // connection for each poll instead.
+    cli.set_keep_alive(false);
+
+    std::string poll_path = path + "/auth/status/" + auth_proc_uuid;
+    double end = getTime() + 60.0;
+    while (getTime() < end) {
+        httplib::Response poll_rsp;
+        httplib::Headers poll_hdrs;
+        result = httpGet(cli, poll_hdrs, poll_path, poll_rsp);
+        if (result != OK) return result;
+
+        picojson::value poll_json;
+        parse_err = picojson::parse(poll_json, poll_rsp.body);
+        if (!parse_err.empty()) {
+            error = FORMAT("JSON parse error: {}", parse_err);
+            LOG_ERROR("{}", error);
+            return NETWORK_ERROR;
+        }
+        if (!poll_json.is<picojson::object>()) {
+            error = "Invalid Authentication response";
+            LOG_WARN("Invalid Authentication response");
+            return NetworkBackend::NETWORK_ERROR;
+        }
+
+        std::string status = getJsonString(poll_json, "status", result);
+        if (result != OK) return NetworkBackend::NETWORK_ERROR;
+        LOG_DBG("Status: {}", status);
+
+        if ((status == "RUNNING") || (status == "STARTED")) {
+            std::chrono::milliseconds duration(500);
+            std::this_thread::sleep_for(duration);
+            continue;
+        } else if (status != "COMPLETE") {
+            error = FORMAT("Invalid SmartID state: {}", status);
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+
+        // State is COMPLETE - return the final response body and headers
+        body.assign(poll_rsp.body.cbegin(), poll_rsp.body.cend());
+        headers.clear();
+        for (const auto& h : poll_rsp.headers) {
+            headers.insert({headerKey(h.first), h.second});
+        }
+        error = {};
+        return OK;
+    }
+
+    error = "Timeout waiting SID/MID result";
+    LOG_WARN("{}", error);
+    return UNSPECIFIED_ERROR;
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::getSignResponse(const std::string& url, const std::string& post_path,
+    std::vector<uint8_t>& body, std::map<std::string, std::string>& headers,
+    const std::string& poll_path_prefix)
+{
+    std::string host, path;
+    int port;
+    result_t result = parseURL(url, host, port, path);
+    if (result != libcdoc::OK) return result;
+
+    httplib::SSLClient cli(host, port);
+    if (result = applySSLTimeout(cli, this); result != OK) return result;
+    if (result = setPeerCertificates(cli, this, buildURL(host, port)); result != OK) return result;
+    if (result = setProxy(cli, this); result != OK) return result;
+
+    // POST the signing request
+    std::string full = path + post_path;
+    httplib::Headers hdrs;
+    for (const auto& h : headers) {
+        hdrs.insert({h.first, h.second});
+    }
+    httplib::Response rsp;
+    result = httpPost(cli, full, hdrs, std::string(body.cbegin(), body.cend()), rsp);
+    if (result != libcdoc::OK) return result;
+
+    // Parse session ID from the response body
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid response";
+        LOG_WARN("Invalid response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    std::string sessionId = getJsonString(rsp_json, "sessionID", result);
+    if (result != libcdoc::OK) return result;
+    LOG_DBG("SessionID: {}", sessionId);
+
+    // Poll GET {poll_path_prefix}{sessionID} on the same connection.
+    // The server closes idle keep-alive connections (Connection: close), and
+    // reusing a dead socket fails with "Cannot connect". Open a fresh
+    // connection for each poll instead.
+    cli.set_keep_alive(false);
+
+    // S12: session_id comes from the server response
+    std::string poll_path = path + poll_path_prefix + urlEncodeComponent(sessionId);
+    LOG_DBG("SID/MID session query path: {}", poll_path);
+    double end = getTime() + 60.0;
+    while (getTime() < end) {
+        httplib::Response poll_rsp;
+        httplib::Headers poll_hdrs;
+        for (const auto& h : headers) {
+            poll_hdrs.insert({h.first, h.second});
+        }
+        result = httpGet(cli, poll_hdrs, poll_path, poll_rsp);
+        if (result != OK) return result;
+
+        picojson::value poll_json;
+        parse_err = picojson::parse(poll_json, poll_rsp.body);
+        if (!parse_err.empty()) {
+            error = FORMAT("JSON parse error: {}", parse_err);
+            LOG_ERROR("{}", error);
+            return NETWORK_ERROR;
+        }
+        if (!poll_json.is<picojson::object>()) {
+            error = "Invalid response";
+            LOG_WARN("Invalid response");
+            return NetworkBackend::NETWORK_ERROR;
+        }
+
+        std::string status = getJsonString(poll_json, "state", result);
+        if (result != OK) return result;
+        LOG_DBG("State: {}", status);
+
+        if (status == "RUNNING") {
+            std::chrono::milliseconds duration(500);
+            std::this_thread::sleep_for(duration);
+            continue;
+        } else if (status != "COMPLETE") {
+            error = FORMAT("Invalid state value: {}", status);
+            LOG_WARN("{}", error);
+            return NetworkBackend::NETWORK_ERROR;
+        }
+
+        // State is COMPLETE - return the final response body and headers
+        body.assign(poll_rsp.body.cbegin(), poll_rsp.body.cend());
+        headers.clear();
+        for (const auto& h : poll_rsp.headers) {
+            headers.insert({headerKey(h.first), h.second});
+        }
+        error = {};
+        return OK;
+    }
+
+    error = "Timeout waiting SID/MID result";
+    LOG_WARN("{}", error);
+    return UNSPECIFIED_ERROR;
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share)
+{
+    // Create KeyShare container
+    LOG_DBG("Creating keyshare for recipient: {}", recipient);
+    picojson::object obj = {
+        {"share", picojson::value(libcdoc::toBase64(share))},
+        {"recipient", picojson::value(recipient)}
+    };
+    picojson::value req_json(obj);
+    std::string req_str = req_json.serialize();
+    LOG_DBG("POST keyshare to: {}", url);
+    LOG_TRACE_KEY("{}", req_str);
+
+    std::string full = joinUrl(url, "/key-shares");
+    std::map<std::string, std::string> headers;
+    std::vector<uint8_t> body(req_str.begin(), req_str.end());
+    result_t result = post(full, body, headers, false);
+    if (result != libcdoc::OK) return result;
+
+    std::string location;
+    if (auto it = headers.find("location"); it != headers.end())
+        location = it->second;
+    if (location.empty()) {
+        error = FORMAT("No Location header in response");
+        return NETWORK_ERROR;
+    }
+    constexpr std::string_view prefix = "/key-shares/";
+    if (location.compare(0, prefix.size(), prefix) != 0) {
+        error = FORMAT("Unexpected Location header value");
+        return NETWORK_ERROR;
+    }
+    error = {};
+
+    dst.assign(location.cbegin() + prefix.size(), location.cend());
+    LOG_TRACE("Share: {}", std::string((const char *) dst.data(), dst.size()));
+
+    return OK;
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, SessionData& session)
+{
+    // The session is bound to the actual recipient identity from the lock.
+    // A hardcoded or malformed id would break the identity chain
+    // (session identity == signing identity == lock recipient).
+    if (!parseEtsiRecipientId(rcpt_id).valid()) {
+        error = FORMAT("Invalid recipient id: {}", rcpt_id);
+        LOG_WARN("{}", error);
+        return DATA_FORMAT_ERROR;
+    }
+
+    picojson::object obj = {
+        {"identifier", picojson::value(rcpt_id)}
+    };
+    if (!phone.empty()) {
+        obj.emplace("mobileNr", picojson::value(phone));
+    }
+    picojson::value req_json(obj);
+    std::string req_str = req_json.serialize();
+    LOG_DBG("POST authentication request to: {}", url);
+    LOG_DBG("{}", req_str);
+
+    std::vector<uint8_t> body(req_str.cbegin(), req_str.cend());
+    std::map<std::string, std::string> headers;
+    result_t result = getAuthResponse(url, body, headers);
+    if (result != libcdoc::OK) return result;
+
+    // Parse the COMPLETE response body
+    std::string response_body(body.cbegin(), body.cend());
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, response_body);
+    if (!parse_err.empty()) {
+        error = FORMAT("JSON parse error: {}", parse_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+
+    // Check end result
+    std::string endResult = getJsonString(rsp_json, "endResult", result);
+    if (result != OK) return NetworkBackend::NETWORK_ERROR;
+    LOG_DBG("EndResult: {}", endResult);
+    if (endResult != "OK") {
+        LOG_WARN("Authentication endResult is {}", endResult);
+        return parseMIDSIDResult(endResult);
+    }
+
+    // Fetch session token and certificate
+    session.token = getJsonString(rsp_json, "sessionToken", result);
+    if (result != OK) return NetworkBackend::NETWORK_ERROR;
+    LOG_TRACE("Session token: {}", session.token);
+    session.cert = getJsonString(rsp_json, "signingCertificate", result);
+    if (result != OK) return NetworkBackend::NETWORK_ERROR;
+    LOG_TRACE("Certificate: {}", session.cert);
+
+    auto parts = split(session.token, '~');
+    // In minimum we need JWT, AUD, RP disclosure and 2 share disclosures
+    if (parts.size() < 5) {
+        error = "Invalid JWT-SD token";
+        LOG_WARN("Invalid JWT-SD token");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+    std::string jwt = parts[0];
+    std::string aud = parts[1];
+    for (size_t i = 2; i < parts.size(); i++) {
+        auto v = parts[i];
+        // L2: session token disclosures are session-scoped credentials
+        // (they authorize specific share servers) - trace level only.
+        LOG_TRACE("Session token part {} ({}) : {}", i, v.size(), v);
+        std::vector<uint8_t> decoded_part = fromBase64URL(v);
+        LOG_TRACE("Decoded part {} ({}): {}", i, decoded_part.size(), std::string(decoded_part.begin(), decoded_part.end()));
+    }
+
+    auto decoded = decodeTicket(jwt);
+    LOG_TRACE("Session token: {}", decoded);
+    picojson::value dec_json;
+    auto p_err = picojson::parse(dec_json, decoded);
+    if (!p_err.empty()) {
+        error = FORMAT("JSON parse error: {}", p_err);
+        LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!dec_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
+    }
+
+    return OK;
+}
+
+libcdoc::result_t
+libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const SessionData& session)
 {
     LOG_TRACE("Get nonce from: {}", url);
 
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
+    SessionToken stoken(session.token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
 
-    LOG_TRACE("Starting client: {} {}", host, port);
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
 
     // S12: share_id comes from the (untrusted) container
-    std::string full = joinUrl(path, "/key-shares/") + urlEncodeComponent(share_id) + "/nonce";
-    httplib::Headers hdrs;
-    httplib::Response rsp;
-    result = httpPost(cli, full, hdrs, "", rsp);
+    std::string full = joinUrl(url, "/key-shares/") + urlEncodeComponent(share_id) + "/nonce";
+    std::map<std::string, std::string> headers;
+    headers.insert({"x-cdoc2-session-token", session_token_disclosed});
+    headers.insert({"x-cdoc2-session-x5c", session.cert});
+    std::vector<uint8_t> body;
+    result_t result = post(full, body, headers, false);
     if (result != libcdoc::OK) return result;
 
-    LOG_TRACE("Response: {}", rsp.body);
+    LOG_TRACE("Response: {}", std::string(body.begin(), body.end()));
     picojson::value rsp_json;
-    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    std::string parse_err = picojson::parse(rsp_json, std::string(body.begin(), body.end()));
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
@@ -548,39 +1038,48 @@ libcdoc::NetworkBackend::fetchNonce(std::vector<uint8_t>& dst, const std::string
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& ticket, const std::vector<uint8_t>& cert)
+libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
+    const SessionData& session, const SessionData& auth)
 {
     LOG_TRACE("Get share from: {}", url);
 
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
+    SessionToken stoken(session.token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
 
-    LOG_TRACE("Starting client: {} {}", host, port);
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
 
     // S12: share_id comes from the (untrusted) container
-    std::string full = joinUrl(path, "/key-shares/") + urlEncodeComponent(share_id);
-    LOG_TRACE("Share url: {}", full);
-    httplib::Headers hdrs;
-    hdrs.insert({"x-cdoc2-auth-ticket", ticket});
-    hdrs.insert({"x-cdoc2-auth-x5c", std::string("-----BEGIN CERTIFICATE-----") + toBase64(cert) + "-----END CERTIFICATE-----"});
-    httplib::Response rsp;
-    result = httpGet(cli, hdrs, full, rsp);
+    std::string full = joinUrl(url, "/key-shares/") + urlEncodeComponent(share_id);
+    std::map<std::string, std::string> headers;
+    headers.insert({"x-cdoc2-session-token", session_token_disclosed});
+    headers.insert({"x-cdoc2-session-x5c", session.cert});
+    headers.insert({"x-cdoc2-auth-token", auth.token});
+    headers.insert({"x-cdoc2-auth-x5c", auth.cert});
+    for (const auto& val : auth.params) {
+        headers.insert({val.first, val.second});
+    }
+    std::vector<uint8_t> body;
+    result_t result = get(full, body, headers, false);
     if (result != libcdoc::OK) return result;
 
     picojson::value rsp_json;
-    std::string parse_err = picojson::parse(rsp_json, rsp.body);
+    std::string parse_err = picojson::parse(rsp_json, std::string(body.begin(), body.end()));
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
         return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid Authentication response";
+        LOG_WARN("Invalid Authentication response");
+        return NetworkBackend::NETWORK_ERROR;
     }
 
     libcdoc::result_t rv = libcdoc::OK;
@@ -598,308 +1097,203 @@ libcdoc::NetworkBackend::fetchShare(ShareInfo& share, const std::string& url, co
     share = {std::move(shareval), std::move(recipient)};
     return OK;
 }
-#endif
 
-#ifdef HAS_KEYSHARES
 libcdoc::result_t
-libcdoc::NetworkBackend::showVerificationCode(unsigned int code)
+libcdoc::NetworkBackend::showFeedback(SIDMIDFeedback& feedback)
 {
-    LOG_INFO("Verification code: {:04d}", code);
+    LOG_INFO("Verification code: {:04d} url: {}", feedback.code, feedback.url);
+    std::cout << "#############################" << "\n";
+    std::cout << FORMAT("# Verification code: {:04d} #", feedback.code) << "\n";
+    std::cout << "#############################" << "\n";
     return OK;
 }
 
 //
-// https://github.com/SK-EID/smart-id-documentation
+// https://open-eid.github.io/CDOC2/
 //
 
-struct SIDResponse {
-    // Signature value, base64 encoded
-    std::string signature;
-    // Signature algorithm, in the form of sha256WithRSAEncryption
-    std::string algorithm;
-    // Signer certificate, base64 encoded
-    std::string cert;
-};
-
-namespace libcdoc {
-
-static result_t
-waitForResult(SIDResponse& dst, httplib::SSLClient& cli, const std::string& path, const std::string& session_id, double seconds, bool is_sid)
-{
-    httplib::Headers hdrs;
-
-    double end = libcdoc::getTime() + seconds;
-    std::string full = path + session_id + "?timeoutMs=" + std::to_string((int) (seconds * 1000));
-    LOG_TRACE("SID/MID session query path: {}", full);
-    while (libcdoc::getTime() < end) {
-        httplib::Response http_rsp;
-        result_t result = httpGet(cli, hdrs, full, http_rsp);
-        if (result != OK) return result;
-        // A parse error leaves rsp null, which the object check below rejects
-        picojson::value rsp;
-        picojson::parse(rsp, http_rsp.body);
-        if (!rsp.is<picojson::object>()) {
-            error = "Response is not a JSON object";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        // State
-        picojson::value v = rsp.get("state");
-        if (!v.is<std::string>()) {
-            error = "State is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        std::string str = v.get<std::string>();
-        if (str == "RUNNING") {
-            // Pause for 0.5 seconds and repeat
-            std::chrono::milliseconds duration(500);
-            std::this_thread::sleep_for(duration);
-            continue;
-        } else if (str != "COMPLETE") {
-            error = FORMAT("Invalid SmartID state: {}", str);
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        // State is complete, check for end result
-        v = rsp.get("result");
-        picojson::value w;
-        if (is_sid) {
-            if (!v.is<picojson::object>()) {
-                error = "Result is not a JSON object";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            w = v.get("endResult");
-        } else {
-            w = v;
-        }
-        if (!w.is<std::string>()) {
-            error = "EndResult is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        str = w.get<std::string>();
-        result = parseMIDSIDResult(str);
-        if (result == UNSPECIFIED_ERROR) {
-            // Unknown result
-            error = FORMAT("unknwon endResult value: {}", str);
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        } else if (result != OK) {
-            LOG_WARN("EndResult is not OK: {}", str);
-            return result;
-        }
-
-        // Signature
-        v = rsp.get("signature");
-        if (v.is<picojson::object>()) {
-            w = v.get("value");
-            if (!w.is<std::string>()) {
-                error = "Value is not a string";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            dst.signature = w.get<std::string>();
-            w = v.get("algorithm");
-            if (!w.is<std::string>()) {
-                error = "Algorithm is not a string";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            dst.algorithm = w.get<std::string>();
-        }
-        // Certificate
-        v = rsp.get("cert");
-        if (is_sid) {
-            if (!v.is<picojson::object>()) {
-                error = "Certificate is not a JSON object";
-                LOG_WARN("{}", error);
-                return NetworkBackend::NETWORK_ERROR;
-            }
-            w = v.get("value");
-        } else {
-            w = rsp.get("cert");
-        }
-        if (!w.is<std::string>()) {
-            error = "Certificate value is not a string";
-            LOG_WARN("{}", error);
-            return NetworkBackend::NETWORK_ERROR;
-        }
-        dst.cert = w.get<std::string>();
-        error = {};
-
-        return OK;
-    }
-    // Timeout
-    error = "Timeout waiting SID/MID result";
-    LOG_WARN("{}", error);
-    return UNSPECIFIED_ERROR;
-}
-
-}
-
 libcdoc::result_t
-libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-    const std::string& url, const std::string& rp_uuid, const std::string& rp_name,
-    const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
+libcdoc::NetworkBackend::signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+    const std::string& url, const SessionData& session,
+    const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
+    // Start authentication:
+    //
+    // semanticsIdentifier: PNOEE-XYZ...
+    // certificateLevel: QUALIFIED
+    // signatureProtocol: ACSP_V2
+    // signatureProtocolParameters:
+    //   rpChallenge: S480uRoCX4pAb1tWqAy8WGl/AWE1RnqaP2y5iamCDhlCyQrMTVa5d8Dh34sZ+UePHXRNKTwz7QTvsIL1ls05AQ==
+    //   signatureAlgorithm: rsassa-pss
+    //   signatureAlgorithmParameters:
+    //     hashAlgorithm: SHA-512
+    // interactions: W3sidHlwZSI6ImNvbmZpcm1hdGlvbk1lc3NhZ2UiLCJkaXNwbGF5VGV4dDIwMCI6IkRlY3J5cHRpbmcgY29udGFpbmVyIGZpbGUgXCJ0ZXN0LnR4dFwiIn0seyJ0eXBlIjoiZGlzcGxheVRleHRBbmRQSU4iLCJkaXNwbGF5VGV4dDYwIjoiRGVjcnlwdGluZyBjb250YWluZXIgZmlsZSBcInRlc3QudHh0XCIifV0=
+    // vcType: numeric4
+    //
     std::string certificateLevel = "QUALIFIED";
-    auto nonce_bytes = Crypto::random(16);
-    if (nonce_bytes.empty())
-        return libcdoc::CRYPTO_ERROR;
-    std::string nonce = libcdoc::toBase64(nonce_bytes);
+    std::string hashAlgorithm = "SHA-256";
+    if (!rcpt_id.starts_with("etsi/")) return libcdoc::INTERNAL_ERROR;
+    std::string semanticIdentifier = rcpt_id.substr(5);
 
+    SessionToken stoken(session.token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
+
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
+
+    picojson::object sap = {
+        {"hashAlgorithm", picojson::value(hashAlgorithm)}
+    };
+    picojson::object spp = {
+        {"rpChallenge", picojson::value(toBase64(digest))},
+        {"signatureAlgorithm", picojson::value("rsassa-pss")},
+        {"signatureAlgorithmParameters", picojson::value(sap)}
+    };
+
+    // The confirmation text shown on the user's device (displayText200).
+    // Fall back to the generic prompt when no text was configured.
+    const std::string display_text = text.empty() ? std::string(CDOC2_DEFAULT_DISPLAY_TEXT) : text;
+    // displayText200 allows at most 200 characters.
+    size_t n_chars = 0, n_ext = 0;
+    bool gsm7 = true, bmp = true;
+    result_t result = libcdoc::classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) {
+        error = "Display text is not valid UTF-8";
+        LOG_WARN("{}", error);
+        return result;
+    }
+    if (n_chars > 200) {
+        error = FORMAT("Display text too long ({} characters, max 200)", n_chars);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
+    // Build the interactions array with picojson so the text is properly
+    // JSON-escaped.
+    picojson::object inter = {
+        {"type", picojson::value("confirmationMessageAndVerificationCodeChoice")},
+        {"displayText200", picojson::value(display_text)}
+    };
+    picojson::array inter_arr = {
+        picojson::value(inter)
+    };
+    std::string inter_str = picojson::value(inter_arr).serialize();
+    LOG_DBG("Interactions: {}", inter_str);
+    inter_str = toBase64((const uint8_t *) inter_str.data(), inter_str.size());
     picojson::object obj = {
-        {"relyingPartyUUID", picojson::value(rp_uuid)},
-        {"relyingPartyName", picojson::value(rp_name)},
+        {"semanticsIdentifier", picojson::value(semanticIdentifier)},
         {"certificateLevel", picojson::value(certificateLevel)},
-        {"nonce", picojson::value(nonce)}
+        {"signatureProtocol", picojson::value("ACSP_V2")},
+        {"signatureProtocolParameters", picojson::value(spp)},
+        {"interactions", picojson::value(inter_str)},
+        {"vcType", picojson::value("numeric4")}
     };
     picojson::value query(obj);
-    LOG_TRACE("JSON:{}", query.serialize());
-
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
-    LOG_TRACE("URL:{}", url);
-    LOG_TRACE("HOST:{}", host);
-    LOG_TRACE("PORT:{}", port);
-    LOG_TRACE("PATH:{}", path);
-
-    LOG_TRACE("Starting client: {} {}", host, port);
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
-
-    //
-    // Let user choose certificate (if multiple)
-    //
-    std::string full = path + "/certificatechoice/" + rcpt_id;
-    LOG_TRACE("SmartID path: {}", full);
-    httplib::Headers hdrs;
-    httplib::Response rsp;
-    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
-    if (result != libcdoc::OK) return result;
-
-
-    LOG_TRACE("Response: {}", rsp.body);
-    picojson::value v;
-    std::string parse_err = picojson::parse(v, rsp.body);
-    if (!parse_err.empty()) {
-        error = FORMAT("JSON parse error: {}", parse_err);
-        LOG_ERROR("{}", error);
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    if (!v.is<picojson::object>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    picojson::value w = v.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string sessionID  = w.get<std::string>();
-    LOG_TRACE("SessionID: {}", sessionID);
-
-    SIDResponse sidrsp;
-    result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
-    if (result != OK) return result;
-    LOG_TRACE("Certificate: {}", sidrsp.cert);
-
-    //
-    // Sign
-    //
-    std::string_view algo_name = hashAlgorithmToSidMidName(algo);
-    if (algo_name.empty()) {
-        error = "Unsupported hash algorithm for Smart-ID";
-        LOG_ERROR("Unsupported hash algorithm for Smart-ID: {}",
-                  static_cast<int>(algo));
-        return libcdoc::WRONG_ARGUMENTS;
-    }
-
-    if (digest.empty()) {
-        error = "Empty digest";
-        LOG_ERROR("Empty digest passed to signSID");
-        return libcdoc::WRONG_ARGUMENTS;
-    }
+    LOG_DBG("JSON:{}", query.serialize());
 
     // Generate code
-    uint8_t b[32];
-    SHA256(digest.data(), digest.size(), b);
-    unsigned int code = ((b[30] << 8) | b[31]) % 10000;
-    result = showVerificationCode(code);
+    SIDMIDFeedback fb;
+    std::array<uint8_t, 32> b;
+    SHA256(digest.data(), digest.size(), b.data());
+    fb.code = ((b[30] << 8) | b[31]) % 10000;
+    result = showFeedback(fb);
     if (result != OK) return result;
 
-    picojson::object aio1 = {
-        {"type", picojson::value("confirmationMessageAndVerificationCodeChoice")},
-        {"displayText200", picojson::value("Do you want to decrypt the document")}
+    std::string query_str = query.serialize();
+    std::vector<uint8_t> body(query_str.cbegin(), query_str.cend());
+    std::map<std::string, std::string> headers = {
+        {"x-cdoc2-session-token", session_token_disclosed},
+        {"x-cdoc2-session-x5c", session.cert}
     };
-    picojson::array aio = {
-        picojson::value(aio1)
-    };
-    picojson::object qobj = {
-        {"relyingPartyUUID", picojson::value(rp_uuid)},
-        {"relyingPartyName", picojson::value(rp_name)},
-        {"hash", picojson::value(toBase64(digest))},
-        {"hashType", picojson::value(std::string(algo_name))},
-        {"allowedInteractionsOrder",
-            picojson::value(aio)
-        }
-    };
-    query = picojson::value(qobj);
-    LOG_TRACE("JSON:{}", query.serialize());
-    //
-    // Sign digest
-    //
-    full = path + "/authentication/" + rcpt_id;
-    LOG_TRACE("SmartID path: {}", full);
-    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
+    result = getSignResponse(url, "/sid/authenticate", body, headers, "/sid/session/");
     if (result != libcdoc::OK) return result;
-    LOG_TRACE("Response: {}", rsp.body);
-    parse_err = picojson::parse(v, rsp.body);
+
+    // Parse the COMPLETE response body
+    std::string response_body(body.cbegin(), body.cend());
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, response_body);
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid response";
+        LOG_WARN("Invalid response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    if (!v.is<picojson::object>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    w = v.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid SmartID response";
-        LOG_WARN("Invalid SmartID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    sessionID  = w.get<std::string>();
-    LOG_TRACE("SessionID: {}", sessionID);
 
-    sidrsp = {};
-    result = waitForResult(sidrsp, cli, path + "/session/", sessionID, 60, true);
+    // Check end result
+    picojson::object result_obj = getJsonObject(rsp_json, "result", result);
     if (result != OK) return result;
-    LOG_TRACE("Certificate: {}", sidrsp.cert);
-    LOG_TRACE("Signature: {}", sidrsp.signature);
+    std::string endResult = getJsonString(picojson::value(result_obj), "endResult", result);
+    if (result != OK) return result;
+    result = parseMIDSIDResult(endResult);
+    if (result == UNSPECIFIED_ERROR) {
+        error = FORMAT("unknown endResult value: {}", endResult);
+        LOG_WARN("{}", error);
+        return NetworkBackend::NETWORK_ERROR;
+    } else if (result != OK) {
+        LOG_WARN("EndResult is not OK: {}", endResult);
+        return result;
+    }
 
-    dst = fromBase64(sidrsp.signature);
-    cert = fromBase64(sidrsp.cert);
+    // Signature (optional field)
+    std::string signature;
+    picojson::object signature_json;
+    if (picojson::value sig = rsp_json.get("signature"); sig.is<picojson::object>()) {
+        signature = getJsonString(sig, "value", result);
+        if (result != OK) return result;
+        signature_json = sig.get<picojson::object>();
+        signature_json.erase("value");
+    }
+    // Interaction type
+    std::string inter_type_used = getJsonString(rsp_json, "interactionTypeUsed", result);
+    if (result != OK) return result;
+
+    // Certificate
+    picojson::object cert_obj = getJsonObject(rsp_json, "cert", result);
+    if (result != OK) return result;
+    std::string cert_b64 = getJsonString(picojson::value(cert_obj), "value", result);
+    if (result != OK) return result;
+
+    LOG_DBG("Certificate: {}", cert_b64);
+    LOG_DBG("Signature: {}", signature);
+
+    SHA256((uint8_t *) inter_str.c_str(), inter_str.size(), b.data());
+    std::string inter_hash_64 = toBase64(b.data(), b.size());
+
+    picojson::object sig_parms = {
+        {"interactionsDigest", picojson::value(inter_hash_64)},
+        {"interactionTypeUsed", picojson::value(inter_type_used)},
+        {"signature", picojson::value(signature_json)},
+    };
+
+    dst = fromBase64(signature);
+    cert = fromBase64(cert_b64);
+    params[X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS] = toBase64URL(picojson::value(sig_parms).serialize());
 
     return OK;
 }
 
 libcdoc::result_t
-libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-    const std::string& url, const std::string& rp_uuid, const std::string& rp_name, const std::string& phone,
-    const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
+libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+    const std::string& url, const std::string& phone, const SessionData& session,
+    const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo)
 {
+        //phoneNumber: '+3726234566'
+        //nationalIdentityNumber: '38412319871'
+        //hash: 0nbgC2fVdLVQFZJdBbmG8B+kXnZtX1FSTM59UVDQ4Gc=
+        //hashType: SHA256
+        //language: ENG
+        //displayText: Decrypting container file "test.txt"
+        //displayTextFormat: GSM-7
+
     // Validate rcpt_id BEFORE doing anything else (network setup, key
     // material, etc.). The previous implementation called
     // rcpt_id.substr(11, 11) which throws std::out_of_range when
@@ -925,32 +1319,22 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
         return libcdoc::WRONG_ARGUMENTS;
     }
 
-    std::string certificateLevel = "QUALIFIED";
-    auto nonce_bytes = Crypto::random(16);
-    if (nonce_bytes.empty())
-        return libcdoc::CRYPTO_ERROR;
-    std::string nonce = libcdoc::toBase64(nonce_bytes);
+    SessionToken stoken(session.token);
+    std::string session_token_disclosed = stoken.discloseForUrl(url);
 
-    std::string host, path;
-    int port;
-    int result = libcdoc::parseURL(url, host, port, path);
-    if (result != libcdoc::OK) return result;
-    LOG_TRACE("URL:{}", url);
-    LOG_TRACE("HOST:{}", host);
-    LOG_TRACE("PORT:{}", port);
-    LOG_TRACE("PATH:{}", path);
-
-    LOG_TRACE("Starting client: {} {}", host, port);
-    httplib::SSLClient cli(host, port);
-    if (result = applySSLTimeout(cli, this); result != OK) return result;
-    result = setPeerCertificates(cli, this, buildURL(host, port));
-    if (result != OK) return result;
-    if (result = setProxy(cli, this); result != OK) return result;
+    // S10: never send an empty session token header. A missing disclosure
+    // means the token is malformed or the server is not authorized for this
+    // session - fail before making the request.
+    if (session_token_disclosed.empty()) {
+        error = FORMAT("Session token has no disclosure for {}", url);
+        LOG_WARN("{}", error);
+        return libcdoc::DATA_FORMAT_ERROR;
+    }
 
     //
     // Authenticate
     //
-    std::string_view algo_name = hashAlgorithmToSidMidName(algo);
+    std::string_view algo_name = hashAlgorithmToMidName(algo);
     if (algo_name.empty()) {
         error = "Unsupported hash algorithm for Mobile-ID";
         LOG_ERROR("Unsupported hash algorithm for Mobile-ID: {}",
@@ -959,64 +1343,127 @@ libcdoc::NetworkBackend::signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>
     }
 
     // Generate verification code. digest is guaranteed non-empty above.
-    unsigned int code = (((digest[0] & 0xfc) << 5) | (digest[digest.size() - 1] & 0x7f));
-    result = showVerificationCode(code);
+    SIDMIDFeedback fb;
+    fb.code = (((digest[0] & 0xfc) << 5) | (digest[digest.size() - 1] & 0x7f));
+    result_t result = showFeedback(fb);
     if (result != OK) return result;
 
+    // The confirmation text shown on the user's device (displayText).
+    // Fall back to the generic prompt when no text was configured.
+    const std::string display_text = text.empty() ? std::string(CDOC2_DEFAULT_DISPLAY_TEXT) : text;
+    // Choose the encoding: GSM-7 when the text is fully representable in
+    // the GSM 03.38 alphabet, UCS-2 otherwise. Per the MID API the field
+    // is limited to 100 characters in GSM-7 (of which at most 5 from the
+    // extension table) or 50 characters in UCS-2.
+    size_t n_chars = 0, n_ext = 0;
+    bool gsm7 = true, bmp = true;
+    result = libcdoc::classifyDisplayText(display_text, n_chars, n_ext, gsm7, bmp);
+    if (result != OK) {
+        error = "Display text is not valid UTF-8";
+        LOG_WARN("{}", error);
+        return result;
+    }
+    const char *text_format;
+    if (gsm7) {
+        if (n_chars > 100 || n_ext > 5) {
+            error = FORMAT("Display text too long for GSM-7 ({} characters, {} extension)", n_chars, n_ext);
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        text_format = "GSM-7";
+    } else {
+        if (!bmp) {
+            // UCS-2 cannot represent codepoints above U+FFFF.
+            error = "Display text contains characters not representable in UCS-2";
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        if (n_chars > 50) {
+            error = FORMAT("Display text too long for UCS-2 ({} characters, max 50)", n_chars);
+            LOG_WARN("{}", error);
+            return libcdoc::DATA_FORMAT_ERROR;
+        }
+        text_format = "UCS-2";
+    }
+
     picojson::object qobj = {
-        {"relyingPartyUUID", picojson::value(rp_uuid)},
-        {"relyingPartyName", picojson::value(rp_name)},
         {"phoneNumber", picojson::value(phone)},
         {"nationalIdentityNumber", picojson::value(id_num)},
         {"hash", picojson::value(toBase64(digest))},
         {"hashType", picojson::value(std::string(algo_name))},
         {"language", picojson::value("ENG")},
-        {"displayText", picojson::value("Tahad dekryptida?")},
-        {"displayTextFormat", picojson::value("GSM-7")}
+        {"displayText", picojson::value(display_text)},
+        {"displayTextFormat", picojson::value(text_format)}
     };
     picojson::value query = picojson::value(qobj);
-    LOG_TRACE("JSON:{}", query.serialize());
-    //
-    // Sign digest
-    //
-    std::string full = path + "/authentication";
-    LOG_TRACE("Mobile ID path: {}", full);
-    httplib::Headers hdrs;
-    httplib::Response rsp;
-    result = httpPost(cli, full, hdrs, query.serialize(), rsp);
-    if (result != libcdoc::OK) return result;
-    LOG_TRACE("Response: {}", rsp.body);
+    LOG_DBG("JSON:{}", query.serialize());
 
-    picojson::value v;
-    parse_err = picojson::parse(v, rsp.body);
+    std::string query_str = query.serialize();
+    std::vector<uint8_t> body(query_str.cbegin(), query_str.cend());
+    std::map<std::string, std::string> headers = {
+        {"x-cdoc2-session-token", session_token_disclosed},
+        {"x-cdoc2-session-x5c", session.cert}
+    };
+    result = getSignResponse(url, "/mid/authenticate", body, headers, "/mid/session/");
+    if (result != libcdoc::OK) return result;
+
+    // Parse the COMPLETE response body
+    std::string response_body(body.cbegin(), body.cend());
+    picojson::value rsp_json;
+    std::string parse_err = picojson::parse(rsp_json, response_body);
     if (!parse_err.empty()) {
         error = FORMAT("JSON parse error: {}", parse_err);
         LOG_ERROR("{}", error);
+        return NETWORK_ERROR;
+    }
+    if (!rsp_json.is<picojson::object>()) {
+        error = "Invalid response";
+        LOG_WARN("Invalid response");
         return NetworkBackend::NETWORK_ERROR;
     }
-    if (!v.is<picojson::object>()) {
-        error = "Invalid Mobile ID response";
-        LOG_WARN("Invalid Mobile ID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    picojson::value w = v.get("sessionID");
-    if (!w.is<std::string>()) {
-        error = "Invalid Mobile ID response";
-        LOG_WARN("Invalid Mobile ID response");
-        return NetworkBackend::NETWORK_ERROR;
-    }
-    std::string sessionID  = w.get<std::string>();
-    LOG_TRACE("SessionID: {}", sessionID);
 
-    SIDResponse sidrsp;
-    result = waitForResult(sidrsp, cli, path + "/authentication/session/", sessionID, 60, false);
+    // Check end result
+    std::string endResult = getJsonString(rsp_json, "result", result);
+    if (result != OK) return result;
+    result = parseMIDSIDResult(endResult);
+    if (result == UNSPECIFIED_ERROR) {
+        error = FORMAT("unknown endResult value: {}", endResult);
+        LOG_WARN("{}", error);
+        return NetworkBackend::NETWORK_ERROR;
+    } else if (result != OK) {
+        LOG_WARN("EndResult is not OK: {}", endResult);
+        return result;
+    }
+
+    // Signature
+    picojson::object sig_obj = getJsonObject(rsp_json, "signature", result);
+    if (result != OK) return result;
+    std::string signature = getJsonString(picojson::value(sig_obj), "value", result);
+    if (result != OK) return result;
+    std::string cert_b64 = getJsonString(rsp_json, "cert", result);
     if (result != OK) return result;
 
-    LOG_TRACE("Certificate: {}", sidrsp.cert);
-    LOG_TRACE("Signature: {}", sidrsp.signature);
+    LOG_DBG("Certificate: {}", cert_b64);
+    LOG_DBG("Signature: {}", signature);
 
-    dst = fromBase64(sidrsp.signature);
-    cert = fromBase64(sidrsp.cert);
+    // Extract MID-specific response headers
+    auto get_hdr = [&](const std::string& name) -> std::string {
+        if (auto it = headers.find(name); it != headers.end())
+            return it->second;
+        return {};
+    };
+    params[X_RP_SIGNED_HASH] = get_hdr("x-rp-signed-hash");
+    params[X_RP_NAME] = get_hdr("x-rp-name");
+    params[HDR_SIGNATURE_INPUT] = get_hdr("signature-input");
+    params[HDR_SIGNATURE] = get_hdr("signature");
+
+    LOG_DBG("x-rp-signed-hash: {}", params[X_RP_SIGNED_HASH]);
+    LOG_DBG("x-rp-name: {}", params[X_RP_NAME]);
+    LOG_DBG("Signature-Input: {}", params[HDR_SIGNATURE_INPUT]);
+    LOG_DBG("Signature: {}", params[HDR_SIGNATURE]);
+
+    dst = fromBase64(signature);
+    cert = fromBase64(cert_b64);
 
     return OK;
 }

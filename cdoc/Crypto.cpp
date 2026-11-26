@@ -15,17 +15,17 @@
 #include <openssl/aes.h>
 #include <openssl/err.h>
 #include <openssl/hmac.h>
+#include <openssl/ecdsa.h>
 #include <openssl/kdf.h>
+#include <openssl/param_build.h>
 #include <openssl/opensslv.h>
 #include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 
-#if OPENSSL_VERSION_NUMBER >= 0x30200000L
 #include <openssl/core_names.h>
 #include <openssl/params.h>
-#endif
 
 #include <array>
 #include <chrono>
@@ -43,6 +43,119 @@ const std::string Crypto::SHA512_MTH = "http://www.w3.org/2001/04/xmlenc#sha512"
 const std::string Crypto::RSA_MTH = "http://www.w3.org/2001/04/xmlenc#rsa-1_5";
 const std::string Crypto::CONCATKDF_MTH = "http://www.w3.org/2009/xmlenc11#ConcatKDF";
 const std::string Crypto::AGREEMENT_MTH = "http://www.w3.org/2009/xmlenc11#ECDH-ES";
+
+// Convert a raw ECDSA r||s signature (JWS/RFC9421 convention) to the DER
+// SEQUENCE-of-INTEGERs form expected by OpenSSL.
+static std::vector<uint8_t>
+ecRawSigToDer(const std::vector<uint8_t> &signature)
+{
+    if (signature.empty() || signature.size() % 2 != 0)
+        return {};
+    size_t half = signature.size() / 2;
+    auto sig = make_unique_ptr<ECDSA_SIG_free>(ECDSA_SIG_new());
+    if (!sig)
+        return {};
+    if (ECDSA_SIG_set0(sig.get(),
+                       BN_bin2bn(signature.data(), int(half), nullptr),
+                       BN_bin2bn(signature.data() + half, int(half), nullptr)) != 1)
+        return {};
+    int len = i2d_ECDSA_SIG(sig.get(), nullptr);
+    if (len <= 0)
+        return {};
+    auto der = std::vector<uint8_t>(static_cast<size_t>(len));
+    uint8_t *out = der.data();
+    if (i2d_ECDSA_SIG(sig.get(), &out) != len)
+        return {};
+    return der;
+}
+
+bool
+Crypto::validateSignature(const std::vector<uint8_t> &cert_der,
+                          const std::vector<uint8_t> &data,
+                          const std::vector<uint8_t> &signature,
+                          SignatureAlgorithm algo)
+{
+    const unsigned char *ptr = cert_der.data();
+    auto x509 = make_unique_ptr<X509_free>(d2i_X509(nullptr, &ptr, long(cert_der.size())));
+    if (!x509)
+        return false;
+    auto pkey = make_unique_ptr<EVP_PKEY_free>(X509_get_pubkey(x509.get()));
+    if (!pkey)
+        return false;
+    auto ctx = make_unique_ptr<EVP_PKEY_CTX_free>(EVP_PKEY_CTX_new(pkey.get(), nullptr));
+    if (!ctx)
+        return false;
+    switch (algo) {
+    case SignatureAlgorithm::RSASSA_PSS_SHA256: {
+        // The provider's one-shot EVP_PKEY_verify for RSA requires the
+        // input to be the message digest already, so hash `data` first.
+        uint8_t md_value[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+        if (EVP_Digest(data.data(), data.size(), md_value, &md_len, EVP_sha256(), nullptr) != 1)
+            return false;
+        if (EVP_PKEY_verify_init(ctx.get()) != 1)
+            return false;
+        if (EVP_PKEY_CTX_set_rsa_padding(ctx.get(), RSA_PKCS1_PSS_PADDING) <= 0 ||
+            EVP_PKEY_CTX_set_signature_md(ctx.get(), EVP_sha256()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.get(), EVP_sha256()) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx.get(), RSA_PSS_SALTLEN_DIGEST) <= 0)
+            return false;
+        return EVP_PKEY_verify(ctx.get(), signature.data(), signature.size(), md_value, md_len) == 1;
+    }
+    case SignatureAlgorithm::ES256: {
+        // ECDSA verifies the given digest directly; the signature arrives as
+        // raw r||s (JWS convention) and must be re-wrapped into DER.
+        if (data.size() != 32)
+            return false;
+        auto der = ecRawSigToDer(signature);
+        if (der.empty())
+            return false;
+        if (EVP_PKEY_verify_init(ctx.get()) != 1)
+            return false;
+        if (EVP_PKEY_CTX_set_signature_md(ctx.get(), EVP_sha256()) <= 0)
+            return false;
+        return EVP_PKEY_verify(ctx.get(), der.data(), der.size(), data.data(), data.size()) == 1;
+    }
+    }
+    return false;
+}
+
+bool
+Crypto::validateSignatureECPoint(const std::vector<uint8_t> &pubkey_point,
+                                 const std::vector<uint8_t> &digest,
+                                 const std::vector<uint8_t> &signature)
+{
+    if (pubkey_point.size() != 65 || pubkey_point[0] != 0x04 || digest.size() != 32)
+        return false;
+    auto ctx = make_unique_ptr<EVP_PKEY_CTX_free>(
+        EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr));
+    if (!ctx)
+        return false;
+    // The group name string must outlive EVP_PKEY_fromdata (it is referenced,
+    // not copied)
+    char group_name[] = "P-256";
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, group_name, 0),
+        OSSL_PARAM_construct_octet_string(OSSL_PKEY_PARAM_PUB_KEY, (void *) pubkey_point.data(), pubkey_point.size()),
+        OSSL_PARAM_construct_end()
+    };
+    EVP_PKEY *raw_pkey = nullptr;
+    if (EVP_PKEY_fromdata_init(ctx.get()) != 1 ||
+        EVP_PKEY_fromdata(ctx.get(), &raw_pkey, EVP_PKEY_PUBLIC_KEY, params) != 1)
+        return false;
+    auto pkey = make_unique_ptr<EVP_PKEY_free>(raw_pkey);
+    auto vctx = make_unique_ptr<EVP_PKEY_CTX_free>(EVP_PKEY_CTX_new(pkey.get(), nullptr));
+    if (!vctx)
+        return false;
+    auto der = ecRawSigToDer(signature);
+    if (der.empty())
+        return false;
+    if (EVP_PKEY_verify_init(vctx.get()) != 1)
+        return false;
+    if (EVP_PKEY_CTX_set_signature_md(vctx.get(), EVP_sha256()) <= 0)
+        return false;
+    return EVP_PKEY_verify(vctx.get(), der.data(), der.size(), digest.data(), digest.size()) == 1;
+}
 
 std::vector<uint8_t> Crypto::AESWrap(const std::vector<uint8_t> &key, const std::vector<uint8_t> &data, bool encrypt)
 {

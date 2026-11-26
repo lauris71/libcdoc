@@ -3,6 +3,7 @@
 
 #include "Crypto.h"
 #include "CryptoBackend.h"
+#include "Certificate.h"
 #include "Utils.h"
 #include "utils/memory.h"
 
@@ -99,6 +100,32 @@ CryptoBackend::getKeyMaterial(std::vector<uint8_t>& key_material, const std::vec
 
     LOG_TRACE_KEY("Key material: {}", key_material);
 
+    return OK;
+}
+
+libcdoc::result_t
+CryptoBackend::validateCertificate(const std::string& user_id, const std::vector<uint8_t>& cert_der)
+{
+    // Identity part of etsi/PNOEE-... (or used as-is if there is no prefix)
+    std::string id = user_id.starts_with("etsi/") ? user_id.substr(5) : user_id;
+    if (id.empty()) {
+        LOG_WARN("validateCertificate: empty user id");
+        return INVALID_PARAMS;
+    }
+    Certificate cert(cert_der);
+    if (!cert) {
+        LOG_WARN("validateCertificate: cannot parse certificate");
+        return CRYPTO_ERROR;
+    }
+    std::string serial = cert.getName(NID_serialNumber);
+    if (serial.empty()) {
+        LOG_WARN("validateCertificate: certificate subject has no serialNumber");
+        return CRYPTO_ERROR;
+    }
+    if (serial != id) {
+        LOG_WARN("validateCertificate: certificate identity '{}' does not match '{}'", serial, id);
+        return CRYPTO_ERROR;
+    }
     return OK;
 }
 

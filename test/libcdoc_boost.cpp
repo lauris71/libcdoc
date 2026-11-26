@@ -15,7 +15,14 @@
 #include <Utils.h>
 #include <ZStream.h>
 #include <XmlReader.h>
+#include <openssl/sha.h>
+
 #include <cdoc/Crypto.h>
+#include <cdoc/Io.h>
+#include <cdoc/KeyShares.h>
+#include <cdoc/CDocWriter.h>
+#include <cdoc/Configuration.h>
+#include <cdoc/NetworkBackend.h>
 
 #include <libxml/parser.h>
 
@@ -351,6 +358,44 @@ gen_random_filename()
     std::u16string u16(len, ' ');
     for (int i = 0; i < len; i++) u16[i] = std::rand() % 10000 + 32;
     return utf16_to_utf8(u16);
+}
+
+BOOST_AUTO_TEST_CASE(KeyCapsulesUseProviderTransport)
+{
+    struct Network final : libcdoc::NetworkBackend {
+        bool getCalled = false;
+        bool postCalled = false;
+
+        libcdoc::result_t get(const std::string&, std::vector<uint8_t>&,
+            std::map<std::string, std::string>&, bool) final
+        {
+            getCalled = true;
+            return libcdoc::NOT_IMPLEMENTED;
+        }
+        libcdoc::result_t post(const std::string&, std::vector<uint8_t>&,
+            std::map<std::string, std::string>&, bool) final
+        {
+            postCalled = true;
+            return libcdoc::NOT_IMPLEMENTED;
+        }
+        libcdoc::result_t getClientTLSCertificate(std::vector<uint8_t>& cert) final
+        {
+            cert.clear();
+            return libcdoc::OK;
+        }
+        libcdoc::result_t getPeerTLSCertificates(std::vector<std::vector<uint8_t>>&) final
+        {
+            // Stop before any connection is attempted.
+            return libcdoc::CONFIGURATION_ERROR;
+        }
+    } network;
+    std::vector<uint8_t> key;
+    BOOST_CHECK_EQUAL(network.fetchKey(key, "https://localhost", "capsule"), libcdoc::CRYPTO_ERROR);
+    BOOST_CHECK(!network.getCalled);
+    libcdoc::NetworkBackend::CapsuleInfo capsule;
+    BOOST_CHECK_EQUAL(network.sendKey(capsule, "https://localhost", {}, {}, "rsa", 0),
+        libcdoc::CONFIGURATION_ERROR);
+    BOOST_CHECK(!network.postCalled);
 }
 
 BOOST_AUTO_TEST_SUITE(ToolFilenames)
@@ -948,6 +993,44 @@ BOOST_AUTO_TEST_CASE(InvalidInputReturnsEmpty)
     BOOST_CHECK(libcdoc::fromBase64("QQ===").empty());
     // Padding in the middle.
     BOOST_CHECK(libcdoc::fromBase64("QQ==QQ==").empty());
+}
+
+// S2 regression: same non-throwing contract for fromBase64URL (session
+// token parts, SD-JWT disclosures - all server-controlled).
+BOOST_AUTO_TEST_CASE(UrlValidInput)
+{
+    // "hello world" in unpadded base64url (fromBase64URL pads it).
+    std::vector<uint8_t> expected {'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'};
+    BOOST_CHECK(libcdoc::fromBase64URL("aGVsbG8gd29ybGQ") == expected);
+    BOOST_CHECK(libcdoc::fromBase64URL("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(UrlInvalidInputReturnsEmpty)
+{
+    // Characters outside the base64url alphabet.
+    BOOST_CHECK(libcdoc::fromBase64URL("###").empty());
+    BOOST_CHECK(libcdoc::fromBase64URL("aGVsbG8+//").empty());
+    // Padding character in the middle hits the alphabet check.
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ==QQ").empty());
+    // Impossible length.
+    BOOST_CHECK(libcdoc::fromBase64URL("A").empty());
+    // Trailing padding is tolerated (RFC 4648 allows '=' in base64url):
+    // fromBase64URL strips it before decoding, so "QQ===" == "QQ" == {0x41}.
+    std::vector<uint8_t> expected {0x41};
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ===") == expected);
+    BOOST_CHECK(libcdoc::fromBase64URL("QQ") == expected);
+}
+
+// S2 regression: decodeTicket parses server-issued JWTs; malformed input
+// must yield an empty string, not an exception.
+BOOST_AUTO_TEST_CASE(DecodeTicketInvalidReturnsEmpty)
+{
+    BOOST_CHECK(libcdoc::decodeTicket("").empty());
+    BOOST_CHECK(libcdoc::decodeTicket("not-a-jwt").empty());
+    // Three parts but payload is not valid base64url JSON.
+    BOOST_CHECK(libcdoc::decodeTicket("AAA.###.BBB").empty());
+    // Valid base64url parts but the payload is not JSON.
+    BOOST_CHECK(libcdoc::decodeTicket("dHlw.bm90LWpzb24.c2ln").empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1557,6 +1640,34 @@ BOOST_AUTO_TEST_CASE(RejectsNtfsAdsColon)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE(JoinUrl)
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithoutTrailingSlash)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443", "/key-capsules"),
+                      "https://host:443/key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithTrailingSlash)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443/", "/key-capsules"),
+                      "https://host:443/key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsBaseWithMultipleTrailingSlashes)
+{
+    // Only one trailing slash is stripped; the rest is part of the path.
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("https://host:443//", "/key-capsules"),
+                      "https://host:443//key-capsules");
+}
+
+BOOST_AUTO_TEST_CASE(JoinsEmptyBase)
+{
+    BOOST_CHECK_EQUAL(libcdoc::joinUrl("", "/key-capsules"), "/key-capsules");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 BOOST_AUTO_TEST_SUITE(XMLReaderEntityHandling)
 
 BOOST_AUTO_TEST_CASE(ReadsPlainXml)
@@ -1785,6 +1896,116 @@ BOOST_AUTO_TEST_CASE(RejectsOversizedNationalId)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// S1 regression: the session token's disclosures are the allowlist of share
+// servers authorized by the authentication server. The reader must refuse to
+// contact (and send credentials to) any container-supplied share server that
+// has no disclosure. Matching is by origin (scheme, host, port).
+BOOST_AUTO_TEST_SUITE(SessionTokenAuthorization)
+
+// ["salt","https://share1.example.com"]
+static const char *DISC1 = "WyJzYWx0IiwiaHR0cHM6Ly9zaGFyZTEuZXhhbXBsZS5jb20iXQ";
+// ["salt","https://share2.example.com:8443/v1"]
+static const char *DISC2 = "WyJzYWx0IiwiaHR0cHM6Ly9zaGFyZTIuZXhhbXBsZS5jb206ODQ0My92MSJd";
+
+static libcdoc::SessionToken makeToken()
+{
+    std::string str = std::string("jwt~aud~") + DISC1 + "~" + DISC2;
+    return libcdoc::SessionToken(str);
+}
+
+BOOST_AUTO_TEST_CASE(AuthorizedServers)
+{
+    auto st = makeToken();
+    // Exact origin.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com"));
+    // Trailing slash and sub-paths of the same origin.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com/"));
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com/key-shares"));
+    // Host names are case-insensitive.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://SHARE1.EXAMPLE.COM"));
+    // Explicit default port matches the implicit one.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com:443"));
+    // Disclosure with a non-default port and a path.
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share2.example.com:8443"));
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share2.example.com:8443/other"));
+}
+
+BOOST_AUTO_TEST_CASE(UnauthorizedServers)
+{
+    auto st = makeToken();
+    // Unknown host.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://evil.com"));
+    // Domain-suffix confusion.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share1.example.com.evil.com"));
+    // Subdomain is a different origin.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://sub.share1.example.com"));
+    // Wrong port.
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share2.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://share2.example.com:8444"));
+    // Plain http is never authorized (parseURL enforces https).
+    BOOST_CHECK(!st.hasDisclosureForUrl("http://share1.example.com"));
+    // Not a URL at all.
+    BOOST_CHECK(!st.hasDisclosureForUrl("share1.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl(""));
+}
+
+// S7 regression: discloseForUrl binds a disclosure to its server by origin
+// (scheme, host, port) - not by substring. A disclosure for
+// share1.example.com must not be disclosed to share1.example.com.evil.com.
+BOOST_AUTO_TEST_CASE(DiscloseForUrlBindsByOrigin)
+{
+    auto st = makeToken();
+    // Exact origin -> the matching disclosure is appended.
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share1.example.com"),
+                      std::string("jwt~aud~") + DISC1 + "~");
+    // Sub-path of the same origin still matches (nonces live on the path).
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share1.example.com/key-shares"),
+                      std::string("jwt~aud~") + DISC1 + "~");
+    // Non-default port matches only with the same port.
+    BOOST_CHECK_EQUAL(st.discloseForUrl("https://share2.example.com:8443"),
+                      std::string("jwt~aud~") + DISC2 + "~");
+    // Domain-suffix confusion -> no disclosure.
+    BOOST_CHECK(st.discloseForUrl("https://share1.example.com.evil.com").empty());
+    // Unknown host / subdomain / wrong port / plain http -> no disclosure.
+    BOOST_CHECK(st.discloseForUrl("https://evil.com").empty());
+    BOOST_CHECK(st.discloseForUrl("https://sub.share1.example.com").empty());
+    BOOST_CHECK(st.discloseForUrl("https://share2.example.com").empty());
+    BOOST_CHECK(st.discloseForUrl("http://share1.example.com").empty());
+}
+
+BOOST_AUTO_TEST_CASE(MalformedDisclosuresAreSkipped)
+{
+    // Bad base64url and non-JSON disclosures must not throw or match.
+    std::string str = std::string("jwt~aud~###~bm90LWpzb24~") + DISC1;
+    libcdoc::SessionToken st(str);
+    BOOST_CHECK(st.hasDisclosureForUrl("https://share1.example.com"));
+    BOOST_CHECK(!st.hasDisclosureForUrl("https://evil.com"));
+}
+
+BOOST_AUTO_TEST_CASE(EmptyOrDisclosurelessTokenFailsClosed)
+{
+    libcdoc::SessionToken empty("");
+    BOOST_CHECK(!empty.hasDisclosureForUrl("https://share1.example.com"));
+    // jwt~aud with no disclosures.
+    libcdoc::SessionToken twopart("jwt~aud");
+    BOOST_CHECK(!twopart.hasDisclosureForUrl("https://share1.example.com"));
+}
+
+// S10 regression: malformed tokens (fewer than 3 parts) must disclose
+// nothing; callers treat an empty disclosure as a hard error and never send
+// an empty x-cdoc2-session-token header.
+BOOST_AUTO_TEST_CASE(MalformedTokenDisclosesNothing)
+{
+    libcdoc::SessionToken empty("");
+    BOOST_CHECK(empty.discloseForUrl("https://share1.example.com").empty());
+    libcdoc::SessionToken bare("jwt");
+    BOOST_CHECK(bare.discloseForUrl("https://share1.example.com").empty());
+    libcdoc::SessionToken twopart("jwt~aud");
+    BOOST_CHECK(twopart.discloseForUrl("https://share1.example.com").empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // Regression coverage for the constant-time PKCS#1 v1.5 unpadding used by
 // the RSA implicit-rejection path (N1 in SecurityReview_Kilo_2026-07.md).
 // The index-clamping mask in unpadPKCS1v15CT was a single byte (0x00/0xFF)
@@ -1882,6 +2103,609 @@ BOOST_AUTO_TEST_CASE(NoSeparatorReturnsSynthetic)
     std::vector<uint8_t> dst;
     BOOST_REQUIRE_EQUAL(libcdoc::Crypto::rsaImplicitRejectFromEM(dst, em, {0x01}, synth, expected_len), libcdoc::OK);
     BOOST_CHECK(dst == synth);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S5 regression: a keyshare recipient with fewer than 2 share servers would
+// hand the complete KEK to a single server (the XOR split degenerates).
+// CDoc2Writer must refuse with CONFIGURATION_ERROR.
+BOOST_AUTO_TEST_SUITE(KeyShareWriter)
+
+namespace {
+
+struct ShareServerConf : public libcdoc::Configuration {
+    std::string urls;
+    explicit ShareServerConf(std::string u) : urls(std::move(u)) {}
+    std::string getValue(std::string_view domain, std::string_view param) const override {
+        if (param == libcdoc::Configuration::SHARE_SERVER_URLS)
+            return urls;
+        return {};
+    }
+};
+
+// Avoids real network connections for the two-server control case.
+struct StubNetworkBackend : public libcdoc::NetworkBackend {
+    libcdoc::result_t sendShare(std::vector<uint8_t>&, const std::string&, const std::string&, const std::vector<uint8_t>&) override {
+        return libcdoc::NOT_IMPLEMENTED;
+    }
+};
+
+libcdoc::result_t encryptWithShareServers(libcdoc::Configuration& conf, libcdoc::NetworkBackend& network)
+{
+    std::vector<uint8_t> out;
+    libcdoc::VectorConsumer consumer(out);
+    libcdoc::CryptoBackend crypto;
+    std::unique_ptr<libcdoc::CDocWriter> writer(libcdoc::CDocWriter::createWriter(2, &consumer, false, &conf, &crypto, &network));
+    libcdoc::Recipient rcpt = libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039914");
+    if (auto rv = writer->addRecipient(rcpt); rv != libcdoc::OK)
+        return rv;
+    return writer->beginEncryption();
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(MissingServerListIsConfigurationError)
+{
+    ShareServerConf conf({});
+    StubNetworkBackend network;
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::CONFIGURATION_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(SingleServerIsConfigurationError)
+{
+    ShareServerConf conf(R"(["https://share1.example.com"])");
+    StubNetworkBackend network;
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::CONFIGURATION_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(TwoServersPassTheCountCheck)
+{
+    ShareServerConf conf(R"(["https://share1.example.com", "https://share2.example.com"])");
+    StubNetworkBackend network;
+    // Gets past the URL-count check and fails later in the (stubbed) share
+    // upload - i.e. NOT with CONFIGURATION_ERROR.
+    BOOST_CHECK_EQUAL(encryptWithShareServers(conf, network), libcdoc::NOT_IMPLEMENTED);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S13 regression: keyshare recipient ids must be valid ETSI semantics
+// identifiers - malformed ids must fail at encryption time, not at the
+// share server.
+BOOST_AUTO_TEST_SUITE(KeyShareRecipientValidation)
+
+BOOST_AUTO_TEST_CASE(RecipientIdValidated)
+{
+    // Valid Estonian and Lithuanian personal codes.
+    BOOST_CHECK(libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039903").validate());
+    BOOST_CHECK(libcdoc::Recipient::makeShare("label", "server1", "PNOLT-30303039903").validate());
+    // Malformed ids are rejected.
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "30303039903").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNOEE-3030303990A").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNO-30303039903").validate());
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "server1", "PNOEE-30303039903/../../x").validate());
+    // Missing server id is still rejected.
+    BOOST_CHECK(!libcdoc::Recipient::makeShare("label", "", "PNOEE-30303039903").validate());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S16 regression: the authentication verification code is the user's
+// consent anchor - a malformed server value must never render as 0.
+BOOST_AUTO_TEST_SUITE(BoundedUIntParsing)
+
+BOOST_AUTO_TEST_CASE(ParseBoundedUInt)
+{
+    int out = -1;
+    // Valid codes (Smart-ID/Mobile-ID numeric4 range 0000-9999).
+    BOOST_CHECK(libcdoc::parseBoundedUInt("6434", 9999, out) && out == 6434);
+    BOOST_CHECK(libcdoc::parseBoundedUInt("0000", 9999, out) && out == 0);
+    BOOST_CHECK(libcdoc::parseBoundedUInt("9999", 9999, out) && out == 9999);
+    // Malformed or out-of-range values are rejected (previously these
+    // rendered as verification code 0 via unchecked strtold).
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("10000", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("abc", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("12x", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("-1", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt(" 42", 9999, out));
+    BOOST_CHECK(!libcdoc::parseBoundedUInt("42 ", 9999, out));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S12 regression: untrusted values (container share ids, server nonces)
+// must be percent-encoded before being composed into request URLs.
+BOOST_AUTO_TEST_SUITE(UrlEncoding)
+
+BOOST_AUTO_TEST_CASE(ComponentEncoding)
+{
+    // Unreserved characters pass through unchanged.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("abcXYZ019-_.~"), "abcXYZ019-_.~");
+    // Typical share ids (hex) and nonces (base64url) are unchanged.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("a9e41c78982fc2079e7966ae885c1434"),
+                      "a9e41c78982fc2079e7966ae885c1434");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("xESQowIVG_5riudd-NBUpQ"), "xESQowIVG_5riudd-NBUpQ");
+    // Reserved and dangerous characters are percent-encoded.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("../admin"), "..%2Fadmin");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("x?y=1&z=2"), "x%3Fy%3D1%26z%3D2");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("a b"), "a%20b");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("100%"), "100%25");
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("x#y"), "x%23y");
+    // Empty input.
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent(""), "");
+    // Non-ASCII bytes are percent-encoded per byte (UTF-8 'ä').
+    BOOST_CHECK_EQUAL(libcdoc::urlEncodeComponent("\xc3\xa4"), "%C3%A4");
+}
+
+BOOST_AUTO_TEST_CASE(ShareUrlEncodesUntrustedParts)
+{
+    libcdoc::ShareData share("https://shares.example.com/", "1a81/../admin");
+    share.nonce = "no nce+here";
+    BOOST_CHECK_EQUAL(share.getURL(),
+                      "https://shares.example.com/key-shares/1a81%2F..%2Fadmin?nonce=no%20nce%2Bhere");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Unit tests for the SID/MID display-text helpers (decodeUtf8Char,
+// gsm7CharClass, classifyDisplayText) in Utils.h.
+BOOST_AUTO_TEST_SUITE(DisplayTextClassification)
+
+BOOST_AUTO_TEST_CASE(Utf8Decoding)
+{
+    size_t pos = 0;
+    uint32_t cp = 0;
+    // ASCII
+    BOOST_CHECK(libcdoc::decodeUtf8Char("A", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x41);
+    BOOST_CHECK_EQUAL(pos, 1u);
+    // 2-byte: õ (U+00F5)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xC3\xB5", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0xF5);
+    BOOST_CHECK_EQUAL(pos, 2u);
+    // 3-byte: € (U+20AC)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xE2\x82\xAC", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x20AC);
+    BOOST_CHECK_EQUAL(pos, 3u);
+    // 4-byte: 😀 (U+1F600)
+    pos = 0;
+    BOOST_CHECK(libcdoc::decodeUtf8Char("\xF0\x9F\x98\x80", pos, cp));
+    BOOST_CHECK_EQUAL(cp, 0x1F600);
+    BOOST_CHECK_EQUAL(pos, 4u);
+    // Malformed: lone continuation byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\x80", pos, cp));
+    // Malformed: truncated multi-byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\xC3", pos, cp));
+    // Malformed: invalid lead byte
+    pos = 0;
+    BOOST_CHECK(!libcdoc::decodeUtf8Char("\xFE", pos, cp));
+}
+
+BOOST_AUTO_TEST_CASE(Gsm7Classification)
+{
+    // Basic charset
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('A'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('z'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('0'), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(' '), 1);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00E4), 1);  // ä
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00F6), 1);  // ö
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00FC), 1);  // ü
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00C5), 1);  // Å
+    // Extension table
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x20AC), 2);  // €
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('^'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('{'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('}'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('\\'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('['), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(']'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('~'), 2);
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass('|'), 2);
+    // Not representable
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x60), 0);    // backtick
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x00F5), 0);  // õ (Estonian)
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x1F600), 0); // emoji
+    BOOST_CHECK_EQUAL(libcdoc::gsm7CharClass(0x4E2D), 0);  // CJK
+}
+
+BOOST_AUTO_TEST_CASE(ClassifyGsm7Text)
+{
+    size_t n_chars, n_ext;
+    bool gsm7, bmp;
+    // Pure ASCII
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("Hello", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 5u);
+    BOOST_CHECK_EQUAL(n_ext, 0u);
+    BOOST_CHECK(gsm7);
+    BOOST_CHECK(bmp);
+    // Estonian with ä ö ü (GSM-7 basic)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3\xA4\xC3\xB6\xC3\xBC", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 3u);
+    BOOST_CHECK(gsm7);
+    // Estonian with õ (not GSM-7)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3\xB5", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK(!gsm7);
+    BOOST_CHECK(bmp);
+    // Extension chars
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("a^b{c}", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 6u);
+    BOOST_CHECK_EQUAL(n_ext, 3u);
+    BOOST_CHECK(gsm7);
+    // Non-BMP (emoji)
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xF0\x9F\x98\x80", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK(!gsm7);
+    BOOST_CHECK(!bmp);
+    // Invalid UTF-8
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\x80", n_chars, n_ext, gsm7, bmp), libcdoc::DATA_FORMAT_ERROR);
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("\xC3", n_chars, n_ext, gsm7, bmp), libcdoc::DATA_FORMAT_ERROR);
+    // Empty string
+    BOOST_CHECK_EQUAL(libcdoc::classifyDisplayText("", n_chars, n_ext, gsm7, bmp), libcdoc::OK);
+    BOOST_CHECK_EQUAL(n_chars, 0u);
+    BOOST_CHECK(gsm7);
+    BOOST_CHECK(bmp);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S11 regression: Crypto::extract must implement HKDF-Extract(salt, IKM)
+// with the arguments in (IKM, salt) order. The keyshare KEK derivation
+// depends on this convention (spec: KEK_i_pm = HKDF_Extract(KeyMaterialSalt_i,
+// KeyMaterial_i)).
+BOOST_AUTO_TEST_SUITE(HkdfExtractConvention)
+
+BOOST_AUTO_TEST_CASE(Rfc5869TestCase1)
+{
+    // RFC 5869, Test Case 1 (SHA-256)
+    std::vector<uint8_t> ikm(22, 0x0b);
+    std::vector<uint8_t> salt {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c};
+    std::vector<uint8_t> prk = libcdoc::Crypto::extract(ikm, salt);
+    BOOST_CHECK_EQUAL(libcdoc::toHex(prk),
+        "077709362C2E32DF0DDC3F0DC47BBA6390B6C73BB50F9C3122EC844AD7C2B3E5");
+    // Swapped arguments must give a different result (guards the convention).
+    std::vector<uint8_t> swapped = libcdoc::Crypto::extract(salt, ikm);
+    BOOST_CHECK(prk != swapped);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// S8 regression: client-side validation of Smart-ID (ACSP_V2) auth tickets.
+// All vectors come from a cdoc-tool Smart-ID session log (2026-08-06) using a
+// Smart-ID TEST identity (serialNumber PNOEE-30303039903) - no real PII.
+// The signature was independently verified with OpenSSL.
+BOOST_AUTO_TEST_SUITE(SidTicketValidation)
+
+namespace {
+
+static const char *SID_CERT_B64 =
+        "MIIGqDCCBi6gAwIBAgIQfCl8dqrXBKOVGG0OTfMqTzAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0"
+        "aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkG"
+        "A1UEBhMCRUUwHhcNMjYwNTE4MTI0NTEzWhcNMjkwNTE3MTI0NTEyWjBXMQswCQYDVQQGEwJFRTEQMA4GA1UEAwwHVEVTVCxPSzEN"
+        "MAsGA1UEBAwEVEVTVDELMAkGA1UEKgwCT0sxGjAYBgNVBAUTEVBOT0VFLTMwMzAzMDM5OTAzMIIDIjANBgkqhkiG9w0BAQEFAAOC"
+        "Aw8AMIIDCgKCAwEAsbP7GwkiyLnVk4Xneq76DuDklgie/LurancUp5Mw13Pn7Sp/XTnie1PtWHIgZFsvKKHRWwHFB4H/XQisgZS7"
+        "yfRYVe2u3cfSuoH/W5oRpnAnojaltBQZRE6LM5WRhqI6+sdcoGM938AWEkr/gThU3DPSGglZ0mNEOR7SvVHtaKz4KAc1XQZtyHmo"
+        "iZ/eqNW7Nlj1s3A66jmEBTq4aiqlx0JXhfgmNV+1yw81vEwB0LHQLadp3Ca2G60bDMQItzWpe8pzd2gUv6smxjKq3MnVVsgYEAFw"
+        "kbeuDR3OLUbWbnSTAn9Y5DfDW30xRg4if1I+ruDWLicv5vJXsHCgjgUqLlk9/v+gIFuieJhczyZh9+FOSmCOREqrWOyGUNzCFruV"
+        "yg+Z6o8NRZkz9cNqFCUU7O3FnpIHC/1Vz08hJJZLzaF3Ao9qg7WkdNEz28wCuFeVSq/yp1gEEpvnMdYM6FUUUM+y+/b7N61pgk1M"
+        "P7ljTREJ0bHY5O8y0/YynP4NI36nKyNbGhsgtqhquHfLWCaCm/kLdgymQUNI1VCl1XcmYtCZkFFB9Ru7EtmTfuk2Lc7mdQYEHutH"
+        "qWIUywSJvm1P878PYXRtqNY2hu6MuyarN5uQIO887R1ho+IeN2BUGsEArUeN8RCuqr2J5DZj4GloReZ7GYFWFBXTNKaDRu+deLOj"
+        "/41Hztg4ITjOSUnh6/Z2kkRPkH7rhNT4+irtRfiXG2MMsV+kEVO4p/j+l7lofbL0NbkUlskd4Od6iox3YCXIicxY+5JSj63QLU1r"
+        "Gv6EbFHkPAseZ+MYys2J99KGToAtz+XOMyKr3VJp7vc4RWBhNcRygm/Oj60DgXQS/ph2y1ZMfl7NL3m2jAJQzADTqBahOuTuJj57"
+        "BObdI7xV8bwOI8sFSFG3xVfKpoPkvi4C+G+rxErims2CC5rezJBwwVJtLCQ2CA1e/+4kv1DBja8Z1jzBfFXypXQfT1fXN+jL54+0"
+        "85JNiBeCfXUnUPUW+gjl+ea+17m9Y0b5XTu4QyF5AgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4"
+        "zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5k"
+        "ZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQD"
+        "DBhQTk9FRS0zMDMwMzAzOTkwMy1ERU0xLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93"
+        "d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAo"
+        "BgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5MDMwMzAzMTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTAr"
+        "MCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUFxWovRQENDMS4BItkheOSBR1dPcw"
+        "DgYDVR0PAQH/BAQDAgeAMAoGCCqGSM49BAMDA2gAMGUCMQDcI/ZV6SPo13ZPwsjhLMS9n6ZN1czKd02I/eKj67RBOOD1HWkW0DJ6"
+        "QxDoUoeaTcACMFdNOAY2BotlUO6uZWlWdUFjoqVZOGEgZVHGJkIxPZ04+SrO4jMOukWuZQqJYM4WZQ==";
+
+static const char *SID_CERT_B64URL =
+        "MIIGqDCCBi6gAwIBAgIQfCl8dqrXBKOVGG0OTfMqTzAKBggqhkjOPQQDAzBxMSwwKgYDVQQDDCNURVNUIG9mIFNLIElEIFNvbHV0"
+        "aW9ucyBFSUQtUSAyMDI0RTEXMBUGA1UEYQwOTlRSRUUtMTA3NDcwMTMxGzAZBgNVBAoMElNLIElEIFNvbHV0aW9ucyBBUzELMAkG"
+        "A1UEBhMCRUUwHhcNMjYwNTE4MTI0NTEzWhcNMjkwNTE3MTI0NTEyWjBXMQswCQYDVQQGEwJFRTEQMA4GA1UEAwwHVEVTVCxPSzEN"
+        "MAsGA1UEBAwEVEVTVDELMAkGA1UEKgwCT0sxGjAYBgNVBAUTEVBOT0VFLTMwMzAzMDM5OTAzMIIDIjANBgkqhkiG9w0BAQEFAAOC"
+        "Aw8AMIIDCgKCAwEAsbP7GwkiyLnVk4Xneq76DuDklgie_LurancUp5Mw13Pn7Sp_XTnie1PtWHIgZFsvKKHRWwHFB4H_XQisgZS7"
+        "yfRYVe2u3cfSuoH_W5oRpnAnojaltBQZRE6LM5WRhqI6-sdcoGM938AWEkr_gThU3DPSGglZ0mNEOR7SvVHtaKz4KAc1XQZtyHmo"
+        "iZ_eqNW7Nlj1s3A66jmEBTq4aiqlx0JXhfgmNV-1yw81vEwB0LHQLadp3Ca2G60bDMQItzWpe8pzd2gUv6smxjKq3MnVVsgYEAFw"
+        "kbeuDR3OLUbWbnSTAn9Y5DfDW30xRg4if1I-ruDWLicv5vJXsHCgjgUqLlk9_v-gIFuieJhczyZh9-FOSmCOREqrWOyGUNzCFruV"
+        "yg-Z6o8NRZkz9cNqFCUU7O3FnpIHC_1Vz08hJJZLzaF3Ao9qg7WkdNEz28wCuFeVSq_yp1gEEpvnMdYM6FUUUM-y-_b7N61pgk1M"
+        "P7ljTREJ0bHY5O8y0_YynP4NI36nKyNbGhsgtqhquHfLWCaCm_kLdgymQUNI1VCl1XcmYtCZkFFB9Ru7EtmTfuk2Lc7mdQYEHutH"
+        "qWIUywSJvm1P878PYXRtqNY2hu6MuyarN5uQIO887R1ho-IeN2BUGsEArUeN8RCuqr2J5DZj4GloReZ7GYFWFBXTNKaDRu-deLOj"
+        "_41Hztg4ITjOSUnh6_Z2kkRPkH7rhNT4-irtRfiXG2MMsV-kEVO4p_j-l7lofbL0NbkUlskd4Od6iox3YCXIicxY-5JSj63QLU1r"
+        "Gv6EbFHkPAseZ-MYys2J99KGToAtz-XOMyKr3VJp7vc4RWBhNcRygm_Oj60DgXQS_ph2y1ZMfl7NL3m2jAJQzADTqBahOuTuJj57"
+        "BObdI7xV8bwOI8sFSFG3xVfKpoPkvi4C-G-rxErims2CC5rezJBwwVJtLCQ2CA1e_-4kv1DBja8Z1jzBfFXypXQfT1fXN-jL54-0"
+        "85JNiBeCfXUnUPUW-gjl-ea-17m9Y0b5XTu4QyF5AgMBAAGjggH1MIIB8TAJBgNVHRMEAjAAMB8GA1UdIwQYMBaAFLAkFxmI42b4"
+        "zShYZXtNFNiSZk9rMHAGCCsGAQUFBwEBBGQwYjAzBggrBgEFBQcwAoYnaHR0cDovL2Muc2suZWUvVEVTVF9FSUQtUV8yMDI0RS5k"
+        "ZXIuY3J0MCsGCCsGAQUFBzABhh9odHRwOi8vYWlhLmRlbW8uc2suZWUvZWlkcTIwMjRlMDAGA1UdEQQpMCekJTAjMSEwHwYDVQQD"
+        "DBhQTk9FRS0zMDMwMzAzOTkwMy1ERU0xLVEweAYDVR0gBHEwbzBjBgkrBgEEAc4fEQIwVjBUBggrBgEFBQcCARZIaHR0cHM6Ly93"
+        "d3cuc2tpZHNvbHV0aW9ucy5ldS9yZXNvdXJjZXMvY2VydGlmaWNhdGlvbi1wcmFjdGljZS1zdGF0ZW1lbnQvMAgGBgQAj3oBAjAo"
+        "BgNVHQkEITAfMB0GCCsGAQUFBwkBMREYDzE5MDMwMzAzMTIwMDAwWjAWBgNVHSUEDzANBgsrBgEEAYPmYgUHADA0BgNVHR8ELTAr"
+        "MCmgJ6AlhiNodHRwOi8vYy5zay5lZS90ZXN0X2VpZC1xXzIwMjRlLmNybDAdBgNVHQ4EFgQUFxWovRQENDMS4BItkheOSBR1dPcw"
+        "DgYDVR0PAQH_BAQDAgeAMAoGCCqGSM49BAMDA2gAMGUCMQDcI_ZV6SPo13ZPwsjhLMS9n6ZN1czKd02I_eKj67RBOOD1HWkW0DJ6"
+        "QxDoUoeaTcACMFdNOAY2BotlUO6uZWlWdUFjoqVZOGEgZVHGJkIxPZ04-SrO4jMOukWuZQqJYM4WZQ";
+
+static const char *SID_SIG_B64 =
+        "XN6OijUhZvTQDMME7I2OLzYu84lNhWl9FjKG8sfHBNvpVhsmaz2LR/WzTrJJ+QyVpz9A+o0i+Dl4Zf0v1MR79cjAHIhpsbrQVhC3"
+        "vlWmoE1s3tKoqWNLxyr2ub46J8H3Aac8x/62RiELsxhBO0JrEA8Vf4N0gXTqoSXxFBK/vbH7ANxbCP+Nx/DsnK1dUPLUQO+44Srs"
+        "qTv6ZVCO5QFV0cnQIS7wITbx41qCukKwL4nglNV52dGfzoLQh9LP+OlSbFkj3+gYWyoVKniBXXPb4G5wBVVSnjsfWaT5RyELNpV5"
+        "9A6Ucp7Kj9MUVi/pZY3iDl79AZM71QMfx9VMiR/nBVcwxINDsqW56WQiVzKqLqeys6eI6J4udqSctdNybYUuYhQIq7qYc1Up8sLQ"
+        "RZcpVHvD13648aMgCheyf7TnamA2fmtOFj/0Lnu3TPMX2Nyg+TWpRLYVlIsYO1fyQTkquST0QlONn5ayhL9nPzbEOwuEea6kWEuM"
+        "aakt0jLOSvs2dwwFIvypmisv/ywjJhC7pbinpE8M3RK7u9AS915SKNnBAgJXURKCO2HQ91fnNuz0KlpUODTKKpU1DN8pjskRodos"
+        "SBdRjsUuzsegw1QJAO9o/OL7qV1p1mDf48GlrPwz9VNVxqjh0Y2OjcWkdzQBgnPZwzBNErWVPgm0YOx75D3Wpp4dkgWeZkEItlxW"
+        "im8DNyBsOwOahsn/EMrqm3MYpv1SPMAFZH0aIAdvIbzEfapacqIHgFX4U4HrXSHzpLGsjs8dNlIrJtHZoN8d5HfxCS1wHZnv8whP"
+        "h5+Us4jAbAGz+Z/mUBg45AQPB8cTSnqgOlpOHqDri7/XoK0S8wYwlNjwrVXSuZjj++vAIudh5Q4QBrxKuT7ASMeZwjVhw384kWhK"
+        "RDck7Y0wTHOBSG+pVY7VCiWNsbd8Kc1Jy8DGtvtUiIdCJv/KZNjjckvoBVKN/NDthwZMxj8iIfVtsf+GWx+D6CvytpxwXFR+RFtz"
+        "5efHmlxhyK2fnE3DLJ6J1NKK";
+
+static const char *SID_TICKET_JWT =
+        "eyJhbGciOiJSU0FTU0EtUFNTK0FDU1BfVjIiLCJ0eXAiOiJ2bmQuY2RvYzIuYXV0aC10b2tlbi52MStzZC1qd3QifQ.eyJfc2QiO"
+        "lsiX1NvQmRrZlVoeHJSbGpFRHhuazVrbkdkOWs4QVlKdUxya2s2NkZkVVI4byJdLCJfc2RfYWxnIjoic2hhLTI1NiIsImlzcyI6I"
+        "mV0c2lcL1BOT0VFLTMwMzAzMDM5OTAzIn0.XN6OijUhZvTQDMME7I2OLzYu84lNhWl9FjKG8sfHBNvpVhsmaz2LR_WzTrJJ-QyVp"
+        "z9A-o0i-Dl4Zf0v1MR79cjAHIhpsbrQVhC3vlWmoE1s3tKoqWNLxyr2ub46J8H3Aac8x_62RiELsxhBO0JrEA8Vf4N0gXTqoSXxF"
+        "BK_vbH7ANxbCP-Nx_DsnK1dUPLUQO-44SrsqTv6ZVCO5QFV0cnQIS7wITbx41qCukKwL4nglNV52dGfzoLQh9LP-OlSbFkj3-gYW"
+        "yoVKniBXXPb4G5wBVVSnjsfWaT5RyELNpV59A6Ucp7Kj9MUVi_pZY3iDl79AZM71QMfx9VMiR_nBVcwxINDsqW56WQiVzKqLqeys"
+        "6eI6J4udqSctdNybYUuYhQIq7qYc1Up8sLQRZcpVHvD13648aMgCheyf7TnamA2fmtOFj_0Lnu3TPMX2Nyg-TWpRLYVlIsYO1fyQ"
+        "TkquST0QlONn5ayhL9nPzbEOwuEea6kWEuMaakt0jLOSvs2dwwFIvypmisv_ywjJhC7pbinpE8M3RK7u9AS915SKNnBAgJXURKCO"
+        "2HQ91fnNuz0KlpUODTKKpU1DN8pjskRodosSBdRjsUuzsegw1QJAO9o_OL7qV1p1mDf48GlrPwz9VNVxqjh0Y2OjcWkdzQBgnPZw"
+        "zBNErWVPgm0YOx75D3Wpp4dkgWeZkEItlxWim8DNyBsOwOahsn_EMrqm3MYpv1SPMAFZH0aIAdvIbzEfapacqIHgFX4U4HrXSHzp"
+        "LGsjs8dNlIrJtHZoN8d5HfxCS1wHZnv8whPh5-Us4jAbAGz-Z_mUBg45AQPB8cTSnqgOlpOHqDri7_XoK0S8wYwlNjwrVXSuZjj-"
+        "-vAIudh5Q4QBrxKuT7ASMeZwjVhw384kWhKRDck7Y0wTHOBSG-pVY7VCiWNsbd8Kc1Jy8DGtvtUiIdCJv_KZNjjckvoBVKN_NDth"
+        "wZMxj8iIfVtsf-GWx-D6CvytpxwXFR-RFtz5efHmlxhyK2fnE3DLJ6J1NKK";
+
+static const char *SID_PARAMS_JSON = R"({"interactionTypeUsed":"confirmationMessageAndVerificationCodeChoice","interactionsDigest":"l3Fawq7fsklfb+ZkDsZcJICehrtVrMmhidQ4Ha+gTM0=","signature":{"flowType":"Notification","serverRandom":"tjB5sLBWR8OVEJDOgUPRKhk4","signatureAlgorithm":"rsassa-pss","signatureAlgorithmParameters":{"hashAlgorithm":"SHA-256","maskGenAlgorithm":{"algorithm":"id-mgf1","parameters":{"hashAlgorithm":"SHA-256"}},"saltLength":32,"trailerField":"0xbc"},"userChallenge":"_eegCn9XBOQSqQRUQPRflc7r1CDJcz0k4jBL1AqpPmk"}})";
+
+std::vector<uint8_t> sidCert() { return libcdoc::fromBase64(SID_CERT_B64); }
+std::vector<uint8_t> sidSig() { return libcdoc::fromBase64(SID_SIG_B64); }
+
+std::vector<uint8_t> sidPayload()
+{
+    std::string p = libcdoc::buildAcspV2Payload("smart-id-demo", "tjB5sLBWR8OVEJDOgUPRKhk4",
+        "p6jwyzPizfS8+DozeW4fytXf0OVDp4hCHqvJWIlKLfg=", "_eegCn9XBOQSqQRUQPRflc7r1CDJcz0k4jBL1AqpPmk",
+        "DEMO", "l3Fawq7fsklfb+ZkDsZcJICehrtVrMmhidQ4Ha+gTM0=",
+        "confirmationMessageAndVerificationCodeChoice", "Notification");
+    return {p.begin(), p.end()};
+}
+
+std::string sidTicket()
+{
+    // The disclosures are irrelevant for validation; any suffix works.
+    return std::string(SID_TICKET_JWT) + "~aud~ZGlzY2xvc3VyZQ";
+}
+
+std::string makeSessionToken(const std::string& payload_json)
+{
+    std::string h = libcdoc::toBase64URL(R"({"typ":"vnd.cdoc2.session-token.v2+sd-jwt","alg":"ES256"})");
+    std::string p = libcdoc::toBase64URL(payload_json);
+    // jwt~aud~disclosure (SessionToken needs >= 3 parts)
+    return h + "." + p + ".c2ln~aud~ZGlzYw";
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(ValidateSignatureReferenceVector)
+{
+    const auto algo = libcdoc::Crypto::SignatureAlgorithm::RSASSA_PSS_SHA256;
+    // The ACSP_V2 signature from the log verifies (verified independently with OpenSSL).
+    BOOST_CHECK(libcdoc::Crypto::validateSignature(sidCert(), sidPayload(), sidSig(), algo));
+    // Tampered payload must not verify.
+    auto bad = sidPayload();
+    bad[10] ^= 0x01;
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature(sidCert(), bad, sidSig(), algo));
+    // Garbage certificate must not verify (and must not crash).
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature({1, 2, 3}, sidPayload(), sidSig(), algo));
+}
+
+BOOST_AUTO_TEST_CASE(ValidateCertificateIdentity)
+{
+    libcdoc::CryptoBackend crypto;
+    // The test certificate's subject serialNumber is PNOEE-30303039903.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039903", sidCert()), libcdoc::OK);
+    // Also accepted without the etsi/ prefix.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("PNOEE-30303039903", sidCert()), libcdoc::OK);
+    // Different person (another Smart-ID test number).
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039914", sidCert()), libcdoc::CRYPTO_ERROR);
+    // Garbage DER.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/PNOEE-30303039903", {1, 2, 3}), libcdoc::CRYPTO_ERROR);
+    // Empty id.
+    BOOST_CHECK_EQUAL(crypto.validateCertificate("etsi/", sidCert()), libcdoc::CryptoBackend::INVALID_PARAMS);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateAuthTicketReferenceVector)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err;
+    // Full ticket from the log validates.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "DEMO", err),
+                      libcdoc::OK);
+    // Wrong recipient: identity mismatch.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039914", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "DEMO", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Wrong rpName: ACSP_V2 payload mismatch -> signature failure.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), SID_PARAMS_JSON, "smart-id-demo", "EVIL", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Tampered serverRandom: signature failure.
+    std::string badParams(SID_PARAMS_JSON);
+    badParams.replace(badParams.find("tjB5sLBWR8OVEJDOgUPRKhk4"), 24, "AAAAAAAAAAAAAAAAAAAAAA");
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), badParams, "smart-id-demo", "DEMO", err),
+                      libcdoc::CRYPTO_ERROR);
+    // Missing params entirely.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicket(&crypto, "etsi/PNOEE-30303039903", sidTicket(),
+                                                  sidCert(), "{}", "smart-id-demo", "DEMO", err),
+                      libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateSessionDataChecks)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err, scheme, rp;
+    std::string good = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":2000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, good, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::OK);
+    BOOST_CHECK_EQUAL(scheme, "smart-id-demo");
+    BOOST_CHECK_EQUAL(rp, "DEMO");
+    // Expired session token.
+    std::string expired = makeSessionToken(R"({"schemeName":"smart-id-demo","rpName":"DEMO","exp":1000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, expired, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::NetworkBackend::NETWORK_ERROR);
+    // Identity mismatch.
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039914", false, good, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::CRYPTO_ERROR);
+    // Missing scheme claims.
+    std::string noclaims = makeSessionToken(R"({"exp":2000000000})");
+    BOOST_CHECK_EQUAL(libcdoc::validateSessionData(&crypto, "etsi/PNOEE-30303039903", false, noclaims, SID_CERT_B64URL,
+                                                   scheme, rp, err),
+                      libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Mobile-ID (MID) ticket validation: ECDSA (ES256) phone signature plus the
+// RP server RFC9421 HTTP countersignature. All vectors come from a working
+// cdoc-tool Mobile-ID session log (2026-08-07, SK test identity
+// PNOEE-51307149560) and the RP server's real well-known JWKS; both
+// signatures were independently verified with OpenSSL.
+BOOST_AUTO_TEST_SUITE(MidTicketValidation)
+
+namespace {
+
+static const char *MID_CERT_B64 =
+        "MIIDqDCCAy6gAwIBAgIQB9W11BzBABj+0d/AZx6UHzAKBggqhkjOPQQDAjBxMQswCQYDVQQGEwJFRTEbMBkGA1UECgwSU0sgSUQg"
+        "U29sdXRpb25zIEFTMRcwFQYDVQRhDA5OVFJFRS0xMDc0NzAxMzEsMCoGA1UEAwwjVEVTVCBvZiBTSyBJRCBTb2x1dGlvbnMgRUlE"
+        "LVEgMjAyMUUwHhcNMjQwNjEyMDY0NTI4WhcNMjkwNjE2MDY0NTI3WjCBlTELMAkGA1UEBhMCRUUxLzAtBgNVBAMMJk1BUlkgw4RO"
+        "TixPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMSUwIwYDVQQEDBxPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMRIwEAYD"
+        "VQQqDAlNQVJZIMOETk4xGjAYBgNVBAUTEVBOT0VFLTUxMzA3MTQ5NTYwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWlV1aVSX"
+        "w6WhagWmFmXE/oe+0R1xZzrHyoiVlgKpGiJ8cwIQLogRGQnWY7NwgQvRHCBmsl99bj57h7SWnd03m6OCAYEwggF9MAkGA1UdEwQC"
+        "MAAwHwYDVR0jBBgwFoAUScfc7QYUosdtnKbP11L9aOXoBBQwcAYIKwYBBQUHAQEEZDBiMDMGCCsGAQUFBzAChidodHRwOi8vYy5z"
+        "ay5lZS9URVNUX0VJRC1RXzIwMjFFLmRlci5jcnQwKwYIKwYBBQUHMAGGH2h0dHA6Ly9haWEuZGVtby5zay5lZS9laWRxMjAyMWUw"
+        "eAYDVR0gBHEwbzAIBgYEAI96AQIwYwYJKwYBBAHOHxIBMFYwVAYIKwYBBQUHAgEWSGh0dHBzOi8vd3d3LnNraWRzb2x1dGlvbnMu"
+        "ZXUvcmVzb3VyY2VzL2NlcnRpZmljYXRpb24tcHJhY3RpY2Utc3RhdGVtZW50LzA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5z"
+        "ay5lZS90ZXN0X2VpZC1xXzIwMjFlLmNybDAdBgNVHQ4EFgQUj8KjnXvGQJCRYOd5LVfPku7QsZwwDgYDVR0PAQH/BAQDAgeAMAoG"
+        "CCqGSM49BAMCA2gAMGUCMQCocXWDbBnkM3WEyBdv9Vm0A1MNRv08WrR192dRBcX42Kz5oiH0SdHRJv2ffeuEeSwCMEw2tSA3ClJv"
+        "233Dl7rIYU/T6UG2NQhvDD5FhnP0umZRmVfAUQ6eVcmU8AhFtNJjwg==";
+
+static const char *MID_CERT_B64URL =
+        "MIIDqDCCAy6gAwIBAgIQB9W11BzBABj-0d_AZx6UHzAKBggqhkjOPQQDAjBxMQswCQYDVQQGEwJFRTEbMBkGA1UECgwSU0sgSUQg"
+        "U29sdXRpb25zIEFTMRcwFQYDVQRhDA5OVFJFRS0xMDc0NzAxMzEsMCoGA1UEAwwjVEVTVCBvZiBTSyBJRCBTb2x1dGlvbnMgRUlE"
+        "LVEgMjAyMUUwHhcNMjQwNjEyMDY0NTI4WhcNMjkwNjE2MDY0NTI3WjCBlTELMAkGA1UEBhMCRUUxLzAtBgNVBAMMJk1BUlkgw4RO"
+        "TixPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMSUwIwYDVQQEDBxPJ0NPTk5Fxb0txaBVU0xJSyBURVNUTlVNQkVSMRIwEAYD"
+        "VQQqDAlNQVJZIMOETk4xGjAYBgNVBAUTEVBOT0VFLTUxMzA3MTQ5NTYwMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWlV1aVSX"
+        "w6WhagWmFmXE_oe-0R1xZzrHyoiVlgKpGiJ8cwIQLogRGQnWY7NwgQvRHCBmsl99bj57h7SWnd03m6OCAYEwggF9MAkGA1UdEwQC"
+        "MAAwHwYDVR0jBBgwFoAUScfc7QYUosdtnKbP11L9aOXoBBQwcAYIKwYBBQUHAQEEZDBiMDMGCCsGAQUFBzAChidodHRwOi8vYy5z"
+        "ay5lZS9URVNUX0VJRC1RXzIwMjFFLmRlci5jcnQwKwYIKwYBBQUHMAGGH2h0dHA6Ly9haWEuZGVtby5zay5lZS9laWRxMjAyMWUw"
+        "eAYDVR0gBHEwbzAIBgYEAI96AQIwYwYJKwYBBAHOHxIBMFYwVAYIKwYBBQUHAgEWSGh0dHBzOi8vd3d3LnNraWRzb2x1dGlvbnMu"
+        "ZXUvcmVzb3VyY2VzL2NlcnRpZmljYXRpb24tcHJhY3RpY2Utc3RhdGVtZW50LzA0BgNVHR8ELTArMCmgJ6AlhiNodHRwOi8vYy5z"
+        "ay5lZS90ZXN0X2VpZC1xXzIwMjFlLmNybDAdBgNVHQ4EFgQUj8KjnXvGQJCRYOd5LVfPku7QsZwwDgYDVR0PAQH_BAQDAgeAMAoG"
+        "CCqGSM49BAMCA2gAMGUCMQCocXWDbBnkM3WEyBdv9Vm0A1MNRv08WrR192dRBcX42Kz5oiH0SdHRJv2ffeuEeSwCMEw2tSA3ClJv"
+        "233Dl7rIYU_T6UG2NQhvDD5FhnP0umZRmVfAUQ6eVcmU8AhFtNJjwg";
+
+static const char *MID_TICKET_JWT =
+        "eyJhbGciOiJFUzI1NiIsInR5cCI6InZuZC5jZG9jMi5hdXRoLXRva2VuLnYxK3NkLWp3dCJ9.eyJfc2QiOlsiWktZWWpYa01WRTB"
+        "hT2VGV2poUHJxY1d5M1o2dkpkek5qSkpnckVEenBIMCJdLCJfc2RfYWxnIjoic2hhLTI1NiIsImlzcyI6ImV0c2lcL1BOT0VFLTU"
+        "xMzA3MTQ5NTYwIn0.qrq6MiMCovJOfoDPVmh5tlbKDBQaOpyjzg_IpA635zET1njSnxszqePa79WEmo2GRQ-XtloXlY8aQ5ZL7ys"
+        "WNA";
+
+static const char *RP_JWKS_JSON = R"({"keys":[{"kid":"VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo","kty":"EC","use":null,"crv":"P-256","x":"H0VsHWVwImGA4uolFRROI5MWsEnVFrOKkFlRsFHRGKQ","y":"kOSoL7uoujqoIgCIn867lq6E-LflpMy6E8fsEYBcYxM","n":null,"e":null,"alg":"ES256"}]})";
+
+std::vector<uint8_t> midCert() { return libcdoc::fromBase64(MID_CERT_B64); }
+
+std::string midTicketJwt() { return MID_TICKET_JWT; }
+
+std::map<std::string, std::string> midParams()
+{
+    return {
+        {"x-rp-signed-hash", "hXPUTG2KxbSQSyb8vv2956q0aYta1K9tPZm8EFPJjUU="},
+        {"x-rp-name", "DEMO"},
+        {"Signature-Input", R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108129;keyid="VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo")"},
+        {"Signature", "rp-sig=:Mv0mLPa0K1M7T8FzU3ilCZROfs9SqFQOfjIzS8tTEhC7Ih+C+1S1yTjhbVls0m6ViDxOTHBmk/xSvIWX6YQIwA==:"},
+    };
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(MidPhoneSignatureVerifies)
+{
+    // ES256 over SHA256(JWT signing input) with the phone certificate key
+    // (verified independently with OpenSSL against the log data).
+    std::string jwt = midTicketJwt();
+    auto parts = libcdoc::split(jwt, '.');
+    BOOST_REQUIRE_EQUAL(parts.size(), 3);
+    std::vector<uint8_t> sig = libcdoc::fromBase64URL(parts[2]);
+    BOOST_REQUIRE_EQUAL(sig.size(), 64);
+    std::string input = parts[0] + "." + parts[1];
+    std::vector<uint8_t> digest(32);
+    SHA256(reinterpret_cast<uint8_t *>(input.data()), input.size(), digest.data());
+    BOOST_CHECK(libcdoc::Crypto::validateSignature(midCert(), digest, sig,
+                                                   libcdoc::Crypto::SignatureAlgorithm::ES256));
+    // Tampered digest must not verify.
+    digest[0] ^= 0x01;
+    BOOST_CHECK(!libcdoc::Crypto::validateSignature(midCert(), digest, sig,
+                                                    libcdoc::Crypto::SignatureAlgorithm::ES256));
+}
+
+BOOST_AUTO_TEST_CASE(RpHttpSignatureVerifies)
+{
+    std::string err;
+    // The real log countersignature verifies against the real RP JWKS
+    // (verified independently with OpenSSL).
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(midParams(), RP_JWKS_JSON, err), libcdoc::OK);
+    // Tampered covered component -> verification failure.
+    auto bad = midParams();
+    bad["x-rp-name"] = "EVIL";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Tampered signature metadata (created timestamp) -> verification failure.
+    bad = midParams();
+    bad["Signature-Input"] = R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108128;keyid="VFp4bd_XIQJWXT6M2bKaQs_uDBS32WibjycHVd8MQJo")";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Unknown key id.
+    bad = midParams();
+    bad["Signature-Input"] = R"(rp-sig=("x-rp-signed-hash" "x-rp-name");created=1786108129;keyid="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")";
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature(bad, RP_JWKS_JSON, err), libcdoc::CRYPTO_ERROR);
+    // Missing headers.
+    BOOST_CHECK_EQUAL(libcdoc::validateRpHttpSignature({}, RP_JWKS_JSON, err), libcdoc::DATA_FORMAT_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(ValidateAuthTicketMidEndToEnd)
+{
+    libcdoc::CryptoBackend crypto;
+    std::string err;
+    std::string ticket = midTicketJwt() + "~aud~ZGlzY2xvc3VyZQ";
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", ticket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::OK);
+    // Wrong recipient.
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-30303039903", ticket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
+    // Tampered phone signature (flip a character in the JWT payload changes
+    // the signing input and therefore the digest).
+    std::string badTicket = ticket;
+    badTicket[badTicket.find('.') - 1] = (badTicket[badTicket.find('.') - 1] == 'A') ? 'B' : 'A';
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", badTicket,
+                                                     midCert(), midParams(), RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
+    // x-rp-signed-hash not matching the ticket signature.
+    auto bad = midParams();
+    bad["x-rp-signed-hash"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", ticket,
+                                                     midCert(), bad, RP_JWKS_JSON, err),
+                      libcdoc::CRYPTO_ERROR);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

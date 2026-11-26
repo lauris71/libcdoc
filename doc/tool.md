@@ -25,7 +25,7 @@ To re-encrypt a file for a different recipient(s) or with a different encryption
 (see [Recipients](#Recipients)). In all other cases, CDOC ver. 2 format container is created. Tool gives an error if the option is used with any other encryption method.
 
 - `--genlabel` - causes machine-readable label generation for the lock instead of using label provided with `--rcpt` option. The machine-readable label follows the 
-format described in [5.1.2.1 KeyLabel recommendations](https://open-eid.github.io/CDOC2/1.1/02_protocol_and_cryptography_spec/ch03_container_format/#keylabel-recommendations) 
+format described in [5.1.2.1 KeyLabel recommendations](https://open-eid.github.io/CDOC2/2.0/02_protocol_and_cryptography_spec/ch03_container_format/#keylabel-recommendations) 
 chapter of *CDOC2 container format* specification, and differs depending on selected encryption method.
 
 - `--library` - path to the PKCS11 library that handles smart-card related operations. The option is needed only in MacOS and Linux when `p11sk` or `p11pk` encryption 
@@ -59,7 +59,7 @@ One or more recipients must be specified, each with its own encryption method.
 
 If the `label` is omitted then the `--genlabel` option must be specified at command-line. Otherwise, the tool generates an error. If both, `label` and `--genlabel` 
 option are provided then depending on encryption method, the `label` may be ignored, but may be also used a part of machine-readable label, like in encrypting with 
-symmetric key and password case. Refer [Appendix D](https://open-eid.github.io/CDOC2/1.1/02_protocol_and_cryptography_spec/appendix_d_keylabel/) section of 
+symmetric key and password case. Refer [Appendix D](https://open-eid.github.io/CDOC2/2.0/02_protocol_and_cryptography_spec/keylabel_field/) section of 
 *CDOC2 container format* specification for examples of machine-readable key-labels.
 If '?' is used in place of PIN or PASSWORD the tool asks for the value interactively.
 
@@ -125,6 +125,9 @@ Following options are supported:
 - `--library PKCS11_LIBRARY` - path to the PKCS11 library. Same as in encryption case.
 - `--server ID URL(s)` - specifies a key or share server. Same as in encryption case.
 - `--accept SERVER_CERT_FILENAME` - path to server's TLS certificate file. Same as in encryption case.
+- `--auth-server URL` - Smart-ID / Mobile-ID authentication server. Required when decrypting a container encrypted for a key-share recipient (see [Smart-ID and Mobile-ID](#smart-id-and-mobile-id-key-shares)).
+- `--rp-server URL` - relying party server used in Smart-ID / Mobile-ID authentication. Required for key-share recipients.
+- `--phone NUMBER` - phone number in international format (starting with `+`) selecting Mobile-ID authentication. If not specified, Smart-ID is used.
 - `FILE` - encrypted file to be decrypted.
 - `OUTPUT_DIR` - output directory where the files are decrypted. If not specified then current working directory is used. If there is already a file with same name 
 then it is overwritten.
@@ -154,6 +157,67 @@ then it is overwritten.
 
 ---
 
+## Smart-ID and Mobile-ID (key shares)
+
+Documents can be encrypted for a person's **personal code** without having
+their certificate: the encryption key is **split** into shares which are
+stored on **at least two** *share servers* (`[label]:share:ID` recipient,
+see [Recipients](#Recipients)). The shares are not replicas: the key is
+divided between the servers (XOR-based split) and **all shares are needed**
+to regenerate it. Decryption authenticates the person with **Smart-ID** or
+**Mobile-ID** and collects the shares back.
+
+The following options are used with key-share recipients (in addition to
+`--server` for the share server(s) themselves):
+
+- `--server ID URL[,URL...]` - share server(s) used to store and fetch the key shares. At least two comma-separated URLs are required: the key is split between them (the shares are not replicas) and all shares are needed to decrypt.
+- `--auth-server URL` - Smart-ID / Mobile-ID authentication server (needed for decryption).
+- `--rp-server URL` - relying party server used in the authentication session (needed for decryption).
+- `--phone NUMBER` - Mobile-ID phone number in international format. When omitted, Smart-ID is used.
+- `--accept FILENAME` - TLS certificate of the servers (DER); may be repeated per server.
+
+During decryption the tool displays a **verification code** in the terminal
+and waits until the authentication is confirmed in the Smart-ID or Mobile-ID
+application.
+
+### Examples
+
+1. **Encrypt for a Smart-ID recipient**
+   Encrypt `document.pdf` for the person with personal code `30303039903`,
+   storing the key shares on `share.example`:
+
+   ```bash
+   ./cdoc-tool encrypt --rcpt 'Test:share:30303039903' \
+       --server share.example https://share1.example:8443,https://share2.example:8443 \
+       --out document.pdf.cdoc document.pdf
+   ```
+
+2. **Decrypt with Smart-ID**
+   The verification code is shown in the terminal; confirm it in the
+   Smart-ID application:
+
+   ```bash
+   ./cdoc-tool decrypt --label Test \
+       --server share.example https://share1.example:8443,https://share2.example:8443 \
+       --auth-server https://sid.example:8443 \
+       --rp-server https://rp.example:8443 \
+       document.pdf.cdoc
+   ```
+
+3. **Decrypt with Mobile-ID**
+   Same as above with `--phone` selecting Mobile-ID authentication:
+
+   ```bash
+   ./cdoc-tool decrypt --label Test \
+       --server share.example https://share1.example:8443,https://share2.example:8443 \
+       --auth-server https://mid.example:8443 \
+       --rp-server https://rp.example:8443 \
+       --phone +37269930366 \
+       document.pdf.cdoc
+   ```
+
+---
+
 ## Re-encryption
 
 Re-encrypting a file decrypts it and then encrypts again for new recipients on-the-fly. This avoids writing the decrypted data to the disk.
@@ -169,9 +233,48 @@ cdoc-tool re-encrypt OPTIONS INPUT_FILE --out OUTPUTFILE
 Both decryption and encryption options are supported with the following constraints:
 
 - Output directory, if specified, is ignored.
-- Only single URL can be specified for server. Thus, if re-encrypting by using capsule server base lock to another capsule server recipient, the configuration json should be used.
+- Only single URL can be specified for server. Thus, if re-encrypting by using capsule server base lock to another capsule server recipient, a JSON configuration with several server URLs should be used (see [JSON configuration file](#json-configuration-file)).
 - Only single PKCS11 library can be specified. Thus it is not possible to re-encrypt from one harware token to another, unless they use the same PKCS11 library.
 - All original locks (recipients) will be removed from container and replaced with new ones.
+
+---
+
+## JSON configuration file
+
+The network-related settings can also be expressed as a JSON document
+(`libcdoc::JSONConfiguration`, which `ToolConf` implements). This is useful
+when embedding libcdoc and when several server URLs are needed (see
+[Re-encryption](#re-encryption)). The document is a single JSON object:
+
+- root-level entries are root settings, e.g. `AUTH_SERVER`, `RP_SERVER`,
+  `PHONE_NUMBER`, `SHARE_SIGNER` (`SMART_ID` or `MOBILE_ID`)
+- nested objects are configuration domains: a server `ID` maps to its
+  settings, e.g. `SHARE_SERVER_URLS` (a JSON array of share server URLs) or
+  `KEYSERVER_SEND_URL`/`KEYSERVER_FETCH_URL` for a key server
+- string values are used as-is; other JSON values (arrays, numbers) are
+  passed in their JSON form
+
+```json
+{
+    "AUTH_SERVER": "https://sid.example:8443",
+    "RP_SERVER": "https://rp.example:8443",
+    "PHONE_NUMBER": "+37269930366",
+    "SHARE_SIGNER": "SMART_ID",
+    "share.example": {
+        "SHARE_SERVER_URLS": ["https://share1.example:8443", "https://share2.example:8443"]
+    },
+    "key.example": {
+        "KEYSERVER_SEND_URL": "https://key.example/send",
+        "KEYSERVER_FETCH_URL": "https://key.example/fetch"
+    }
+}
+```
+
+The example corresponds to the command line `--server share.example
+https://share1.example:8443,https://share2.example:8443 --auth-server
+https://sid.example:8443 --rp-server https://rp.example:8443 --phone
++37269930366`. See [Usage](usage.md#configuration) for how the
+`libcdoc::Configuration` interface exposes these values to the library.
 
 ---
 

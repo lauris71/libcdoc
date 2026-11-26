@@ -6,6 +6,8 @@
 
 #include <cdoc/CryptoBackend.h>
 
+#include <map>
+
 namespace libcdoc {
 
 struct CDOC_EXPORT NetworkBackend {
@@ -19,7 +21,8 @@ struct CDOC_EXPORT NetworkBackend {
     // The key server returned an unsuccessful HTTP response.
     static constexpr int SERVER_ERROR = -305;
 #ifdef HAS_KEYSHARES
-    // MID/SID error codes
+    // SID v3.1+ session endResult codes
+    // (https://sk-eid.github.io/smart-id-documentation/rp-api/api_specification.html)
     // User refused the session
     static constexpr int MIDSID_USER_REFUSED = -350;
     // There was a timeout, i.e. end user did not confirm or refuse the operation within given timeframe
@@ -32,26 +35,38 @@ struct CDOC_EXPORT NetworkBackend {
     static constexpr int MIDSID_REQUIRED_INTERACTION_NOT_SUPPORTED_BY_APP = -354;
     // User has multiple accounts and pressed Cancel on device choice screen on any device
     static constexpr int MIDSID_USER_REFUSED_CERT_CHOICE = -355;
-    // User pressed Cancel on PIN screen. Can be from the most common displayTextAndPIN flow or from verificationCodeChoice flow when user chosen the right code and then pressed cancel on PIN screen
-    static constexpr int MIDSID_USER_REFUSED_DISPLAYTEXTANDPIN = -356;
-    // User cancelled verificationCodeChoice screen
-    static constexpr int MIDSID_USER_REFUSED_VC_CHOICE = -357;
-    // User cancelled on confirmationMessage screen
-    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE = -358;
-    // User cancelled on confirmationMessageAndVerificationCodeChoice screen
-    static constexpr int MIDSID_USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE = -359;
+    // User pressed Cancel on the interaction screen (result.details contains which interaction was cancelled).
+    // Since SID v3.1 this replaces the removed granular codes
+    // USER_REFUSED_DISPLAYTEXTANDPIN / USER_REFUSED_VC_CHOICE /
+    // USER_REFUSED_CONFIRMATIONMESSAGE / USER_REFUSED_CONFIRMATIONMESSAGE_WITH_VC_CHOICE.
+    static constexpr int MIDSID_USER_REFUSED_INTERACTION = -356;
+    // There was a logical error in the signing protocol
+    static constexpr int MIDSID_PROTOCOL_FAILURE = -357;
+    // The app received a different transaction while waiting for the linked session
+    static constexpr int MIDSID_EXPECTED_LINKED_SESSION = -358;
+    // The process was terminated due to server-side technical error
+    static constexpr int MIDSID_SERVER_ERROR = -359;
+    // The account is currently unusable
+    static constexpr int ACCOUNT_UNUSABLE = -360;
+
+    // Numeric gap at -361..-364: the SID v3.0 granular USER_REFUSED_* codes
+    // were removed from the API in v3.1 and their constants deleted here.
+    // The remaining values are kept stable for API compatibility.
+
+    // MID session end result codes
+    // (https://github.com/SK-EID/MID/blob/master/README.md#338-session-end-result-codes)
     // Given user has no active certificates and is not MID client.
-    static constexpr int MIDSID_NOT_MID_CLIENT = -360;
+    static constexpr int MIDSID_NOT_MID_CLIENT = -365;
     // User cancelled the operation
-    static constexpr int MIDSID_USER_CANCELLED = -361;
+    static constexpr int MIDSID_USER_CANCELLED = -366;
     // Mobile-ID configuration on user's SIM card differs from what is configured on service provider's side. User needs to contact his/her mobile operator.
-    static constexpr int MIDSID_SIGNATURE_HASH_MISMATCH = -362;
+    static constexpr int MIDSID_SIGNATURE_HASH_MISMATCH = -367;
     // Sim not available
-    static constexpr int MIDSID_PHONE_ABSENT = -363;
+    static constexpr int MIDSID_PHONE_ABSENT = -368;
     // SMS sending error
-    static constexpr int MIDSID_DELIVERY_ERROR = -364;
+    static constexpr int MIDSID_DELIVERY_ERROR = -369;
     // Invalid response from card
-    static constexpr int MIDSID_SIM_ERROR = -365;
+    static constexpr int MIDSID_SIM_ERROR = -370;
 #endif
 
     /**
@@ -61,33 +76,15 @@ struct CDOC_EXPORT NetworkBackend {
     struct CapsuleInfo {
         /**
          * @brief Transaction id needed to retrieve the key later
-         * 
+         *
          */
         std::string transaction_id;
         /**
          * @brief Capsule exipry time on server
-         * 
+         *
          */
         uint64_t expiry_time;
     };
-#ifdef HAS_KEYSHARES
-    /**
-     * @brief Share information returned by share server
-     * 
-     */
-    struct ShareInfo {
-        /**
-         * @brief Share value
-         * 
-         */
-        std::vector<uint8_t> share;
-        /**
-         * @brief Recipoient id (etsi/PNOEE-01234567890)
-         * 
-         */
-        std::string recipient;
-    };
-#endif
 
     /**
      * @brief Proxy credentials used for network access
@@ -128,7 +125,10 @@ struct CDOC_EXPORT NetworkBackend {
      */
 	virtual std::string getLastErrorStr(result_t code) const;
 
-	/**
+    virtual result_t get(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert);
+    virtual result_t post(const std::string& url, std::vector<uint8_t>& body, std::map<std::string, std::string>& headers, bool client_cert);
+
+    /**
 	 * @brief send key material to keyserver
      *
      * The default implementation uses internal http client and peer TLS certificate list.
@@ -141,19 +141,6 @@ struct CDOC_EXPORT NetworkBackend {
 	 * @return error code or OK
 	 */
     virtual result_t sendKey (CapsuleInfo& dst, const std::string& url, const std::vector<uint8_t>& rcpt_key, const std::vector<uint8_t> &key_material, const std::string& type, uint64_t expiry_ts);
-#ifdef HAS_KEYSHARES
-    /**
-     * @brief send key share to server
-     *
-     * The recipient has to be in form "etsi/PNOEE-XXXXXXXXXXXX" and must match certificate subject serial number field (without "etsi/" prefix).
-     * @param dst a container for share id
-     * @param url server url
-     * @param recipient the recipient id (ETSI319412-1)
-     * @param share base64 encoded Key Share
-     * @return error code or OK
-     */
-    virtual result_t sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share);
-#endif
 	/**
 	 * @brief fetch key material from keyserver
      *
@@ -164,26 +151,6 @@ struct CDOC_EXPORT NetworkBackend {
 	 * @return error code or OK
 	 */
     virtual result_t fetchKey (std::vector<uint8_t>& dst, const std::string& url, const std::string& transaction_id);
-#ifdef HAS_KEYSHARES
-    /**
-     * @brief fetch authentication nonce from share server
-     * @param dst a destination container for nonce
-     * @param url server url
-     * @param share_id share id (transaction id)
-     * @return error code or OK
-     */
-    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id);
-    /**
-     * @brief fetch key share from share server
-     * @param share a container for result
-     * @param url server url
-     * @param share_id share id (transaction id)
-     * @param ticket signed ticket with disclosed url
-     * @param cert a certificate of signing key (PEM without newlines)
-     * @return error code or OK
-     */
-    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id, const std::string& ticket, const std::vector<uint8_t>& cert);
-#endif
 
     /**
      * @brief get client TLS certificate in der format
@@ -236,49 +203,206 @@ struct CDOC_EXPORT NetworkBackend {
     }
 
 #ifdef HAS_KEYSHARES
+    //
+    // SID/MID (keyshare) support
+    //
+
     /**
-     * @brief show MID/SID verification code
+     * @brief Share information returned by share server
+     *
+     */
+    struct ShareInfo {
+        /**
+         * @brief Share value
+         *
+         */
+        std::vector<uint8_t> share;
+        /**
+         * @brief Recipoient id (etsi/PNOEE-01234567890)
+         *
+         */
+        std::string recipient;
+    };
+
+    const std::string X_CDOC2_SID_RPV3_SIGNATURE_PARAMETERS = "x-cdoc2-sid-rpv3-signature-parameters";
+    const std::string X_RP_SIGNED_HASH = "x-rp-signed-hash";
+    const std::string X_RP_NAME = "x-rp-name";
+    const std::string HDR_SIGNATURE_INPUT = "Signature-Input";
+    const std::string HDR_SIGNATURE = "Signature";
+
+    /**
+     * @brief Session data
+     *
+     * The session token and certificate provided by AUTH server or the per-share server authentication token,
+     * authentication certificate and protocol-specific parameters.
+     *
+     */
+    struct SessionData {
+        std::string token;
+        std::string cert;
+        std::map<std::string, std::string> params;
+    };
+
+    /**
+     * @brief SID/MID verification feedback data
      * 
-     * Show SID/MID verification code. The default implementation logs it with level INFO.
-     * @param code verification code
+     * Currently only 4-digit verification code is supported, the url is for future device-link based authentication
+     *
+     */
+    struct SIDMIDFeedback {
+        int code;
+        std::string url;
+    };
+
+    /**
+     * @brief send key share to server
+     *
+     * The recipient has to be in form "etsi/PNOEE-XXXXXXXXXXXX" and must match certificate subject serial number field (without "etsi/" prefix).
+     * @param dst a container for share id
+     * @param url server url
+     * @param recipient the recipient id (ETSI319412-1)
+     * @param share base64 encoded Key Share
      * @return error code or OK
      */
-    virtual result_t showVerificationCode(unsigned int code);
+    virtual result_t sendShare(std::vector<uint8_t>& dst, const std::string& url, const std::string& recipient, const std::vector<uint8_t>& share);
+
+    /**
+     * @brief Run a full SID/MID authentication round-trip.
+     *
+     * POSTs @p body to `{url}/auth/start`, extracts the Location
+     * header and verification code, calls showFeedback, then polls
+     * GET `{url}/auth/status/{id}` until the server reports COMPLETE.
+     *
+     * The default implementation uses a single httplib::SSLClient with
+     * httpPost/httpGet, polling on the same connection with
+     * set_keep_alive(false).
+     *
+     * @param url The auth server base URL
+     * @param body Input: pre-constructed request body.
+     *             Output: final response body (COMPLETE state).
+     *             On error the value may or may not have changed.
+     * @param headers Input: request headers (may be empty).
+     *                Output: final response headers.
+     *                On error the value may or may not have changed.
+     * @return Error code or OK
+     */
+    virtual result_t getAuthResponse(const std::string& url, std::vector<uint8_t>& body,
+        std::map<std::string, std::string>& headers);
+
+    /**
+     * @brief Run a full SID/MID signing round-trip.
+     *
+     * POSTs @p body to @p post_path, extracts the session ID from
+     * the response body, then polls GET on @p poll_path_prefix/{sessionID}
+     * until the server reports COMPLETE.
+     *
+     * Unlike getAuthResponse, this method does not call showFeedback; the
+     * caller is expected to display the verification code before calling.
+     *
+     * The default implementation uses a single httplib::SSLClient with
+     * httpPost/httpGet, polling on the same connection with
+     * set_keep_alive(false).
+     *
+     * @param url The server base URL
+     * @param post_path Path for the initial POST (e.g. "/sid/authenticate")
+     * @param body Input: pre-constructed request body.
+     *             Output: final response body (COMPLETE state).
+     *             On error the value may or may not have changed.
+     * @param headers Input: headers for the initial POST (session token etc.).
+     *                Output: final response headers.
+     *                On error the value may or may not have changed.
+     * @param poll_path_prefix Path prefix for polling (e.g. "/sid/session/")
+     * @return Error code or OK
+     */
+    virtual result_t getSignResponse(const std::string& url, const std::string& post_path,
+        std::vector<uint8_t>& body, std::map<std::string, std::string>& headers,
+        const std::string& poll_path_prefix);
+
+    /**
+     * @brief Get a session token and certificate for share authentication
+     *
+     * Implementation may cache the session token and certificate if appropriate
+     *
+     * @param url The server URL
+     * @param rcpt_id The recipient id (etsi/PNOEE-...) the session is authenticated for.
+     *        Must match the identity that will sign the share tickets and the lock's
+     *        recipient id, so that session identity == signing identity == recipient.
+     * @param session Output parameter for session data (token and certificate)
+     * @return Error code or OK
+     */
+    virtual result_t authenticateForShares(const std::string& url, const std::string& rcpt_id, const std::string& phone, SessionData& session);
+
+    /**
+     * @brief fetch authentication nonce from share server
+     * @param dst a destination container for nonce
+     * @param url server url
+     * @param share_id share id (transaction id)
+     * @param session session data (token and certificate)
+     * @return error code or OK
+     */
+    virtual result_t fetchNonce(std::vector<uint8_t>& dst, const std::string& url, const std::string& share_id, const SessionData& session);
+
+    /**
+     * @brief fetch key share from share server
+     * @param share a container for result
+     * @param url server url
+     * @param share_id share id (transaction id)
+     * @param session session data (token and certificate)
+     * @param auth authentication data: token = the signed ticket for this
+     *             share, cert = base64url-encoded certificate of the
+     *             signing key, params = protocol-specific header parameters
+     * @return error code or OK
+     */
+    virtual result_t fetchShare(ShareInfo& share, const std::string& url, const std::string& share_id,
+        const SessionData& session, const SessionData& auth);
+
+    /**
+     * @brief show MID/SID verification code or QR code
+     *
+     * Show SID/MID verification code or QR code. The default implementation logs the content with level INFO.
+     *
+     * @param feedback SID/MID feedback data
+     * @return error code or OK
+     */
+    virtual result_t showFeedback(SIDMIDFeedback& feedback);
 
     /**
      * @brief Sign digest with SmartID authentication key
-     * 
+     *
      * @param dst a container for signature
      * @param cert a container for certificate
+     * @param params SID signature parameters
      * @param url SmartID gateway base URL
-     * @param rp_uuid relying party UUID
-     * @param rp_name relying party name
+     * @param session session data (token and certificate)
      * @param rcpt_id recipient id (etsi/PNOEE-XYZXYZXYZXY)
+     * @param text the text shown on the user's device (displayText200,
+     *             max 200 characters)
      * @param digest digest to sign
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
-    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-        const std::string& url, const std::string& rp_uuid, const std::string& rp_name,
-        const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
+    result_t signSID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+        const std::string& url, const SessionData& session,
+        const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 
     /**
      * @brief Sign digest with Mobile ID authentication key
-     * 
+     *
      * @param dst a container for signature
      * @param cert a container for certificate
      * @param url Mobile ID gateway base URL
-     * @param rp_uuid relying party UUID
-     * @param rp_name relying party name
      * @param phone recipient's phone number
+     * @param session session data (token and certificate)
      * @param rcpt_id recipient id (etsi/PNOEE-XYZXYZXYZXY)
+     * @param text the text shown on the user's device (displayText,
+     *             max 100 characters in GSM-7 or 50 in UCS-2 encoding)
      * @param digest digest to sign
      * @param algo algorithm type (SHA256, SHA385, SHA512)
      * @return error code or OK
      */
-    result_t signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert,
-        const std::string& url, const std::string& rp_uuid, const std::string& rp_name, const std::string& phone,
-        const std::string& rcpt_id, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
+    result_t signMID(std::vector<uint8_t>& dst, std::vector<uint8_t>& cert, std::map<std::string, std::string>& params,
+        const std::string& url, const std::string& phone, const SessionData& session,
+        const std::string& rcpt_id, std::string& text, const std::vector<uint8_t>& digest, CryptoBackend::HashAlgorithm algo);
 #endif
 };
 

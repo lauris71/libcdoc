@@ -122,31 +122,87 @@ This method calculates the Key Encryption Key (KEK) pre-master from a symmetric 
 
 ### NetworkBackend
 
-If you intend to use a key-server, you must subclass `libcdoc::NetworkBackend` and implement the following methods:
+`libcdoc::NetworkBackend` provides all network access: key servers, share
+servers and Smart-ID / Mobile-ID authentication. All methods have working
+default implementations built on an internal HTTP client, so there are three
+levels of integration:
 
-#### `getClientTLSCertificate`
+1. **Keep as-is** - use the defaults. Key storage/retrieval, key-share
+   exchange and Smart-ID / Mobile-ID round-trips work against standard
+   servers without implementing anything (see
+   [Proxy configuration](#proxy-configuration) and
+   [Certificate handling](#certificate-handling) below for the knobs).
+2. **Implement `get`/`post` and the SID/MID frontends** - override the
+   generic URL fetchers `get()`/`post()` and the SID/MID round-trip
+   frontends `getAuthResponse()`/`getSignResponse()` to route traffic
+   through a custom HTTP stack (proxies, connection pooling, logging).
+   Note that the default SID/MID frontends drive their own connections
+   internally, so overriding `get()`/`post()` alone does not affect them.
+3. **Implement specific methods** - override the protocol operations
+   (`sendKey`/`fetchKey`, `sendShare`/`fetchNonce`/`fetchShare`,
+   `authenticateForShares`) to integrate custom infrastructure or offline
+   flows.
+
+If you intend to use a key-server, you must subclass
+`libcdoc::NetworkBackend` and implement the following methods:
+
+#### Certificate handling
+
+##### `getClientTLSCertificate`
 
 ```cpp
 int getClientTLSCertificate(std::vector<uint8_t>& dst)
 ```
 
-Returns the client's TLS certificate for authentication with the key-server.
+Returns the client's TLS certificate (DER) for authentication with the key-server. Used together with `signTLS` for mutual TLS when the client key lives on a smart card and cannot be handed to the TLS stack as ordinary key material.
 
-#### `getPeerTLSCertificates`
+##### `getPeerTLSCertificates`
 
 ```cpp
 int getPeerTLSCertificates(std::vector<std::vector<uint8_t>> &dst)
 ```
 
-Returns the list of acceptable peer certificates for the key-server. Returning empty list disables TLS peer certificate check in debug builds but results in CONFIGURATION_ERROR in release builds.
+Returns the list of acceptable peer certificates for the key-server (an overload taking the request URL is available for per-server pinning). A non-empty list is *pinned trust*: the TLS client then accepts exactly these certificates and does not load the system CA store. Returning an empty list results in CONFIGURATION_ERROR in release builds; in builds configured with `LIBCDOC_ALLOW_INSECURE_TLS` it disables TLS peer verification entirely (for testing only).
 
-#### `signTLS`
+##### `signTLS`
 
 ```cpp
 int signTLS(std::vector<uint8_t>& dst, libcdoc::CryptoBackend::HashAlgorithm algorithm, const std::vector<uint8_t> &digest)
 ```
 
-Signs the provided digest for TLS authentication.
+Signs the provided digest for TLS authentication (ECDSA, or RSA-PSS for RSA keys; the connection requires TLS 1.3).
+
+#### Proxy configuration
+
+`getProxyCredentials(ProxyCredentials&)` supplies an optional HTTP proxy
+(host, port, and optional user name/password). The configuration is
+validated with `checkProxyCredentials()` and applied as a unit:
+
+- user name and password must be provided together, and require a proxy
+  host - credentials without a proxy are rejected with CONFIGURATION_ERROR
+  so they can never reach the destination server
+- a proxy host without credentials is allowed
+- the default implementation reports NOT_IMPLEMENTED (direct connections)
+
+#### Key shares: Smart-ID and Mobile-ID
+
+For key-share recipients ([Tool](tool.md) `label:share:ID`) the backend
+provides the share-server and authentication protocol methods:
+
+- `sendShare` / `fetchNonce` / `fetchShare` - store and retrieve encrypted
+  key shares on the share servers. The key is split into shares (XOR-based,
+  not replicated) and at least two share servers are required; all shares
+  are needed to regenerate the key
+- `authenticateForShares` - runs the Smart-ID or Mobile-ID authentication
+  session used to sign share tickets; uses `getAuthResponse` /
+  `getSignResponse` (the round-trip frontends from option 2) and calls
+  `showFeedback` with the verification code - override it to display the
+  code to the end user
+- the sign/identity of the authentication is configured through the
+  `SHARE_SIGNER` parameter (`SMART_ID` or `MOBILE_ID`), with `AUTH_SERVER`,
+  `RP_SERVER` and `PHONE_NUMBER` providing the server endpoints and the
+  Mobile-ID phone number; share server URLs come from the per-server
+  `SHARE_SERVER_URLS` parameter (see [Configuration](#configuration))
 
 In addition to implementing `libcdoc::NetworkBackend`, you must also instantiate a `libcdoc::Configuration` subclass.
 
@@ -154,7 +210,7 @@ In addition to implementing `libcdoc::NetworkBackend`, you must also instantiate
 
 ### Configuration
 
-The `libcdoc::Configuration` class is required to retrieve key-server parameters. You must subclass it and implement the following method:
+The `libcdoc::Configuration` class is required to retrieve key-server parameters. You must subclass it and implement the following method, or use the provided JSON-based implementation described in the [JSON configuration file](tool.md#json-configuration-file) section of the [Tool](tool.md) documentation (`libcdoc::JSONConfiguration`, which `ToolConf` implements):
 
 #### `getValue`
 
@@ -305,6 +361,11 @@ Also one of the symmetric key methods listed in encryption section for symmetric
 ### NetworkBackend
 
 It has to be implemented and supplied if server-based capsules are needed.
+Decryption of key-share recipients additionally uses the share-server and
+Smart-ID / Mobile-ID methods described under
+[NetworkBackend](#networkbackend); the same three integration options and
+the same [proxy](#proxy-configuration) and
+[certificate handling](#certificate-handling) rules apply.
 
 ---
 
