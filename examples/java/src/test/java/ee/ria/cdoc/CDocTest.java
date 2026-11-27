@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class CDocTest {
@@ -228,5 +229,27 @@ public class CDocTest {
             dst.setData(secret);
             return CDoc.OK;
         }
+    }
+
+    @Test
+    void proxyCredentialsValidation() throws Exception {
+        NetworkBackend.ProxyCredentials cred = new NetworkBackend.ProxyCredentials();
+        // No proxy and no credentials: direct connections are fine.
+        assertEquals(CDocConstants.OK, NetworkBackend.checkProxyCredentials(cred));
+        // Credentials require a proxy host (they must never reach the
+        // destination server) and user name/password come as a pair.
+        cred.setUsername("user");
+        cred.setPassword("pass");
+        CDocException e = assertThrows(CDocException.class,
+                () -> NetworkBackend.checkProxyCredentials(cred));
+        assertEquals(CDocConstants.CONFIGURATION_ERROR, e.code);
+        // The message comes from the static getErrorStr: this wrapper is a
+        // static method and cannot use instance error strings.
+        assertEquals(NetworkBackend.getErrorStr(CDocConstants.CONFIGURATION_ERROR), e.getMessage());
+        // Host with complete credentials is accepted.
+        cred.setHost("proxy.example.com");
+        assertEquals(CDocConstants.OK, NetworkBackend.checkProxyCredentials(cred));
+        // NetworkBackend-specific error descriptions.
+        assertEquals("NetworkBackend: Network error", NetworkBackend.getErrorStr(NetworkBackend.NETWORK_ERROR));
     }
 }

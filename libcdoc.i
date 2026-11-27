@@ -688,7 +688,29 @@ static std::vector<unsigned char> SWIG_JavaArrayToVectorUnsignedChar(JNIEnv *jen
 %include "Lock.h"
 %include "Configuration.h"
 %include "CryptoBackend.h"
+#ifdef SWIGJAVA
+// NetworkBackend has static methods (checkProxyCredentials), where the
+// generic result_t javaout typemap's `this.getLastErrorStr()` does not
+// compile. Use the class's static getErrorStr() instead - valid in both
+// static and instance contexts. Restored below for the remaining classes.
+%typemap(javaout, throws="CDocException") libcdoc::result_t %{
+{
+    long result = $jnicall;
+    if (result < 0) throw new CDocException((int) result, getErrorStr(result));
+    return result;
+}
+%}
+#endif
 %include "NetworkBackend.h"
+#ifdef SWIGJAVA
+%typemap(javaout, throws="CDocException") libcdoc::result_t %{
+{
+    long result = $jnicall;
+    if (result < 0) throw new CDocException((int) result, this.getLastErrorStr((int) result));
+    return result;
+}
+%}
+#endif
 %include "PKCS11Backend.h"
 %include "Logger.h"
 

@@ -128,6 +128,18 @@ struct CDOC_EXPORT NetworkBackend {
      */
 	virtual std::string getLastErrorStr(result_t code) const;
 
+    /**
+     * @brief Get the textual description of an error code
+     *
+     * Static variant of getLastErrorStr() for use where no backend instance
+     * exists (e.g. the static checkProxyCredentials) and by language
+     * bindings to build exception messages. It maps the network-specific
+     * codes and falls back to libcdoc::getErrorStr().
+     * @param code The error code
+     * @return std::string error description
+     */
+    static std::string getErrorStr(int64_t code);
+
 	/**
 	 * @brief send key material to keyserver
      *

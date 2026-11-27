@@ -151,23 +151,29 @@ std::string
 libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
 {
     if (!error.empty()) return error;
-	switch (code) {
+    return getErrorStr(code);
+}
+
+std::string
+libcdoc::NetworkBackend::getErrorStr(int64_t code)
+{
+    switch (code) {
     case OK:
         return {};
-	case NETWORK_ERROR:
-		return "NetworkBackend: Network error";
+    case NETWORK_ERROR:
+        return "NetworkBackend: Network error";
     case CAPSULE_NOT_FOUND:
         return "NetworkBackend: Key capsule not found";
     case SERVER_ERROR:
         return "NetworkBackend: Server error";
-	default:
-		break;
-	}
+    default:
+        break;
+    }
 #ifdef HAS_KEYSHARES
     std::string_view str = getMIDSIDDescription(code);
     if (!str.empty()) return std::string(str);
 #endif
-   return libcdoc::getErrorStr(code);
+    return libcdoc::getErrorStr(code);
 }
 
 //

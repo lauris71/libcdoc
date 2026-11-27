@@ -1448,6 +1448,11 @@ BOOST_AUTO_TEST_CASE(ProxyConfigCoherence)
         BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::checkProxyCredentials(cred),
                           libcdoc::CONFIGURATION_ERROR);
     }
+    // Static error descriptions (used by the language bindings to build
+    // exception messages where no backend instance exists).
+    BOOST_CHECK(libcdoc::NetworkBackend::getErrorStr(libcdoc::OK).empty());
+    BOOST_CHECK_EQUAL(libcdoc::NetworkBackend::getErrorStr(libcdoc::NetworkBackend::NETWORK_ERROR),
+                      "NetworkBackend: Network error");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
