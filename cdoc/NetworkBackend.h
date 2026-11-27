@@ -244,6 +244,57 @@ struct CDOC_EXPORT NetworkBackend {
     };
 
     /**
+     * @brief Cached SID/MID authentication session
+     *
+     * The SID/MID protocol allows reusing the authentication session token
+     * for up to MAX_AGE_SEC, so repeated operations do not require user
+     * confirmation each time. The cache binds the session to the identity
+     * and server it was created for: load() refuses entries that are older
+     * than MAX_AGE_SEC or were created for a different recipient, phone
+     * number or authentication server.
+     *
+     * The session token is a credential - treat the cache file like a
+     * password (save() creates it readable by its owner only where the
+     * platform supports it).
+     */
+    struct SessionCache {
+        /// Maximum session lifetime allowed by the SID/MID protocol.
+        static constexpr int64_t MAX_AGE_SEC = 24 * 60 * 60;
+
+        /// Authentication server the session was created for.
+        std::string url;
+        /// Recipient id (etsi/PNOEE-...) the session is authenticated for.
+        std::string rcpt_id;
+        /// Mobile-ID phone number (empty for Smart-ID).
+        std::string phone;
+        /// Creation time (unix seconds).
+        int64_t created = 0;
+        /// The cached authentication session.
+        SessionData session;
+
+        /**
+         * @brief Load and validate a session cache file
+         *
+         * The reason of a failure is logged.
+         * @param file path of the cache file
+         * @param url authentication server the session is requested for
+         * @param rcpt_id recipient id the session is requested for
+         * @param phone phone number the session is requested for
+         * @return true if a fresh matching session was loaded
+         */
+        bool load(const std::string& file,
+                  const std::string& url, const std::string& rcpt_id, const std::string& phone);
+
+        /**
+         * @brief Save the session cache file
+         *
+         * @param file path of the cache file
+         * @return true on success
+         */
+        bool save(const std::string& file) const;
+    };
+
+    /**
      * @brief SID/MID verification feedback data
      * 
      * Currently only 4-digit verification code is supported, the url is for future device-link based authentication

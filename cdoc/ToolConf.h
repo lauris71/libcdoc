@@ -47,6 +47,15 @@ struct ToolConf : public JSONConfiguration {
     std::string phone;
 
     /**
+     * @brief File used to cache the SID/MID authentication session
+     *
+     * The session is valid for up to 24 hours. When set, a fresh matching
+     * session is loaded from the file instead of starting a new
+     * authentication, and every new session is saved there.
+     */
+    std::string session_file;
+
+    /**
      * @brief Files to be encrypted, or file to be decrypted.
      */
     std::vector<std::string> input_files;

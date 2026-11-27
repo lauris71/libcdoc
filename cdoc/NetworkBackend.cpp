@@ -19,6 +19,11 @@
 
 #include "json/picojson/picojson.h"
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 
@@ -142,6 +147,135 @@ libcdoc::NetworkBackend::getLastErrorStr(result_t code) const
     if (!str.empty()) return std::string(str);
 #endif
    return libcdoc::getErrorStr(code);
+}
+
+bool
+libcdoc::NetworkBackend::SessionCache::save(const std::string& file) const
+{
+    picojson::object params_json;
+    for (const auto& p : session.params) {
+        params_json[p.first] = picojson::value(p.second);
+    }
+    picojson::object session_json;
+    session_json["token"] = picojson::value(session.token);
+    session_json["cert"] = picojson::value(session.cert);
+    session_json["params"] = picojson::value(params_json);
+    picojson::object obj;
+    obj["version"] = picojson::value(1.0);
+    obj["created"] = picojson::value(double(created));
+    obj["url"] = picojson::value(url);
+    obj["rcpt_id"] = picojson::value(rcpt_id);
+    obj["phone"] = picojson::value(phone);
+    obj["session"] = picojson::value(session_json);
+    std::string json = picojson::value(obj).serialize();
+
+#ifndef _WIN32
+    // The session token is a credential: create the file owner-readable
+    // only. std::ofstream cannot set permissions at creation time.
+    int fd = ::open(file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        LOG_ERROR("Cannot open {} for writing", file);
+        return false;
+    }
+    size_t off = 0;
+    while (off < json.size()) {
+        ssize_t n = ::write(fd, json.data() + off, json.size() - off);
+        if (n <= 0) {
+            ::close(fd);
+            LOG_ERROR("Cannot write {}", file);
+            return false;
+        }
+        off += size_t(n);
+    }
+    ::close(fd);
+#else
+    std::ofstream ofs(std::filesystem::path(encodeName(file)), std::ios::binary | std::ios::trunc);
+    if (!ofs) {
+        LOG_ERROR("Cannot open {} for writing", file);
+        return false;
+    }
+    ofs.write(json.data(), (std::streamsize) json.size());
+    if (!ofs) {
+        LOG_ERROR("Cannot write {}", file);
+        return false;
+    }
+#endif
+    return true;
+}
+
+bool
+libcdoc::NetworkBackend::SessionCache::load(const std::string& file,
+    const std::string& url, const std::string& rcpt_id, const std::string& phone)
+{
+    std::ifstream ifs(std::filesystem::path(encodeName(file)), std::ios::binary);
+    if (!ifs) {
+        LOG_DBG("Cannot open session cache {}", file);
+        return false;
+    }
+    picojson::value val;
+    ifs >> val;
+    std::string parse_err = picojson::get_last_error();
+    if (!parse_err.empty() || !val.is<picojson::object>()) {
+        LOG_WARN("Invalid session cache file {}", file);
+        return false;
+    }
+    const picojson::object& obj = val.get<picojson::object>();
+    auto get_string = [&obj](const char *key) -> std::string {
+        auto it = obj.find(key);
+        return (it != obj.end() && it->second.is<std::string>()) ? it->second.get<std::string>() : std::string();
+    };
+
+    int64_t created_ts = 0;
+    {
+        auto it = obj.find("created");
+        if (it == obj.end() || !it->second.is<double>()) {
+            LOG_WARN("Invalid session cache file {}", file);
+            return false;
+        }
+        created_ts = (int64_t) it->second.get<double>();
+    }
+
+    // Freshness: the SID/MID protocol allows reusing an authentication
+    // session for up to MAX_AGE_SEC. Small negative ages (clock skew) are
+    // tolerated; anything older is refused.
+    int64_t age = (int64_t) time(nullptr) - created_ts;
+    if (created_ts <= 0 || age < -300 || age > MAX_AGE_SEC) {
+        LOG_INFO("SID/MID session cache is stale (age {} seconds)", age);
+        return false;
+    }
+
+    // The session is bound to the identity and server it was created for:
+    // sharing it across identities would allow acting as someone else.
+    if (get_string("url") != url || get_string("rcpt_id") != rcpt_id || get_string("phone") != phone) {
+        LOG_WARN("SID/MID session cache was created for a different identity");
+        return false;
+    }
+
+    auto sit = obj.find("session");
+    if (sit == obj.end() || !sit->second.is<picojson::object>()) {
+        LOG_WARN("Invalid session cache file {}", file);
+        return false;
+    }
+    const picojson::object& sobj = sit->second.get<picojson::object>();
+    auto get_s = [&sobj](const char *key) -> std::string {
+        auto it = sobj.find(key);
+        return (it != sobj.end() && it->second.is<std::string>()) ? it->second.get<std::string>() : std::string();
+    };
+    this->url = url;
+    this->rcpt_id = rcpt_id;
+    this->phone = phone;
+    this->created = created_ts;
+    this->session.token = get_s("token");
+    this->session.cert = get_s("cert");
+    this->session.params.clear();
+    auto pit = sobj.find("params");
+    if (pit != sobj.end() && pit->second.is<picojson::object>()) {
+        for (const auto& p : pit->second.get<picojson::object>()) {
+            if (p.second.is<std::string>())
+                this->session.params[p.first] = p.second.get<std::string>();
+        }
+    }
+    return true;
 }
 
 //

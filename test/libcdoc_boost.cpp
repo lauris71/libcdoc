@@ -8,6 +8,7 @@
 #include <fstream>
 #include <CDocCipher.h>
 #include <CryptoBackend.h>
+#include <NetworkBackend.h>
 #include <DDocReader.h>
 #include <Lock.h>
 #include <Recipient.h>
@@ -2706,6 +2707,84 @@ BOOST_AUTO_TEST_CASE(ValidateAuthTicketMidEndToEnd)
     BOOST_CHECK_EQUAL(libcdoc::validateAuthTicketMID(&crypto, "etsi/PNOEE-51307149560", ticket,
                                                      midCert(), bad, RP_JWKS_JSON, err),
                       libcdoc::CRYPTO_ERROR);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(SessionCache)
+
+// The SID/MID authentication session can be cached for up to 24 hours and
+// is bound to the identity and server it was created for.
+BOOST_FIXTURE_TEST_CASE(SessionCacheRoundtrip, FixtureBase)
+{
+    libcdoc::NetworkBackend::SessionCache cache;
+    cache.url = "https://auth.example";
+    cache.rcpt_id = "etsi/PNOEE-30303039903";
+    cache.phone = "+37269930366";
+    cache.created = (int64_t) time(nullptr);
+    cache.session.token = "session-token";
+    cache.session.cert = "session-cert";
+    cache.session.params["x-rp-signed-hash"] = "abc";
+
+    auto file = (tmpDataPath / "session-cache.json").string();
+    BOOST_REQUIRE(cache.save(file));
+
+    libcdoc::NetworkBackend::SessionCache loaded;
+    BOOST_REQUIRE(loaded.load(file, cache.url, cache.rcpt_id, cache.phone));
+    BOOST_CHECK_EQUAL(loaded.created, cache.created);
+    BOOST_CHECK_EQUAL(loaded.session.token, "session-token");
+    BOOST_CHECK_EQUAL(loaded.session.cert, "session-cert");
+    BOOST_CHECK_EQUAL(loaded.session.params.at("x-rp-signed-hash"), "abc");
+    fs::remove(file);
+}
+
+BOOST_FIXTURE_TEST_CASE(SessionCacheIdentityMismatch, FixtureBase)
+{
+    libcdoc::NetworkBackend::SessionCache cache;
+    cache.url = "https://auth.example";
+    cache.rcpt_id = "etsi/PNOEE-30303039903";
+    cache.phone = "+37269930366";
+    cache.created = (int64_t) time(nullptr);
+    cache.session.token = "session-token";
+
+    auto file = (tmpDataPath / "session-cache.json").string();
+    BOOST_REQUIRE(cache.save(file));
+
+    libcdoc::NetworkBackend::SessionCache loaded;
+    // The session must not be usable for another recipient, phone number
+    // or authentication server.
+    BOOST_CHECK(!loaded.load(file, cache.url, "etsi/PNOEE-51307149560", cache.phone));
+    BOOST_CHECK(!loaded.load(file, cache.url, cache.rcpt_id, "+3725550000"));
+    BOOST_CHECK(!loaded.load(file, "https://other.example", cache.rcpt_id, cache.phone));
+    fs::remove(file);
+}
+
+BOOST_FIXTURE_TEST_CASE(SessionCacheStale, FixtureBase)
+{
+    libcdoc::NetworkBackend::SessionCache cache;
+    cache.url = "https://auth.example";
+    cache.rcpt_id = "etsi/PNOEE-30303039903";
+    cache.created = (int64_t) time(nullptr) - cache.MAX_AGE_SEC - 10;
+    cache.session.token = "session-token";
+
+    auto file = (tmpDataPath / "session-cache.json").string();
+    BOOST_REQUIRE(cache.save(file));
+
+    libcdoc::NetworkBackend::SessionCache loaded;
+    BOOST_CHECK(!loaded.load(file, cache.url, cache.rcpt_id, ""));
+    fs::remove(file);
+}
+
+BOOST_FIXTURE_TEST_CASE(SessionCacheInvalid, FixtureBase)
+{
+    libcdoc::NetworkBackend::SessionCache loaded;
+    // Missing file.
+    BOOST_CHECK(!loaded.load((tmpDataPath / "missing.json").string(), "", "", ""));
+    // Corrupt content.
+    auto file = (tmpDataPath / "session-cache.json").string();
+    std::ofstream(file) << "not json";
+    BOOST_CHECK(!loaded.load(file, "", "", ""));
+    fs::remove(file);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

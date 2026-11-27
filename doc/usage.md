@@ -194,7 +194,13 @@ provides the share-server and authentication protocol methods:
   not replicated) and at least two share servers are required; all shares
   are needed to regenerate the key
 - `authenticateForShares` - runs the Smart-ID or Mobile-ID authentication
-  session used to sign share tickets; uses `getAuthResponse` /
+  session used to sign share tickets. The SID/MID protocol allows reusing
+  the session for up to 24 hours: `NetworkBackend::SessionCache` persists
+  the session to a file (bound to the recipient, phone number and
+  authentication server it was created for) so that the implementation can
+  skip the user confirmation on later runs - see `ToolNetwork` in
+  `CDocCipher.cpp` for the reference implementation used by
+  `cdoc-tool --session`; uses `getAuthResponse` /
   `getSignResponse` (the round-trip frontends from option 2) and calls
   `showFeedback` with the verification code - override it to display the
   code to the end user

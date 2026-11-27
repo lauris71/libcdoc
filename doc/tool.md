@@ -128,6 +128,7 @@ Following options are supported:
 - `--auth-server URL` - Smart-ID / Mobile-ID authentication server. Required when decrypting a container encrypted for a key-share recipient (see [Smart-ID and Mobile-ID](#smart-id-and-mobile-id-key-shares)).
 - `--rp-server URL` - relying party server used in Smart-ID / Mobile-ID authentication. Required for key-share recipients.
 - `--phone NUMBER` - phone number in international format (starting with `+`) selecting Mobile-ID authentication. If not specified, Smart-ID is used.
+- `--session FILE` - cache the Smart-ID / Mobile-ID authentication session in FILE. See [Smart-ID and Mobile-ID](#smart-id-and-mobile-id-key-shares).
 - `FILE` - encrypted file to be decrypted.
 - `OUTPUT_DIR` - output directory where the files are decrypted. If not specified then current working directory is used. If there is already a file with same name 
 then it is overwritten.
@@ -174,11 +175,19 @@ The following options are used with key-share recipients (in addition to
 - `--auth-server URL` - Smart-ID / Mobile-ID authentication server (needed for decryption).
 - `--rp-server URL` - relying party server used in the authentication session (needed for decryption).
 - `--phone NUMBER` - Mobile-ID phone number in international format. When omitted, Smart-ID is used.
+- `--session FILE` - cache the authentication session in FILE (see below).
 - `--accept FILENAME` - TLS certificate of the servers (DER); may be repeated per server.
 
 During decryption the tool displays a **verification code** in the terminal
 and waits until the authentication is confirmed in the Smart-ID or Mobile-ID
 application.
+
+The authentication session can be reused for up to **24 hours**. With
+`--session FILE` the session is saved to FILE after the first authentication
+and loaded from it afterwards - later decryptions then proceed without
+confirmation. The session is bound to the personal code, phone number and
+authentication server it was created for, and the file is written
+owner-readable only: it contains a credential, so treat it like a password.
 
 ### Examples
 
@@ -201,6 +210,7 @@ application.
        --server share.example https://share1.example:8443,https://share2.example:8443 \
        --auth-server https://sid.example:8443 \
        --rp-server https://rp.example:8443 \
+       --session sid-session.json \
        document.pdf.cdoc
    ```
 

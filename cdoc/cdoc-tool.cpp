@@ -72,6 +72,7 @@ print_usage(ostream& ofs)
     ofs << "    --rp-server RP_SERVER   - RP server URL" << endl;
     ofs << "    --auth-server AUTH_SERVER - Authentication server URL" << endl;
     ofs << "    --phone NUMBER          - Phone number for MID signing (starting with + and country prefix)" << endl;
+    ofs << "    --session FILE          - cache the SID/MID authentication session in FILE (valid up to 24h)" << endl;
     ofs << "                            - If the phone number is present user is authenticated with MobileID, otherwise with SmartId" << endl;
     ofs << endl;
     ofs << "cdoc-tool locks FILE" << endl;
@@ -189,6 +190,10 @@ parse_common(ToolConf& conf, int arg_idx, int argc, char *argv[])
     } else if (arg == "--phone") {
         if ((arg_idx + 1) >= argc) return RESULT_USAGE;
         conf.phone = argv[arg_idx + 1];
+        return 2;
+    } else if (arg == "--session") {
+        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
+        conf.session_file = argv[arg_idx + 1];
         return 2;
     } else if (arg == "--accept") {
         if ((arg_idx + 2) >= argc) return RESULT_USAGE;
