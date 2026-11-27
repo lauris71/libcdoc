@@ -10,6 +10,7 @@
 #include <CryptoBackend.h>
 #include <NetworkBackend.h>
 #include <DDocReader.h>
+#include <DDocWriter.h>
 #include <Lock.h>
 #include <Recipient.h>
 #include <Tar.h>
@@ -17,7 +18,7 @@
 #include <ZStream.h>
 #include <XmlReader.h>
 #include <openssl/sha.h>
-
+#include <XmlWriter.h>
 #include <cdoc/Crypto.h>
 #include <cdoc/Io.h>
 #include <cdoc/KeyShares.h>
@@ -1743,6 +1744,270 @@ BOOST_AUTO_TEST_CASE(DoesNotChangeGlobalExternalEntityLoader)
 
     BOOST_REQUIRE(reader.read());
     BOOST_TEST(xmlGetExternalEntityLoader() == loader);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(XMLWriterOutput)
+
+struct TestXMLWriter final : public libcdoc::XMLWriter {
+    explicit TestXMLWriter(libcdoc::DataConsumer &dst) : XMLWriter(dst) {}
+    using XMLWriter::writeStartElement;
+    using XMLWriter::writeEndElement;
+    using XMLWriter::writeElement;
+    using XMLWriter::writeBase64Element;
+    using XMLWriter::writeTextElement;
+};
+
+struct XMLOutput {
+    std::vector<uint8_t> data;
+    libcdoc::VectorConsumer dst {data};
+    TestXMLWriter w {dst};
+    std::string str() const { return {data.cbegin(), data.cend()}; }
+};
+
+// Accepts limit bytes, then fails every write
+struct LimitedConsumer final : public libcdoc::DataConsumer {
+    explicit LimitedConsumer(size_t limit) : limit(limit) {}
+    libcdoc::result_t write(const uint8_t *, size_t size) noexcept final {
+        if (size > limit - written)
+            return libcdoc::OUTPUT_STREAM_ERROR;
+        written += size;
+        return libcdoc::result_t(size);
+    }
+    libcdoc::result_t close() noexcept final { return libcdoc::OK; }
+    bool isError() noexcept final { return false; }
+    size_t limit, written = 0;
+};
+
+constexpr std::string_view PROLOG = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+
+static std::vector<uint8_t> pattern(size_t size)
+{
+    std::vector<uint8_t> data(size);
+    for (size_t i = 0; i < size; ++i)
+        data[i] = uint8_t(i * 7 + i / 251);
+    return data;
+}
+
+BOOST_AUTO_TEST_CASE(DeclaresNamespaceOnOutermostElement)
+{
+    constexpr libcdoc::XMLWriter::NS A {"a", "urn:a"}, B {"b", "urn:b"}, D {{}, "urn:d"};
+    XMLOutput out;
+    BOOST_CHECK_EQUAL(out.w.writeElement(A, "root", [&] {
+        if (auto rv = out.w.writeElement(A, "x"); rv != libcdoc::OK) return rv;
+        if (auto rv = out.w.writeElement(B, "y"); rv != libcdoc::OK) return rv;
+        if (auto rv = out.w.writeElement(B, "y"); rv != libcdoc::OK) return rv;
+        return out.w.writeElement(D, "z");
+    }), libcdoc::OK);
+    BOOST_CHECK_EQUAL(out.str(), std::string(PROLOG) +
+        "<a:root xmlns:a=\"urn:a\"><a:x></a:x>"
+        "<b:y xmlns:b=\"urn:b\"></b:y><b:y xmlns:b=\"urn:b\"></b:y>"
+        "<z xmlns=\"urn:d\"></z></a:root>");
+}
+
+BOOST_AUTO_TEST_CASE(EscapesAttributesAndText)
+{
+    constexpr std::string_view value = "a&b<c>d\"e'f\tg\nh\ri";
+    XMLOutput out;
+    BOOST_CHECK_EQUAL(out.w.writeTextElement({}, "t", {{"v", std::string(value)}}, value), libcdoc::OK);
+    BOOST_CHECK_EQUAL(out.str(), std::string(PROLOG) +
+        "<t v=\"a&amp;b&lt;c&gt;d&quot;e'f&#9;g&#10;h&#13;i\">a&amp;b&lt;c&gt;d\"e'f\tg\nh&#13;i</t>");
+}
+
+BOOST_AUTO_TEST_CASE(WritesEmptyValues)
+{
+    XMLOutput out;
+    BOOST_CHECK_EQUAL(out.w.writeTextElement({}, "t", {{"v", {}}}, {}), libcdoc::OK);
+    BOOST_CHECK_EQUAL(out.str(), std::string(PROLOG) + "<t v=\"\"></t>");
+}
+
+// Attribute-value and line-end normalization would change unescaped TAB, LF and CR
+BOOST_AUTO_TEST_CASE(EscapedOutputParsesBack)
+{
+    const std::string value = "J\xC3\xBCri & Mari &#x1B; \xC2\x9C ]]> a<b>\"c'\td\ne\rf\r\ng \xF0\x9F\x98\x80";
+    XMLOutput out;
+    BOOST_REQUIRE_EQUAL(out.w.writeTextElement({}, "t", {{"v", value}}, value), libcdoc::OK);
+    xmlDocPtr doc = xmlReadMemory(reinterpret_cast<const char *>(out.data.data()), int(out.data.size()),
+        nullptr, nullptr, XML_PARSE_NONET);
+    BOOST_REQUIRE(doc);
+    xmlNodePtr root = xmlDocGetRootElement(doc);
+    xmlChar *attr = xmlGetProp(root, BAD_CAST "v");
+    xmlChar *text = xmlNodeGetContent(root);
+    BOOST_CHECK(attr && reinterpret_cast<const char *>(attr) == value);
+    BOOST_CHECK(text && reinterpret_cast<const char *>(text) == value);
+    xmlFree(attr);
+    xmlFree(text);
+    xmlFreeDoc(doc);
+}
+
+BOOST_AUTO_TEST_CASE(RejectsInvalidXmlText)
+{
+    using namespace std::literals;
+    constexpr std::string_view invalid[] {
+        "\0"sv,                 // NUL
+        "a\x01" "b"sv,          // C0 control
+        "\x1F"sv,
+        "\x80"sv,               // lone continuation byte
+        "\xC3"sv,               // truncated sequence
+        "\xC3("sv,              // bad continuation byte
+        "\xC0\xAF"sv,           // overlong '/'
+        "\xE0\x80\xAF"sv,       // overlong '/'
+        "\xED\xA0\x80"sv,       // UTF-16 surrogate
+        "\xEF\xBF\xBE"sv,       // U+FFFE
+        "\xEF\xBF\xBF"sv,       // U+FFFF
+        "\xF4\x90\x80\x80"sv,   // above U+10FFFF
+        "\xF8\x88\x80\x80\x80"sv, // 5-byte form
+    };
+    for (size_t i = 0; i < std::size(invalid); ++i) {
+        BOOST_TEST_CONTEXT("invalid[" << i << "]") {
+            XMLOutput text;
+            BOOST_CHECK_EQUAL(text.w.writeTextElement({}, "t", {}, invalid[i]), libcdoc::DATA_FORMAT_ERROR);
+            BOOST_CHECK(text.data.empty());
+            XMLOutput attr;
+            BOOST_CHECK_EQUAL(attr.w.writeStartElement({}, "t", {{"v", std::string(invalid[i])}}), libcdoc::DATA_FORMAT_ERROR);
+            BOOST_CHECK(attr.data.empty());
+            // The rejected element must not be left open
+            BOOST_CHECK_EQUAL(attr.w.writeEndElement({}), libcdoc::WRONG_ARGUMENTS);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(AcceptsXmlCharBoundaries)
+{
+    using namespace std::literals;
+    constexpr std::string_view valid[] {
+        "\t\n\r"sv,
+        " \x7F"sv,
+        "\xC2\x80"sv,           // U+0080
+        "\xED\x9F\xBF"sv,       // U+D7FF
+        "\xEE\x80\x80"sv,       // U+E000
+        "\xEF\xBF\xBD"sv,       // U+FFFD
+        "\xF0\x90\x80\x80"sv,   // U+10000
+        "\xF4\x8F\xBF\xBF"sv,   // U+10FFFF
+    };
+    for (size_t i = 0; i < std::size(valid); ++i) {
+        BOOST_TEST_CONTEXT("valid[" << i << "]") {
+            XMLOutput out;
+            BOOST_CHECK_EQUAL(out.w.writeTextElement({}, "t", {{"v", std::string(valid[i])}}, valid[i]), libcdoc::OK);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(EndWithoutStartFails)
+{
+    XMLOutput out;
+    BOOST_CHECK_EQUAL(out.w.writeEndElement({}), libcdoc::WRONG_ARGUMENTS);
+    BOOST_CHECK(out.data.empty());
+}
+
+// 3069 bytes fill the 4092-character encoding buffer exactly
+BOOST_AUTO_TEST_CASE(Base64MatchesOpenSSL)
+{
+    for (size_t size : {0, 1, 2, 3, 4, 5, 6, 3068, 3069, 3070, 3071, 6138, 6139, 100000}) {
+        BOOST_TEST_CONTEXT("size " << size) {
+            auto data = pattern(size);
+            XMLOutput out;
+            BOOST_CHECK_EQUAL(out.w.writeBase64Element({}, "d", data), libcdoc::OK);
+            BOOST_CHECK(out.str() == std::string(PROLOG) + "<d>" + libcdoc::toBase64(data) + "</d>");
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(StreamedBase64IsIndependentOfChunking)
+{
+    for (size_t size : {0, 1, 2, 3, 4, 5, 3070, 10000}) {
+        auto data = pattern(size);
+        XMLOutput expected;
+        BOOST_REQUIRE_EQUAL(expected.w.writeBase64Element({}, "d", data), libcdoc::OK);
+        for (size_t chunk : {1, 2, 3, 4, 5, 7, 4096, 10000}) {
+            BOOST_TEST_CONTEXT("size " << size << " chunk " << chunk) {
+                XMLOutput out;
+                BOOST_CHECK_EQUAL(out.w.writeBase64Element({}, "d", [&](libcdoc::DataConsumer &dst) -> int64_t {
+                    for (size_t pos = 0; pos < data.size(); pos += chunk) {
+                        size_t n = std::min(chunk, data.size() - pos);
+                        if (auto rv = dst.write(data.data() + pos, 0); rv != libcdoc::OK)
+                            return rv;
+                        if (auto rv = dst.write(data.data() + pos, n); rv != libcdoc::result_t(n))
+                            return rv < 0 ? rv : libcdoc::UNSPECIFIED_ERROR;
+                    }
+                    return libcdoc::OK;
+                }), libcdoc::OK);
+                BOOST_CHECK(out.str() == expected.str());
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(PropagatesConsumerErrors)
+{
+    const size_t head = PROLOG.size() + 3; // "<d>"
+    auto data = pattern(10000);
+    {
+        LimitedConsumer dst(0);
+        TestXMLWriter w(dst);
+        BOOST_CHECK_EQUAL(w.writeStartElement({}, "d", {}), libcdoc::OUTPUT_STREAM_ERROR);
+    }
+    {
+        LimitedConsumer dst(head);
+        TestXMLWriter w(dst);
+        BOOST_CHECK_EQUAL(w.writeElement({}, "d"), libcdoc::OUTPUT_STREAM_ERROR);
+    }
+    {
+        LimitedConsumer dst(head + 100);
+        TestXMLWriter w(dst);
+        BOOST_CHECK_EQUAL(w.writeBase64Element({}, "d", data), libcdoc::OUTPUT_STREAM_ERROR);
+    }
+    {
+        // The callback ignores the error; it must stick and fail the element anyway
+        LimitedConsumer dst(head + 100);
+        TestXMLWriter w(dst);
+        libcdoc::result_t first = libcdoc::OK, second = libcdoc::OK;
+        BOOST_CHECK_EQUAL(w.writeBase64Element({}, "d", [&](libcdoc::DataConsumer &c) -> int64_t {
+            first = c.write(data.data(), data.size());
+            second = c.write(data.data(), 3);
+            return libcdoc::OK;
+        }), libcdoc::OUTPUT_STREAM_ERROR);
+        BOOST_CHECK_EQUAL(first, libcdoc::OUTPUT_STREAM_ERROR);
+        BOOST_CHECK_EQUAL(second, libcdoc::OUTPUT_STREAM_ERROR);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(DDocRoundTrip)
+{
+    const std::vector<std::pair<std::string, size_t>> files {
+        {"a&b<c>\"d'e.txt", 0},
+        {"tab\tline\nfeed\rcr.bin", 1},
+        {"\xC3\xB5un \xC2\x9C.txt", 2},
+        {"big.bin", 100000},
+    };
+    std::vector<uint8_t> container;
+    {
+        libcdoc::VectorConsumer dst(container);
+        libcdoc::DDOCWriter ddoc(dst);
+        for (size_t i = 0; i < files.size(); ++i) {
+            auto data = pattern(files[i].second);
+            if (i % 2) {
+                libcdoc::VectorSource src(data);
+                BOOST_CHECK_EQUAL(ddoc.addFile(files[i].first, "application/octet-stream", data.size(), src), libcdoc::OK);
+            } else {
+                BOOST_CHECK_EQUAL(ddoc.addFile(files[i].first, "application/octet-stream", data), libcdoc::OK);
+            }
+        }
+        BOOST_CHECK_EQUAL(ddoc.addFile("bad\x01name", "application/octet-stream", std::vector<unsigned char>{}),
+            libcdoc::DATA_FORMAT_ERROR);
+    }
+    libcdoc::VectorSource src(container);
+    std::vector<libcdoc::DDOCReader::File> read;
+    BOOST_REQUIRE_EQUAL(libcdoc::DDOCReader(src).files(read), libcdoc::OK);
+    BOOST_REQUIRE_EQUAL(read.size(), files.size());
+    for (size_t i = 0; i < files.size(); ++i) {
+        BOOST_TEST_CONTEXT("file " << i) {
+            BOOST_CHECK_EQUAL(read[i].name, files[i].first);
+            BOOST_CHECK_EQUAL(read[i].mime, "application/octet-stream");
+            BOOST_CHECK(read[i].data == pattern(files[i].second));
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -7,8 +7,10 @@ add_executable(unittests
     ../cdoc/Crypto.cpp
     ../cdoc/KeyShares.cpp
     ../cdoc/DDocReader.cpp
+    ../cdoc/DDocWriter.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
+    ../cdoc/XmlWriter.cpp
     ../cdoc/Utils.cpp
 )
 
