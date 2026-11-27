@@ -5,8 +5,10 @@ add_executable(unittests
     libcdoc_boost.cpp
     ../cdoc/Crypto.cpp
     ../cdoc/DDocReader.cpp
+    ../cdoc/DDocWriter.cpp
     ../cdoc/Tar.cpp
     ../cdoc/XmlReader.cpp
+    ../cdoc/XmlWriter.cpp
     ../cdoc/Utils.cpp
 )
 
